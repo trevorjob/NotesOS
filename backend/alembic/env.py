@@ -1,6 +1,7 @@
 """Alembic environment configuration for async migrations."""
 
 import asyncio
+
 from logging.config import fileConfig
 
 from sqlalchemy import pool
@@ -26,9 +27,9 @@ from app.models import (
     CourseEnrollment,
     Topic,
     CourseOutline,
-    Note,
-    NoteChunk,
-    NoteVersion,
+    Resource,
+    ResourceFile,
+    ResourceChunk,
     FactCheck,
     PreClassResearch,
     Test,
@@ -44,8 +45,11 @@ from app.models import (
 # this is the Alembic Config object
 config = context.config
 
-# Override the sqlalchemy.url with our settings
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+# Override the sqlalchemy.url with our settings from app.config
+# This ensures we use the same connection logic as the app (asyncpg, SSL, etc.)
+sqlalchemy_url = settings.ASYNC_DATABASE_URL
+
+config.set_main_option("sqlalchemy.url", sqlalchemy_url)
 
 # Interpret the config file for Python logging.
 if config.config_file_name is not None:
@@ -82,6 +86,7 @@ async def run_async_migrations() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args=settings.DB_CONNECT_ARGS,
     )
 
     async with connectable.connect() as connection:

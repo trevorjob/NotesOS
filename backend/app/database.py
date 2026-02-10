@@ -14,13 +14,14 @@ class Base(DeclarativeBase):
     pass
 
 
-# Create async engine
+# Create async engine with SSL enabled
 engine = create_async_engine(
-    settings.DATABASE_URL,
+    settings.ASYNC_DATABASE_URL,
     echo=settings.DEBUG,
     pool_pre_ping=True,
     pool_size=5,
     max_overflow=10,
+    connect_args=settings.DB_CONNECT_ARGS,
 )
 
 # Create session factory
@@ -35,7 +36,14 @@ async def init_db():
     """Initialize database - create tables if they don't exist."""
     async with engine.begin() as conn:
         # Import all models to ensure they're registered
-        from app.models import user, course, note, test, progress  # noqa: F401
+        from app.models import (
+            user,
+            course,
+            test,
+            progress,
+            resource,
+            classmate,
+        )
 
         await conn.run_sync(Base.metadata.create_all)
 

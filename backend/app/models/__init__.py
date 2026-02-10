@@ -4,13 +4,14 @@ NotesOS Models Package
 
 from app.models.user import User
 from app.models.course import Course, CourseEnrollment, Topic, CourseOutline
-from app.models.note import (
-    Note,
-    NoteChunk,
-    NoteVersion,
+from app.models.resource import (
+    Resource,
+    ResourceFile,
+    ResourceChunk,
     FactCheck,
     PreClassResearch,
-    ContentType,
+    ResourceKind,
+    SourceType,
     VerificationStatus,
 )
 from app.models.test import (
@@ -29,6 +30,8 @@ from app.models.progress import (
     SessionType,
     MessageRole,
 )
+from app.models.classmate import Class, Classmate
+
 
 __all__ = [
     # User
@@ -38,13 +41,14 @@ __all__ = [
     "CourseEnrollment",
     "Topic",
     "CourseOutline",
-    # Note
-    "Note",
-    "NoteChunk",
-    "NoteVersion",
+    # Resource
+    "Resource",
+    "ResourceFile",
+    "ResourceChunk",
     "FactCheck",
     "PreClassResearch",
-    "ContentType",
+    "ResourceKind",
+    "SourceType",
     "VerificationStatus",
     # Test
     "Test",
@@ -60,4 +64,7 @@ __all__ = [
     "AIMessage",
     "SessionType",
     "MessageRole",
+    # Classmates (Global Invites)
+    "Class",
+    "Classmate",
 ]

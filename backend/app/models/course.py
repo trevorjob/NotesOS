@@ -86,7 +86,9 @@ class Topic(Base):
 
     # Relationships
     course = relationship("Course", back_populates="topics")
-    notes = relationship("Note", back_populates="topic", cascade="all, delete-orphan")
+    resources = relationship(
+        "Resource", back_populates="topic", cascade="all, delete-orphan"
+    )
 
 
 class CourseOutline(Base):

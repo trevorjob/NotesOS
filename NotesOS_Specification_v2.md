@@ -2880,6 +2880,264 @@ jobs:
 
 ---
 
+## Appendix C: Handwritten Note Transcription (Cost-Optimized)
+
+### C.1 Hybrid OCR Pipeline
+
+**Philosophy:** Start with free/cheap OCR, escalate to premium only when needed.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                  HANDWRITTEN NOTE TRANSCRIPTION                 │
+└─────────────────────────────────────────────────────────────────┘
+
+   ┌──────────────┐
+   │ Image Upload │
+   └──────┬───────┘
+          │
+          ▼
+   ┌──────────────────────────────────────────────┐
+   │ 1. IMAGE PREPROCESSING (Free)                │
+   │    • Grayscale conversion                    │
+   │    • Contrast enhancement                    │
+   │    • Noise reduction                         │
+   │    • Deskew correction                       │
+   │    • Binarization (adaptive threshold)       │
+   └──────────────────┬───────────────────────────┘
+                      │
+                      ▼
+   ┌──────────────────────────────────────────────┐
+   │ 2. TESSERACT OCR (Free - Default)            │
+   │    • Model: eng + script/Latin               │
+   │    • Config: --psm 6 (uniform block)         │
+   │    • Returns: text + word confidence scores  │
+   └──────────────────┬───────────────────────────┘
+                      │
+                      ▼
+   ┌──────────────────────────────────────────────┐
+   │ 3. CONFIDENCE CHECK                          │
+   │    • Calculate average word confidence       │
+   │    • Threshold: 65%                          │
+   └──────────────────┬───────────────────────────┘
+                      │
+            ┌─────────┴─────────┐
+            │                   │
+    confidence ≥ 65%    confidence < 65%
+            │                   │
+            ▼                   ▼
+   ┌────────────────┐  ┌─────────────────────────┐
+   │ Use Tesseract  │  │ 4. GOOGLE VISION API    │
+   │ Result         │  │    (Fallback, Paid)     │
+   └───────┬────────┘  │    • DOCUMENT_TEXT mode │
+           │           │    • Handwriting-aware  │
+           │           └───────────┬─────────────┘
+           │                       │
+           └───────────┬───────────┘
+                       │
+                       ▼
+   ┌──────────────────────────────────────────────┐
+   │ 5. LLM CLEANUP (Always)                      │
+   │    • Fix spelling/spacing errors             │
+   │    • Infer structure (headings, bullets)     │
+   │    • Mark unclear text as [unclear]          │
+   │    • Output clean Markdown                   │
+   └──────────────────┬───────────────────────────┘
+                      │
+                      ▼
+   ┌──────────────────────────────────────────────┐
+   │ 6. STORE RESULTS                             │
+   │    • Original raw OCR text                   │
+   │    • Cleaned Markdown content                │
+   │    • Confidence score                        │
+   │    • OCR provider used                       │
+   └──────────────────────────────────────────────┘
+```
+
+### C.2 OCR Confidence Scoring
+
+```python
+def calculate_confidence(tesseract_output: dict) -> float:
+    """
+    Calculate weighted average of Tesseract word confidences.
+    Returns: float between 0.0 and 1.0
+    """
+    word_confidences = tesseract_output.get("word_confidences", [])
+    
+    if not word_confidences:
+        return 0.0
+    
+    # Weight longer words more (they're harder to OCR correctly)
+    weighted_sum = 0
+    total_weight = 0
+    
+    for word, conf in word_confidences:
+        weight = max(1, len(word) / 3)
+        weighted_sum += conf * weight
+        total_weight += weight
+    
+    return weighted_sum / total_weight if total_weight > 0 else 0.0
+
+# Thresholds
+OCR_CONFIDENCE_THRESHOLD = 0.65  # Below this → use Google Vision
+OCR_LOW_CONFIDENCE_THRESHOLD = 0.40  # Below this → mark as [unclear]
+```
+
+### C.3 Cost Analysis
+
+| Component | Cost | When Used |
+|-----------|------|-----------|
+| Image preprocessing | FREE | Always |
+| Tesseract OCR | FREE | Always (first pass) |
+| Google Vision API | $0.0015/image | Only when Tesseract < 65% confidence |
+| LLM cleanup | ~$0.0001/note | Always |
+
+**Per-Student Estimates (20 handwritten notes/month):**
+
+| Scenario | Cost |
+|----------|------|
+| Good handwriting (90% Tesseract success) | $0.002/month |
+| Average handwriting (70% Tesseract success) | $0.011/month |
+| Poor handwriting (30% Tesseract success) | $0.023/month |
+
+### C.4 Feature Flags
+
+```python
+class OCRFeatureFlags:
+    ENABLE_GOOGLE_VISION_FALLBACK = True  # Can disable to force Tesseract-only
+    GOOGLE_VISION_THRESHOLD = 0.65        # Trigger fallback below this
+    PREMIUM_ALWAYS_USE_GOOGLE_VISION = False  # For paying users
+    ALLOW_USER_REQUESTED_REPROCESS = True    # Let user click "Improve transcription"
+```
+
+---
+
+## Appendix D: Offline Mode (Consumption-First)
+
+### D.1 Philosophy
+
+**Pragmatic Offline:** Offline mode enables reading and creation, not AI. All intelligence requires internet.
+
+**What This Is NOT:**
+- ❌ Offline AI processing
+- ❌ Offline embeddings or search
+- ❌ Offline fact-checking
+- ❌ Edge AI models
+
+**What This IS:**
+- ✅ Read your synced notes anywhere
+- ✅ View already-generated AI content
+- ✅ Create/edit notes (synced later)
+- ✅ Queue uploads for later processing
+
+### D.2 Offline Capabilities (What Works Offline)
+
+| Feature | Offline Behavior |
+|---------|------------------|
+| **View notes** | ✅ Read all synced notes |
+| **View AI summaries** | ✅ Pre-generated summaries load from cache |
+| **View explanations** | ✅ Previously requested explanations available |
+| **View fact-check results** | ✅ Cached verification results display |
+| **View quiz Q&A** | ✅ Generated quizzes available (no grading) |
+| **Read AI chat history** | ✅ Previous conversations cached |
+| **Create text notes** | ✅ Saved locally, synced on reconnect |
+| **Edit existing notes** | ✅ Changes queued for sync |
+| **Upload images/files** | ✅ Queued locally, processed on reconnect |
+| **View course structure** | ✅ Topics, metadata cached |
+
+### D.3 Offline Limitations (What Requires Internet)
+
+| Feature | Offline Behavior |
+|---------|------------------|
+| **AI chat (new messages)** | ❌ Blocked, shows "Offline" message |
+| **AI explanations (new)** | ❌ Blocked, button disabled |
+| **Quiz generation** | ❌ Blocked, can only view existing |
+| **Quiz grading** | ❌ Blocked, answers saved for later |
+| **Fact-checking** | ❌ Blocked, no web access |
+| **Note search (semantic)** | ❌ Degraded to local text search |
+| **Voice transcription** | ❌ Blocked, requires Whisper API |
+| **File processing (OCR)** | ❌ Queued, processed on reconnect |
+| **Real-time collaboration** | ❌ No WebSocket, changes queue locally |
+
+### D.4 Offline Data Storage Strategy
+
+**Client-side storage using IndexedDB:**
+
+```typescript
+interface OfflineDatabase {
+  // Synced data (read-only until online)
+  notes: Note[];
+  topics: Topic[];
+  courses: Course[];
+  
+  // Cached AI artifacts (read-only)
+  aiArtifacts: AIArtifact[];
+  
+  // Pending operations (sync queue)
+  syncQueue: SyncOperation[];
+  
+  // Pending file uploads
+  pendingUploads: PendingUpload[];
+}
+```
+
+**Storage Limits:**
+- Notes: Up to 1000 notes (~50MB)
+- AI artifacts: Up to 500 artifacts (~20MB)
+- Pending uploads: Up to 50 files (~100MB)
+- Total: ~170MB (well under browser limits)
+
+### D.5 Sync & Rehydration Flow
+
+```
+1. PUSH: Process Sync Queue
+   • Create notes (in order)
+   • Apply edits (with merge resolution)
+   • Upload pending files
+   • Retry failed items (max 3 attempts)
+
+2. PULL: Fetch Updates Since Last Sync
+   • GET /api/sync?since={lastSyncTime}
+   • Returns: changed notes, new notes, deleted IDs, new AI artifacts
+
+3. MERGE: Reconcile Conflicts
+   • Server wins for AI artifacts
+   • User prompted for note conflicts
+   • Deleted items removed locally
+
+4. CACHE: Pre-fetch AI Artifacts
+   • For notes viewed in last 7 days
+   • Summaries, explanations, quizzes
+```
+
+### D.6 UX States and User Messaging
+
+| State | UI Treatment |
+|-------|--------------|
+| Offline | Yellow banner, AI buttons grayed out with tooltip |
+| Queued content | Small "pending sync" icon on notes/uploads |
+| Cached AI | Normal display (no indicator needed) |
+| Syncing | Spinner in header, progress for uploads |
+| Conflict | Modal dialog with diff view |
+
+**Key Messages:**
+- **Offline:** "You're offline. Notes are read-only. Changes sync when online."
+- **AI disabled:** "AI requires internet. Previous conversations still available."
+- **Sync complete:** "All changes synced successfully."
+
+### D.7 Feature Flags for Offline
+
+```python
+class OfflineFeatureFlags:
+    OFFLINE_MODE_ENABLED = True
+    MAX_CACHED_NOTES = 1000
+    MAX_CACHED_AI_ARTIFACTS = 500
+    CACHE_RETENTION_DAYS = 30
+    AUTO_SYNC_ON_RECONNECT = True
+    PREFETCH_AI_ARTIFACTS = True
+```
+
+---
+
 ## Document End
 
 **This is your blueprint. Follow it, build it, and ship it. 🚀**
@@ -2891,6 +3149,8 @@ jobs:
 - Voice grading ignores rambling
 - Facts are verified, not just displayed
 - Progress is private, not public
+- **Offline is for consumption, not intelligence**
+- **Hybrid OCR = cost-effective transcription**
 
 **Good luck! Now go build NotesOS and help students actually learn. 💪**
 

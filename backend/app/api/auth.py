@@ -2,8 +2,10 @@
 NotesOS API - Authentication Endpoints
 """
 
+import hashlib
 from datetime import datetime, timedelta
 from typing import Optional
+import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
@@ -62,12 +64,19 @@ class PersonalityUpdate(BaseModel):
 # =============================================================================
 
 
+# def _pre_hash_password(password: str) -> str:
+#     """Pre-hash password with SHA-256 to handle bcrypt's 72-byte limit."""
+#     return hashlib.sha256(password.encode()).hexdigest()
+
+
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
+    # return pwd_context.hash(_pre_hash_password(password))
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
+    # return pwd_context.verify(_pre_hash_password(plain_password), hashed_password)
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
@@ -105,6 +114,27 @@ async def get_current_user(
     if user is None:
         raise credentials_exception
     return user
+
+
+async def verify_course_enrollment(
+    db: AsyncSession, user_id: uuid.UUID, course_id: uuid.UUID
+) -> None:
+    """
+    Verify that user is enrolled in course.
+    Raises HTTPException if not enrolled.
+    """
+    from app.models.course import CourseEnrollment
+
+    query = select(CourseEnrollment).where(
+        CourseEnrollment.user_id == user_id, CourseEnrollment.course_id == course_id
+    )
+    result = await db.execute(query)
+    enrollment = result.scalar_one_or_none()
+
+    if not enrollment:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Not enrolled in this course"
+        )
 
 
 # =============================================================================

@@ -38,9 +38,20 @@ class JoinCourseRequest(BaseModel):
 
 class TopicCreate(BaseModel):
     title: str
-    description: Optional[str] = None
     week_number: Optional[int] = None
     order_index: int = 0
+
+
+class BatchCourseCreate(BaseModel):
+    """Create multiple courses at once."""
+
+    courses: List[CreateCourseRequest]  # Max 10
+
+
+class BatchTopicCreate(BaseModel):
+    """Create multiple topics at once."""
+
+    topics: List[TopicCreate]  # Max 20
 
 
 # =============================================================================
@@ -279,7 +290,6 @@ async def create_topic(
     topic = Topic(
         course_id=course_id,
         title=request.title,
-        description=request.description,
         week_number=request.week_number,
         order_index=request.order_index,
     )
@@ -291,7 +301,119 @@ async def create_topic(
         "topic": {
             "id": str(topic.id),
             "title": topic.title,
-            "description": topic.description,
             "week_number": topic.week_number,
         }
+    }
+
+
+# =============================================================================
+# Batch Creation Endpoints
+# =============================================================================
+
+
+@router.post("/batch", status_code=status.HTTP_201_CREATED)
+async def batch_create_courses(
+    request: BatchCourseCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Create multiple courses at once.
+
+    Max 10 courses per request. All succeed or all fail.
+    """
+    if len(request.courses) > 10:
+        raise HTTPException(
+            status_code=400, detail="Maximum 10 courses per batch request"
+        )
+
+    created_courses = []
+
+    for course_req in request.courses:
+        invite_code = None if course_req.is_public else generate_invite_code()
+
+        course = Course(
+            code=course_req.code,
+            name=course_req.name,
+            semester=course_req.semester,
+            description=course_req.description,
+            is_public=course_req.is_public,
+            invite_code=invite_code,
+            created_by=current_user.id,
+        )
+        db.add(course)
+        await db.flush()
+
+        # Auto-enroll creator
+        enrollment = CourseEnrollment(user_id=current_user.id, course_id=course.id)
+        db.add(enrollment)
+
+        created_courses.append(
+            {
+                "id": str(course.id),
+                "code": course.code,
+                "name": course.name,
+                "invite_code": course.invite_code,
+            }
+        )
+
+    await db.commit()
+
+    return {
+        "message": f"Created {len(created_courses)} courses",
+        "courses": created_courses,
+    }
+
+
+@router.post("/{course_id}/topics/batch", status_code=status.HTTP_201_CREATED)
+async def batch_create_topics(
+    course_id: str,
+    request: BatchTopicCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Create multiple topics at once.
+
+    Max 20 topics per request. All succeed or all fail.
+    """
+    if len(request.topics) > 20:
+        raise HTTPException(
+            status_code=400, detail="Maximum 20 topics per batch request"
+        )
+
+    # Verify enrollment
+    enrollment = await db.execute(
+        select(CourseEnrollment)
+        .where(CourseEnrollment.user_id == current_user.id)
+        .where(CourseEnrollment.course_id == course_id)
+    )
+    if not enrollment.scalar_one_or_none():
+        raise HTTPException(status_code=403, detail="Not enrolled in this course")
+
+    created_topics = []
+
+    for topic_req in request.topics:
+        topic = Topic(
+            course_id=course_id,
+            title=topic_req.title,
+            week_number=topic_req.week_number,
+            order_index=topic_req.order_index,
+        )
+        db.add(topic)
+        await db.flush()
+
+        created_topics.append(
+            {
+                "id": str(topic.id),
+                "title": topic.title,
+                "week_number": topic.week_number,
+            }
+        )
+
+    await db.commit()
+
+    return {
+        "message": f"Created {len(created_topics)} topics",
+        "topics": created_topics,
     }

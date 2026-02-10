@@ -14,9 +14,7 @@ class Settings(BaseSettings):
     DEBUG: bool = False
 
     # Database
-    DATABASE_URL: str = (
-        "postgresql+asyncpg://notesos:notesos_dev_password@localhost:5432/notesos"
-    )
+    DATABASE_URL: str = ""
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379"
@@ -33,11 +31,36 @@ class Settings(BaseSettings):
     VOYAGE_AI_API_KEY: str = ""
     SERPER_API_KEY: str = ""
 
+    # Cost-Optimized AI Provider
+    PRIMARY_AI_PROVIDER: str = "deepseek"  # or "claude" for upgrade
+    DEEPSEEK_API_KEY: str = ""
+
     # File Storage (Cloudinary)
     CLOUDINARY_CLOUD_NAME: str = ""
     CLOUDINARY_API_KEY: str = ""
     CLOUDINARY_API_SECRET: str = ""
-    CLOUDINARY_UPLOAD_PRESET: str = "notesos_uploads"
+    CLOUDINARY_UPLOAD_PRESET: str = ""
+
+    # RAG Settings (OpenAI Embeddings)
+    CHUNK_SIZE: int = 800
+    CHUNK_OVERLAP: int = 100
+    EMBEDDING_PROVIDER: str = "openai"
+    EMBEDDING_MODEL: str = "text-embedding-3-small"
+    EMBEDDING_DIMENSIONS: int = 1536  # OpenAI small model
+
+    # OCR Cleaning Settings
+    ENABLE_OCR_CLEANING: bool = True
+    OCR_CLEANING_AGGRESSIVE: bool = True  # More thorough corrections
+
+    # Hybrid OCR Settings (Tesseract + Google Vision fallback)
+    GOOGLE_VISION_ENABLED: bool = True  # Enable Google Vision fallback
+    GOOGLE_VISION_THRESHOLD: float = (
+        0.65  # Fallback when Tesseract confidence below this
+    )
+    PREMIUM_ALWAYS_USE_GOOGLE_VISION: bool = False  # For paying users
+    ALLOW_USER_REQUESTED_REPROCESS: bool = (
+        True  # Let user click "Improve transcription"
+    )
 
     # Feature Flags
     ENABLE_FACT_CHECK: bool = True
@@ -50,6 +73,42 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+
+    @property
+    def ASYNC_DATABASE_URL(self) -> str:
+        """
+        Return the database URL formatted for asyncpg.
+        Handles postgresql:// and postgres:// -> postgresql+asyncpg://
+        Removes sslmode/channel_binding parameters which are handled by connect_args.
+        """
+        import re
+
+        url = self.DATABASE_URL
+        # Convert schema
+        if url.startswith("postgresql://"):
+            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        elif url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+
+        # Remove sslmode/channel_binding query params
+        if "sslmode=" in url:
+            url = re.sub(r"[\?&]sslmode=[^&]*", "", url)
+        if "channel_binding=" in url:
+            url = re.sub(r"[\?&]channel_binding=[^&]*", "", url)
+
+        # Cleanup trailing characters
+        url = re.sub(r"[\?&]$", "", url)
+        url = url.replace("?&", "?")
+
+        return url
+
+    @property
+    def DB_CONNECT_ARGS(self) -> dict:
+        """
+        Return connection arguments for the database.
+        Enables SSL for remote databases (like Neon).
+        """
+        return {"ssl": True}
 
 
 settings = Settings()
