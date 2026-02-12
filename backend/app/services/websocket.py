@@ -136,6 +136,17 @@ class ConnectionManager:
 
         return users
 
+    async def start_redis_listener(self):
+        """Start listening for Redis messages to broadcast."""
+        from app.services.redis_client import redis_client
+
+        async for message in redis_client.subscribe("course_updates"):
+            course_id = message.get("course_id")
+            payload = message.get("message")
+
+            if course_id and payload:
+                await self.broadcast_to_course(course_id, payload)
+
 
 # Singleton instance
 connection_manager = ConnectionManager()

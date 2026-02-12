@@ -23,10 +23,21 @@ class FileProcessor:
         self, file_url: str, file_format: str, is_handwritten: Optional[bool] = None
     ) -> dict:
         """
-        Main entry point for file processing.
+        Process a file by downloading from URL first.
+        Prefer process_from_bytes() when raw bytes are already available.
+        """
+        file_bytes = await self._download_file(file_url)
+        return await self.process_from_bytes(file_bytes, file_format, is_handwritten)
+
+    async def process_from_bytes(
+        self, file_bytes: bytes, file_format: str, is_handwritten: Optional[bool] = None
+    ) -> dict:
+        """
+        Process raw file bytes and extract text content.
+        Faster than process_uploaded_file() — skips the download step.
 
         Args:
-            file_url: URL to the uploaded file
+            file_bytes: Raw file bytes
             file_format: File extension (pdf, docx, jpg, png, etc.)
             is_handwritten: For images only - whether content is handwritten
 
@@ -36,16 +47,13 @@ class FileProcessor:
                 - source_type: 'pdf', 'docx', 'handwritten', or 'printed'
                 - needs_cleaning: Whether OCR cleaning should be applied
         """
-        # Download file
-        file_bytes = await self._download_file(file_url)
-
         # Process based on format
         if file_format.lower() == ".pdf":
             text, source_type = await self.extract_text_from_pdf(file_bytes)
             return {
                 "text": text,
                 "source_type": source_type,
-                "needs_cleaning": False,  # PDFs don't need cleaning
+                "needs_cleaning": False,
             }
 
         elif file_format.lower() in [".doc", ".docx"]:
@@ -53,7 +61,7 @@ class FileProcessor:
             return {
                 "text": text,
                 "source_type": source_type,
-                "needs_cleaning": False,  # DOCX doesn't need cleaning
+                "needs_cleaning": False,
             }
 
         elif file_format.lower() in [".jpg", ".jpeg", ".png", ".tiff", ".bmp"]:
@@ -65,8 +73,6 @@ class FileProcessor:
                 is_premium_user=False,  # TODO: get from user context
             )
 
-            # Determine if this is handwritten based on user input
-            # Default to True (handwritten) if not specified
             if is_handwritten is None:
                 is_handwritten = True
 
@@ -75,7 +81,7 @@ class FileProcessor:
             return {
                 "text": ocr_result["text"],
                 "source_type": source_type,
-                "needs_cleaning": is_handwritten,  # Only clean handwritten images
+                "needs_cleaning": is_handwritten,
                 "ocr_confidence": ocr_result["confidence"],
                 "ocr_provider": ocr_result["provider"],
                 "needs_aggressive_cleanup": ocr_result.get(

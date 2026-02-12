@@ -3,6 +3,7 @@ NotesOS - Storage Service
 Cloudinary integration for file uploads and management.
 """
 
+import asyncio
 import cloudinary
 import cloudinary.uploader
 import cloudinary.api
@@ -27,7 +28,7 @@ class StorageService:
         self, file: Union[bytes, BinaryIO], folder: str, resource_type: str = "auto"
     ) -> dict:
         """
-        Upload file to Cloudinary.
+        Upload file to Cloudinary (non-blocking).
 
         Args:
             file: Raw bytes or file-like object to upload
@@ -46,8 +47,10 @@ class StorageService:
             if settings.CLOUDINARY_UPLOAD_PRESET:
                 upload_options["upload_preset"] = settings.CLOUDINARY_UPLOAD_PRESET
 
-            # Upload to Cloudinary
-            result = cloudinary.uploader.upload(file, **upload_options)
+            # Upload to Cloudinary in a thread to avoid blocking the event loop
+            result = await asyncio.to_thread(
+                cloudinary.uploader.upload, file, **upload_options
+            )
 
             return {
                 "url": result["secure_url"],
@@ -62,7 +65,7 @@ class StorageService:
 
     async def delete_file(self, public_id: str, resource_type: str = "image") -> bool:
         """
-        Delete file from Cloudinary.
+        Delete file from Cloudinary (non-blocking).
 
         Args:
             public_id: Cloudinary public ID
@@ -72,7 +75,9 @@ class StorageService:
             True if deleted successfully
         """
         try:
-            result = cloudinary.uploader.destroy(public_id, resource_type=resource_type)
+            result = await asyncio.to_thread(
+                cloudinary.uploader.destroy, public_id, resource_type=resource_type
+            )
             return result.get("result") == "ok"
         except Exception as e:
             raise Exception(f"File deletion failed: {str(e)}")

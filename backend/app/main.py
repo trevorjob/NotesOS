@@ -3,6 +3,7 @@ NotesOS Backend - Main Application Entry Point
 """
 
 from contextlib import asynccontextmanager
+import asyncio
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 from jose import jwt, JWTError
@@ -16,6 +17,13 @@ async def lifespan(app: FastAPI):
     """Application lifecycle management."""
     # Startup
     await init_db()
+
+    # Start Redis listener for worker updates
+    # Import here to ensure connection_manager is initialized
+    from app.services.websocket import connection_manager
+
+    asyncio.create_task(connection_manager.start_redis_listener())
+
     yield
     # Shutdown
     pass
@@ -59,6 +67,7 @@ from app.api import auth_router, courses_router
 from app.api.topics import router as topics_router
 from app.api.resources import router as resources_router
 from app.api.invites import router as invites_router
+from app.api.ai_features import router as ai_features_router
 from app.services.websocket import connection_manager
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
@@ -66,6 +75,7 @@ app.include_router(courses_router, prefix="/api/courses", tags=["courses"])
 app.include_router(topics_router, prefix="/api", tags=["topics"])
 app.include_router(resources_router, prefix="/api", tags=["resources"])
 app.include_router(invites_router, prefix="/api/invites", tags=["invites"])
+app.include_router(ai_features_router, prefix="", tags=["AI Features"])
 
 
 # WebSocket endpoint for real-time updates

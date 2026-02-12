@@ -35,6 +35,7 @@ Think of it as: **Notion + ChatGPT + Your Best Study Buddy = NotesOS**
 - **Auto-Organized Everything** - Courses, topics, weeks—it just works. Your notes organize themselves
 - **Study Mode, Not Summary Mode** - Don't just read—study with AI-powered quizzes, concept explanations, and progress tracking
 - **Your AI Study Partner** - Not some boring corporate bot. This AI has personality, encourages you, and adapts to how YOU learn
+
 - **Voice-First Studying** - Record your answers while cooking dinner. The AI transcribes, understands, and grades you on concepts (not grammar)
 - **Built-in Fact Checker** - Because your classmate Sarah writes "Napoleon died in 1820" and you don't want to fail because of it
 - **Pre-Class Intel** - AI researches topics before lecture so you're not completely lost when the professor starts talking
@@ -223,53 +224,72 @@ Display side-by-side with notes
 | created_at | TIMESTAMP | DEFAULT NOW() | Creation time |
 | updated_at | TIMESTAMP | DEFAULT NOW() | Last update |
 
-#### 3.1.5 notes
+#### 3.1.5 resources
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
-| id | UUID | PRIMARY KEY | Note identifier |
+| id | UUID | PRIMARY KEY | Resource identifier |
 | topic_id | UUID | FK → topics(id) | Parent topic |
 | uploaded_by | UUID | FK → users(id) | User who uploaded |
-| title | VARCHAR(255) | NOT NULL | Note title |
-| content | TEXT | NOT NULL | Note content (markdown) |
-| content_type | ENUM | 'text','pdf','image' | Content format |
-| file_url | TEXT | NULL | Storage URL if file |
+| title | VARCHAR(255) | NULL | Resource title (auto-generated if empty) |
+| content | TEXT | NOT NULL | Typed text, or extracted/OCR text |
+| resource_type | ENUM(ResourceKind) | NOT NULL, DEFAULT 'TEXT' | 'TEXT', 'PDF', 'DOCX', 'IMAGE' |
+| file_url | TEXT | NULL | Storage URL (for PDF/DOCX) |
+| file_name | VARCHAR(255) | NULL | Original filename |
+| source_type | ENUM(SourceType) | NOT NULL, DEFAULT 'TEXT' | 'TEXT', 'PDF', 'DOCX', 'HANDWRITTEN', 'PRINTED' |
+| is_processed | BOOLEAN | DEFAULT false | RAG chunking complete |
 | is_verified | BOOLEAN | DEFAULT false | Fact-checked status |
+| ocr_cleaned | BOOLEAN | DEFAULT false | OCR cleanup applied |
+| ocr_confidence | DECIMAL(4,3) | NULL | 0.000 - 1.000 |
+| ocr_provider | VARCHAR(50) | NULL | 'tesseract', 'google_vision' |
 | created_at | TIMESTAMP | DEFAULT NOW() | Upload time |
 | updated_at | TIMESTAMP | DEFAULT NOW() | Last edit time |
 
-#### 3.1.6 note_chunks (for RAG)
+**Resource types:**
+- **TEXT** — User typed/pasted text. No file.
+- **PDF** — Single PDF upload. `file_url` set on Resource.
+- **DOCX** — Single DOCX upload. `file_url` set on Resource.
+- **IMAGE** — One or more image uploads. Files stored as `resource_files`. Content = combined OCR text.
+
+#### 3.1.6 resource_files (multi-page image support)
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| id | UUID | PRIMARY KEY | File identifier |
+| resource_id | UUID | FK → resources(id) | Parent resource |
+| file_url | TEXT | NOT NULL | Storage URL for this page |
+| file_name | VARCHAR(255) | NULL | Original filename |
+| file_order | INTEGER | DEFAULT 0, NOT NULL | Page ordering |
+| ocr_text | TEXT | NULL | Raw OCR output for this page |
+| ocr_confidence | DECIMAL(4,3) | NULL | Per-page confidence |
+| ocr_provider | VARCHAR(50) | NULL | OCR provider used |
+| created_at | TIMESTAMP | DEFAULT NOW() | Creation time |
+| updated_at | TIMESTAMP | DEFAULT NOW() | Last update |
+
+**Usage:** When a student uploads 3 photos of class notes, one `Resource` is created with `resource_type='IMAGE'` and 3 `resource_files` rows (one per page). The combined OCR text is stored in `resources.content`.
+
+#### 3.1.7 resource_chunks (for RAG)
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
 | id | UUID | PRIMARY KEY | Chunk identifier |
-| note_id | UUID | FK → notes(id) | Parent note |
+| resource_id | UUID | FK → resources(id) | Parent resource |
 | chunk_text | TEXT | NOT NULL | Text chunk (500-1000 chars) |
-| chunk_index | INTEGER | NOT NULL | Position in note |
+| chunk_index | INTEGER | NOT NULL | Position in resource |
 | embedding | VECTOR(1024) | NOT NULL | Vector embedding |
+| resource_title | VARCHAR(255) | NULL | Cached title for search results |
 | created_at | TIMESTAMP | DEFAULT NOW() | Creation time |
 
 **Index:**
 ```sql
-CREATE INDEX idx_note_chunks_embedding ON note_chunks 
+CREATE INDEX idx_resource_chunks_embedding ON resource_chunks 
 USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
 ```
-
-#### 3.1.7 note_versions
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| id | UUID | PRIMARY KEY | Version identifier |
-| note_id | UUID | FK → notes(id) | Parent note |
-| content | TEXT | NOT NULL | Version content |
-| edited_by | UUID | FK → users(id) | Editor user ID |
-| version_number | INTEGER | NOT NULL | Version sequence |
-| created_at | TIMESTAMP | DEFAULT NOW() | Version timestamp |
 
 #### 3.1.8 fact_checks
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
 | id | UUID | PRIMARY KEY | Fact check ID |
-| note_id | UUID | FK → notes(id) | Related note |
+| resource_id | UUID | FK → resources(id) | Related resource |
 | claim_text | TEXT | NOT NULL | Claim being verified |
-| verification_status | ENUM | 'verified','disputed','unverified' | Check result |
+| verification_status | ENUM | 'VERIFIED','DISPUTED','UNVERIFIED' | Check result |
 | sources | JSONB | NOT NULL | Array of source objects |
 | confidence_score | DECIMAL(3,2) | NULL | 0.00 - 1.00 |
 | ai_explanation | TEXT | NULL | AI reasoning |
@@ -479,32 +499,33 @@ USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
 6. Notification: "🎉 Syllabus processed! Found 12 topics"
 7. Topics auto-organized in sidebar
 
-### 4.3 Note Management (Collaborative)
+### 4.3 Resource Management (Collaborative)
 
-#### 4.3.1 Upload Notes Flow
+#### 4.3.1 Upload Resources Flow
 1. User on topic page clicks "Add Notes"
 2. Options:
-   - ✍️ Type/paste markdown
-   - 📄 Upload PDF/DOCX
-   - 📸 Upload image (OCR)
-   - 🔗 Paste URL (webpage clipper)
-3. For uploads:
-   - File to S3
-   - Extract text (pdf-parse, mammoth, Tesseract)
+   - ✍️ Type/paste text → 1 Resource (type: TEXT)
+   - 📄 Upload PDF/DOCX → 1 Resource per file (type: PDF/DOCX)
+   - 📸 Upload image(s) → 1 Resource with multiple ResourceFiles (type: IMAGE)
+   - Mixed uploads → separate Resources (images grouped, docs separate)
+3. For file uploads:
+   - File uploaded to Cloudinary
+   - Extract text (pdf+OCR, mammoth, hybrid OCR)
    - Clean & format
 4. **Chunking for RAG:**
    - Split into 500-1000 char chunks
    - Generate embeddings (Voyage AI)
-   - Store in `note_chunks` with vectors
-5. Note saved to DB
+   - Store in `resource_chunks` with vectors
+5. Resource saved to DB
 6. Background fact-check job queued
 7. **WebSocket broadcast to all enrolled students:**
    ```json
    {
-     "type": "note:created",
+     "type": "resource:created",
      "data": {
-       "note_id": "uuid",
+       "resource_id": "uuid",
        "title": "Lecture 3 Notes",
+       "resource_type": "IMAGE",
        "uploaded_by": "Sarah",
        "topic": "French Revolution"
      }
@@ -512,28 +533,29 @@ USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
    ```
 8. Toast notification for online users: "Sarah just shared notes on French Revolution!"
 
-#### 4.3.2 View Notes Flow
+
+#### 4.3.2 View Resources Flow
 1. User navigates to topic
-2. `GET /api/topics/[topicId]/notes`
-3. Notes displayed as cards:
+2. `GET /api/topics/{topicId}/resources`
+3. Resources displayed as cards:
    - Title & preview
+   - Resource type badge (📝 Text, 📄 PDF, 📸 Images)
+   - Page count for IMAGE resources
    - Uploader avatar & name
    - Time ago
    - ✅ Verified badge (if fact-checked)
    - 💬 Quick AI actions: "Explain this" "Quiz me"
 4. Click to expand:
    - Full content (markdown rendered)
+   - Image pages carousel (for IMAGE type)
    - Fact-check sidebar (if available)
-   - Version history
-5. Inline AI chat for that specific note
+5. Inline AI chat for that specific resource
 
-#### 4.3.3 Collaborative Editing
-- Users can only edit their own notes
-- Edit history tracked in `note_versions`
-- When note updated:
+#### 4.3.3 Editing & Permissions
+- Users can only edit their own resources (title & text content)
+- When resource updated:
   - Re-chunk and re-embed
   - Re-run fact check
-  - Notify users who bookmarked it
 
 ### 4.4 Study Mode (Not Just Summaries!)
 
@@ -856,10 +878,10 @@ Sources: britannica.com, history.com, crash-course-history
 ### 5.1 RAG Architecture
 
 **Why RAG?**
-- Students upload lots of notes
-- Can't fit all notes in every prompt (token limits)
-- Need semantic search ("explain revolutions" should find French + American Revolution notes)
-- Need source attribution (which notes did this answer come from?)
+- Students upload lots of resources (notes, PDFs, images)
+- Can't fit all resources in every prompt (token limits)
+- Need semantic search ("explain revolutions" should find French + American Revolution resources)
+- Need source attribution (which resources did this answer come from?)
 
 **RAG Stack:**
 - **Embeddings:** Voyage AI (`voyage-large-2-instruct`) - 1024 dimensions, optimized for retrieval
@@ -867,11 +889,11 @@ Sources: britannica.com, history.com, crash-course-history
 - **Chunking Strategy:** 500-1000 characters with 100 char overlap
 - **Retrieval:** Top-k similarity search (k=5) + reranking
 
-#### 5.1.1 Note Ingestion Pipeline
+#### 5.1.1 Resource Ingestion Pipeline
 
 ```python
-# Pseudocode for note upload → RAG
-async def ingest_note_for_rag(note_id: str, content: str):
+# Pseudocode for resource upload → RAG
+async def ingest_resource_for_rag(resource_id: str, content: str):
     # 1. Chunk the content
     chunks = chunk_text(
         content,
@@ -889,8 +911,8 @@ async def ingest_note_for_rag(note_id: str, content: str):
     
     # 3. Store chunks with vectors
     for chunk, embedding in zip(chunks, embeddings):
-        db.insert("note_chunks", {
-            "note_id": note_id,
+        db.insert("resource_chunks", {
+            "resource_id": resource_id,
             "chunk_text": chunk.text,
             "chunk_index": chunk.index,
             "embedding": embedding,
@@ -918,26 +940,26 @@ async def answer_with_rag(
     # 2. Vector similarity search
     similar_chunks = db.query(f"""
         SELECT 
-            nc.chunk_text,
-            nc.note_id,
-            n.title,
-            n.uploaded_by,
-            1 - (nc.embedding <=> $1) as similarity
-        FROM note_chunks nc
-        JOIN notes n ON n.id = nc.note_id
-        WHERE n.topic_id = $2
-        ORDER BY nc.embedding <=> $1
+            rc.chunk_text,
+            rc.resource_id,
+            r.title,
+            r.uploaded_by,
+            1 - (rc.embedding <=> $1) as similarity
+        FROM resource_chunks rc
+        JOIN resources r ON r.id = rc.resource_id
+        WHERE r.topic_id = $2
+        ORDER BY rc.embedding <=> $1
         LIMIT 10
     """, [question_embedding, topic_id])
     
     # 3. Rerank (simple scoring)
-    # Prefer: recent notes, higher similarity, notes from multiple users
+    # Prefer: recent resources, higher similarity, resources from multiple users
     reranked = rerank_chunks(similar_chunks)
     top_5 = reranked[:5]
     
     # 4. Build context for Claude
     context = "\n\n---\n\n".join([
-        f"From {chunk.uploader}'s notes ({chunk.title}):\n{chunk.text}"
+        f"From {chunk.uploader}'s resource ({chunk.title}):\n{chunk.text}"
         for chunk in top_5
     ])
     
@@ -964,7 +986,7 @@ Answer their question using the provided notes. If the notes don't have enough i
     return {
         "answer": response,
         "sources": [
-            {"note_id": chunk.note_id, "title": chunk.title}
+            {"resource_id": chunk.resource_id, "title": chunk.title}
             for chunk in top_5
         ]
     }
@@ -986,7 +1008,7 @@ from langgraph.graph import StateGraph, END
 from typing import TypedDict, List
 
 class FactCheckState(TypedDict):
-    note_id: str
+    resource_id: str
     content: str
     claims: List[dict]
     verifications: List[dict]
@@ -1051,7 +1073,7 @@ workflow.add_edge("report", END)
 # Compile and run
 app = workflow.compile()
 result = app.invoke({
-    "note_id": "uuid",
+    "resource_id": "uuid",
     "content": "Napoleon died in 1820 on St. Helena..."
 })
 ```
@@ -1506,7 +1528,7 @@ async def transcribe_audio(audio_file_path: str) -> dict:
   ],
   "recent_activity": [
     {
-      "type": "note_upload",
+      "type": "resource_upload",
       "user": "Sarah Kim",
       "topic": "French Revolution",
       "timestamp": "2026-02-01T14:30:00Z"
@@ -1534,85 +1556,146 @@ async def transcribe_audio(audio_file_path: str) -> dict:
 }
 ```
 
-### 6.3 Note Endpoints
+### 6.3 Resource Endpoints
 
-#### POST /api/topics/:topicId/notes
+#### POST /api/topics/{topicId}/resources/text
 ```typescript
-// Request Body (text)
+// Create text resource
+// Request Body
 {
-  "title": "Lecture 3 Notes",
-  "content": "# French Revolution\n\n...",
-  "content_type": "text"
+  "topic_id": "uuid",
+  "title": "Lecture 3 Notes",  // Optional, auto-generated if empty
+  "content": "# French Revolution\n\n..."
 }
-
-// OR multipart for file upload
 
 // Response (201)
 {
-  "note": {
-    "id": "uuid",
-    "title": "Lecture 3 Notes",
-    "uploaded_by": {...},
-    "created_at": "...",
-    "chunks_created": 8,  // For RAG
-    "fact_check_queued": true
-  }
+  "id": "uuid",
+  "topic_id": "uuid",
+  "uploaded_by": "uuid",
+  "uploader_name": "Alex Chen",
+  "title": "Lecture 3 Notes",
+  "content": "# French Revolution...",
+  "resource_type": "TEXT",
+  "source_type": "TEXT",
+  "is_processed": false,
+  "files": [],
+  "created_at": "2026-02-01T14:30:00Z",
+  "updated_at": "2026-02-01T14:30:00Z"
 }
 ```
 
-#### GET /api/topics/:topicId/notes
+#### POST /api/resources/upload
 ```typescript
-// Query: ?page=1&limit=20&sort=recent
+// Multipart form-data upload
+// Fields: topic_id, title (optional), is_handwritten (optional), files[]
+//
+// Behavior:
+// - Images (.jpg, .png) → 1 Resource with multiple ResourceFiles (pages)
+// - PDF/DOCX → 1 Resource per file
+// - Mixed → separate Resources (images grouped, docs separate)
+
+// Response (201) — array of created resources
+[
+  {
+    "id": "uuid",
+    "resource_type": "IMAGE",
+    "title": "French Revolution - 2026-02-01 14:30",
+    "content": "Combined OCR text from all pages...",
+    "files": [
+      {
+        "id": "uuid",
+        "file_url": "https://res.cloudinary.com/...",
+        "file_name": "page1.jpg",
+        "file_order": 0,
+        "ocr_confidence": 0.85,
+        "ocr_provider": "tesseract"
+      },
+      {
+        "id": "uuid",
+        "file_url": "https://res.cloudinary.com/...",
+        "file_name": "page2.jpg",
+        "file_order": 1,
+        "ocr_confidence": 0.72,
+        "ocr_provider": "google_vision"
+      }
+    ],
+    "ocr_confidence": 0.785,
+    "is_processed": false
+  }
+]
+```
+
+#### GET /api/topics/{topicId}/resources
+```typescript
+// Query: ?page=1&page_size=20
 
 // Response (200)
 {
-  "notes": [
+  "resources": [
     {
       "id": "uuid",
       "title": "Lecture 3 Notes",
-      "content_preview": "First 200 chars...",
-      "uploaded_by": {
-        "id": "uuid",
-        "full_name": "Sarah Kim",
-        "avatar_url": "..."
-      },
+      "content": "...",
+      "resource_type": "IMAGE",
+      "uploader_name": "Sarah Kim",
       "is_verified": true,
-      "fact_check_summary": {
-        "verified": 5,
-        "disputed": 1,
-        "unverified": 0
-      },
-      "created_at": "2026-02-01T14:30:00Z",
-      "view_count": 42
+      "ocr_confidence": 0.85,
+      "files": [...],
+      "created_at": "2026-02-01T14:30:00Z"
     }
   ],
-  "pagination": {...}
+  "total": 42,
+  "page": 1,
+  "page_size": 20
 }
 ```
 
-#### GET /api/notes/:noteId
+#### GET /api/resources/{resourceId}
 ```typescript
 // Response (200)
 {
-  "note": {
-    "id": "uuid",
-    "title": "...",
-    "content": "Full markdown content",
-    "uploaded_by": {...},
-    "versions": [
-      { "version_number": 2, "edited_at": "...", "edited_by": "..." }
-    ],
-    "fact_checks": [
-      {
-        "claim": "Napoleon died in 1820",
-        "status": "disputed",
-        "confidence": 0.6,
-        "explanation": "Sources show he died in 1821",
-        "sources": [...]
-      }
-    ]
-  }
+  "id": "uuid",
+  "title": "...",
+  "content": "Full text content",
+  "resource_type": "IMAGE",
+  "uploaded_by": "uuid",
+  "uploader_name": "Sarah Kim",
+  "files": [...],   // ResourceFiles with per-page OCR data
+  "fact_checks": [
+    {
+      "claim": "Napoleon died in 1820",
+      "status": "DISPUTED",
+      "confidence": 0.6,
+      "explanation": "Sources show he died in 1821",
+      "sources": [...]
+    }
+  ]
 }
+```
+
+#### PUT /api/resources/{resourceId}
+```typescript
+// Update title or text content (uploader only)
+// Request Body
+{
+  "title": "Updated Title",
+  "content": "Updated content..."
+}
+```
+
+#### DELETE /api/resources/{resourceId}
+```typescript
+// Delete resource and associated files (uploader only)
+// Response (204 No Content)
+```
+
+#### POST /api/resources/{resourceId}/reprocess-ocr
+```typescript
+// Reprocess OCR for image resources (uploader only)
+// Query: ?use_premium_ocr=true
+
+// Response (200) — updated resource with improved OCR text
 ```
 
 ### 6.4 Study & AI Endpoints
@@ -1672,7 +1755,7 @@ event: message
 data: {"type": "text", "content": "🎯 Let me break down"}
 
 event: source
-data: {"note_id": "uuid", "title": "Lecture 3 Notes"}
+data: {"resource_id": "uuid", "title": "Lecture 3 Notes"}
 
 event: done
 data: {"conversation_id": "uuid", "message_id": "uuid"}
@@ -1898,9 +1981,9 @@ ws://api.notesos.com/ws?token=JWT_TOKEN&course_id=UUID
 ```typescript
 // New note uploaded
 {
-  "type": "note:created",
+  "type": "resource:created",
   "data": {
-    "note_id": "uuid",
+    "resource_id": "uuid",
     "title": "Lecture 5 Notes",
     "uploaded_by": {
       "id": "uuid",
@@ -1947,7 +2030,7 @@ ws://api.notesos.com/ws?token=JWT_TOKEN&course_id=UUID
 {
   "type": "fact_check:complete",
   "data": {
-    "note_id": "uuid",
+    "resource_id": "uuid",
     "verified": 8,
     "disputed": 2,
     "unverified": 0
@@ -2281,14 +2364,14 @@ RATE_LIMITS = {
     "/api/auth/login": "5 per 15 minutes",
     "/api/auth/register": "3 per hour",
     "/api/ai/*": "50 per hour",  # AI calls are expensive
-    "/api/notes": "100 per hour",
+    "/api/resources": "100 per hour",
     "global": "1000 per hour"
 }
 
 # Input validation with Pydantic
 from pydantic import BaseModel, validator
 
-class NoteCreate(BaseModel):
+class ResourceCreate(BaseModel):
     title: str
     content: str
     
@@ -2523,22 +2606,22 @@ transcription_worker = Worker(
 
 # Fact check worker
 async def process_fact_check(job):
-    note_id = job.data['note_id']
+    resource_id = job.data['resource_id']
     
     # Run LangGraph workflow
     from agents.fact_checker import fact_check_workflow
     result = await fact_check_workflow.invoke({
-        'note_id': note_id
+        'resource_id': resource_id
     })
     
     # Save results
-    await db.save_fact_checks(note_id, result['verifications'])
+    await db.save_fact_checks(resource_id, result['verifications'])
     
-    # Mark note as verified
-    await db.update_note(note_id, {'is_verified': True})
+    # Mark resource as verified
+    await db.update_resource(resource_id, {'is_verified': True})
     
     # Notify via WebSocket
-    await ws_notify(note_id, 'fact_check:complete')
+    await ws_notify(resource_id, 'fact_check:complete')
 
 fact_check_worker = Worker(
     'fact-check',
@@ -2570,8 +2653,8 @@ logger = structlog.get_logger()
 
 # Usage
 logger.info(
-    "note_uploaded",
-    note_id=note.id,
+    "resource_uploaded",
+    resource_id=resource.id,
     topic_id=note.topic_id,
     user_id=user.id,
     chunk_count=len(chunks)
@@ -2582,8 +2665,8 @@ logger.info(
 ```python
 from prometheus_client import Counter, Histogram
 
-note_uploads = Counter(
-    'note_uploads_total',
+resource_uploads = Counter(
+    'resource_uploads_total',
     'Total note uploads',
     ['topic', 'content_type']
 )
@@ -2595,7 +2678,7 @@ ai_request_duration = Histogram(
 )
 
 # Usage
-note_uploads.labels(topic='French Revolution', content_type='text').inc()
+resource_uploads.labels(topic='French Revolution', resource_type='text').inc()
 ai_request_duration.labels(agent_type='grader').observe(2.5)
 ```
 
@@ -2679,28 +2762,29 @@ jobs:
 
 **Deliverable:** Users can create/join courses, see topics
 
-### 10.2 Phase 2: Notes & RAG (Weeks 3-4)
+### 10.2 Phase 2: Resources & RAG (Weeks 3-4)
 
-#### Week 3: Note Upload & Chunking
+#### Week 3: Resource Upload & Chunking
 **Tasks:**
-- [x] S3 integration (Cloudflare R2)
-- [x] Text note creation
-- [x] File upload (PDF, DOCX, images)
-- [x] OCR with Tesseract
+- [x] Cloudinary integration for file storage
+- [x] Text resource creation
+- [x] File upload (PDF, DOCX, multi-page images)
+- [x] Hybrid OCR (Tesseract + Google Vision fallback)
 - [x] Text extraction (pdf-parse, mammoth)
 - [x] **Chunking pipeline**
 - [x] **Voyage AI embeddings integration**
-- [x] **Store chunks in note_chunks with vectors**
+- [x] **Store chunks in resource_chunks with vectors**
+- [x] **Resource architecture refactor (Note → Resource, multi-page image grouping)**
 
-**Deliverable:** Notes uploaded and chunked for RAG
+**Deliverable:** Resources uploaded and chunked for RAG
 
 #### Week 4: RAG Implementation
 **Tasks:**
 - [x] Vector similarity search (pgvector)
 - [x] RAG query pipeline
 - [x] Basic AI chat with RAG
-- [x] Notes feed UI
-- [x] Note card component
+- [x] Resources feed UI
+- [x] Resource card component
 - [x] WebSocket real-time updates
 
 **Deliverable:** Working RAG system, notes visible to all

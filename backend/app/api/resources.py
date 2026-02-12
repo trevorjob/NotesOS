@@ -10,6 +10,7 @@ Resource = one logical piece of study material:
 
 from typing import List, Optional
 from datetime import datetime
+import asyncio
 import os
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -323,13 +324,26 @@ async def upload_resources(
     # Refresh and enqueue RAG for each resource
     responses = []
     for resource in created_resources:
-        await db.refresh(resource)
+        # Eagerly load the files relationship to avoid lazy loading issues
+        resource_query = (
+            select(Resource)
+            .options(selectinload(Resource.files))
+            .where(Resource.id == resource.id)
+        )
+        result = await db.execute(resource_query)
+        refreshed_resource = result.scalar_one()
 
         await redis_client.enqueue_job(
-            "chunking", {"resource_id": str(resource.id), "text": resource.content}
+            "chunking",
+            {
+                "resource_id": str(refreshed_resource.id),
+                "text": refreshed_resource.content,
+            },
         )
 
-        responses.append(build_resource_response(resource, current_user.full_name))
+        responses.append(
+            build_resource_response(refreshed_resource, current_user.full_name)
+        )
 
     return responses
 
@@ -371,17 +385,16 @@ async def _create_image_resource(
         file_content = await file.read()
         ext = os.path.splitext(file.filename or "")[1].lower()
 
-        # Upload to Cloudinary
-        upload_result = await storage_service.upload_file(
+        # Upload to Cloudinary AND run OCR concurrently (they're independent)
+        upload_task = storage_service.upload_file(
             file=file_content,
             folder=f"notesos/{topic.course_id}/{topic.id}",
         )
-        file_url = upload_result["url"]
-
-        # OCR / extract text
-        processing_result = await file_processor.process_uploaded_file(
-            file_url=file_url, file_format=ext, is_handwritten=is_handwritten
+        ocr_task = file_processor.process_from_bytes(
+            file_bytes=file_content, file_format=ext, is_handwritten=is_handwritten
         )
+        upload_result, processing_result = await asyncio.gather(upload_task, ocr_task)
+        file_url = upload_result["url"]
 
         extracted_text = processing_result["text"]
         source_type_str = processing_result["source_type"]
@@ -406,6 +419,12 @@ async def _create_image_resource(
         final_text = extracted_text
 
         if needs_cleaning:
+            print(
+                f"[OCR DEBUG] Cleaning needed. Extracted text preview: {extracted_text[:100]}..."
+            )
+            print(
+                f"[OCR DEBUG] Confidence: {ocr_confidence}, Aggressive: {needs_aggressive}"
+            )
             any_cleaned = True
             cleaning_result = await ocr_cleaner.clean_ocr_text(
                 extracted_text,
@@ -413,6 +432,12 @@ async def _create_image_resource(
                 needs_aggressive_cleanup=needs_aggressive,
             )
             final_text = cleaning_result["cleaned_text"]
+            print(
+                f"[OCR DEBUG] Cleaning complete. Cleaned text preview: {final_text[:100]}..."
+            )
+            print(
+                f"[OCR DEBUG] Corrections made: {len(cleaning_result.get('corrections_made', []))}"
+            )
 
         combined_text.append(final_text)
 
@@ -451,17 +476,16 @@ async def _create_document_resource(
     file_content = await file.read()
     ext = os.path.splitext(file.filename or "")[1].lower()
 
-    # Upload to Cloudinary
-    upload_result = await storage_service.upload_file(
+    # Upload to Cloudinary AND extract text concurrently
+    upload_task = storage_service.upload_file(
         file=file_content,
         folder=f"notesos/{topic.course_id}/{topic.id}",
     )
-    file_url = upload_result["url"]
-
-    # Extract text
-    processing_result = await file_processor.process_uploaded_file(
-        file_url=file_url, file_format=ext, is_handwritten=False
+    ocr_task = file_processor.process_from_bytes(
+        file_bytes=file_content, file_format=ext, is_handwritten=False
     )
+    upload_result, processing_result = await asyncio.gather(upload_task, ocr_task)
+    file_url = upload_result["url"]
 
     extracted_text = processing_result["text"]
     source_type_str = processing_result["source_type"]

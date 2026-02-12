@@ -89,6 +89,9 @@ class Topic(Base):
     resources = relationship(
         "Resource", back_populates="topic", cascade="all, delete-orphan"
     )
+    research = relationship(
+        "PreClassResearch", back_populates="topic", cascade="all, delete-orphan"
+    )
 
 
 class CourseOutline(Base):

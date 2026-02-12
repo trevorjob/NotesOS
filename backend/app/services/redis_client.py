@@ -72,6 +72,27 @@ class RedisClient:
 
         return job_id
 
+    async def dequeue_job(self, queue_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Pop job from queue (FIFO).
+
+        Args:
+            queue_name: Queue name
+
+        Returns:
+            Job data dict or None
+        """
+        client = await self.get_client()
+
+        # RPOP for FIFO (since we used LPUSH)
+        job_json = await client.rpop(f"queue:{queue_name}")
+
+        if job_json:
+            job = json.loads(job_json)
+            return job["data"]
+
+        return None
+
     async def get_job_status(self, job_id: str) -> Optional[Dict]:
         """
         Get job status and details.
@@ -153,6 +174,38 @@ class RedisClient:
             return json.loads(cached)
 
         return None
+
+    async def publish(self, channel: str, message: Dict[str, Any]):
+        """
+        Publish message to a channel.
+
+        Args:
+            channel: Channel name
+            message: Message dict
+        """
+        client = await self.get_client()
+        await client.publish(f"channel:{channel}", json.dumps(message))
+
+    async def subscribe(self, channel: str):
+        """
+        Subscribe to a channel and yield messages.
+
+        Args:
+            channel: Channel name
+
+        Yields:
+            Message dict
+        """
+        client = await self.get_client()
+        pubsub = client.pubsub()
+        await pubsub.subscribe(f"channel:{channel}")
+
+        async for message in pubsub.listen():
+            if message["type"] == "message":
+                try:
+                    yield json.loads(message["data"])
+                except json.JSONDecodeError:
+                    continue
 
 
 # Singleton instance

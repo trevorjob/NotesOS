@@ -203,3 +203,6 @@ class PreClassResearch(Base):
     key_concepts = Column(JSONB, nullable=True)
 
     generated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Relationships
+    topic = relationship("Topic", back_populates="research")
