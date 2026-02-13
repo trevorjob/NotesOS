@@ -99,14 +99,14 @@ class VectorStore:
                     r.title as resource_title,
                     r.uploaded_by,
                     u.full_name as uploader_name,
-                    1 - (rc.embedding <=> :embedding::vector) as similarity
+                    1 - (rc.embedding <=> CAST(:embedding AS VECTOR)) as similarity
                 FROM resource_chunks rc
                 JOIN resources r ON r.id = rc.resource_id
                 JOIN topics t ON t.id = r.topic_id
                 JOIN users u ON u.id = r.uploaded_by
                 WHERE t.course_id = :course_id 
                   AND r.topic_id = :topic_id
-                ORDER BY rc.embedding <=> :embedding::vector
+                ORDER BY rc.embedding <=> CAST(:embedding AS VECTOR)
                 LIMIT :limit
             """)
 
@@ -129,13 +129,13 @@ class VectorStore:
                     r.title as resource_title,
                     r.uploaded_by,
                     u.full_name as uploader_name,
-                    1 - (rc.embedding <=> :embedding::vector) as similarity
+                    1 - (rc.embedding <=> CAST(:embedding AS VECTOR)) as similarity
                 FROM resource_chunks rc
                 JOIN resources r ON r.id = rc.resource_id
                 JOIN topics t ON t.id = r.topic_id
                 JOIN users u ON u.id = r.uploaded_by
                 WHERE t.course_id = :course_id
-                ORDER BY rc.embedding <=> :embedding::vector
+                ORDER BY rc.embedding <=> CAST(:embedding AS VECTOR)
                 LIMIT :limit
             """)
 
@@ -192,7 +192,7 @@ class VectorStore:
                     rc.chunk_text,
                     rc.chunk_index,
                     r.title as resource_title,
-                    1 - (rc.embedding <=> :embedding::vector) as vector_score
+                    1 - (rc.embedding <=> CAST(:embedding AS VECTOR)) as vector_score
                 FROM resource_chunks rc
                 JOIN resources r ON r.id = rc.resource_id
                 JOIN topics t ON t.id = r.topic_id

@@ -1,10 +1,10 @@
 """
 NotesOS API - AI Features Router
-Fact Checker and Pre-class Research endpoints.
+Fact Checker, Pre-class Research, Study Agent, and Test Generator endpoints.
 """
 
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
@@ -13,10 +13,15 @@ import uuid
 from app.database import get_db
 from app.models.resource import Resource, FactCheck, PreClassResearch
 from app.models.course import Topic
+from app.models.progress import AIConversation, AIMessage
+from app.models.test import Test, TestQuestion, TestAttempt, TestAnswer
 from app.api.auth import get_current_user, verify_course_enrollment
 from app.models.user import User
 from app.services.research_generator import research_generator
 from app.services.redis_client import redis_client
+from app.services.study_agent import study_agent
+from app.services.question_generator import question_generator
+from app.services.storage import storage_service
 from app.config import settings
 
 
@@ -266,4 +271,494 @@ async def get_topic_research(
         sources=research.sources or [],
         key_concepts=research.key_concepts or {},
         generated_at=research.generated_at.isoformat(),
+    )
+
+
+# ── Study Agent Endpoints ─────────────────────────────────────────────────────
+
+
+class AskQuestionRequest(BaseModel):
+    question: str
+    topic_id: str | None = None
+    conversation_id: str | None = None
+
+
+class AskQuestionResponse(BaseModel):
+    answer: str
+    sources: List[dict]
+    conversation_id: str
+
+
+class ConversationResponse(BaseModel):
+    id: str
+    title: str | None
+    created_at: str
+
+
+class MessageResponse(BaseModel):
+    role: str
+    content: str
+    created_at: str
+
+
+@router.post("/study/ask", response_model=AskQuestionResponse)
+async def ask_study_question(
+    request: AskQuestionRequest,
+    course_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Ask a study question using RAG + AI."""
+    await verify_course_enrollment(db, current_user.id, uuid.UUID(course_id))
+
+    result = await study_agent.ask_question(
+        db=db,
+        user_id=str(current_user.id),
+        course_id=course_id,
+        question=request.question,
+        topic_id=request.topic_id,
+        conversation_id=request.conversation_id,
+    )
+
+    return AskQuestionResponse(**result)
+
+
+@router.get("/study/conversations", response_model=List[ConversationResponse])
+async def list_conversations(
+    course_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """List user's study conversations."""
+    await verify_course_enrollment(db, current_user.id, uuid.UUID(course_id))
+
+    query = (
+        select(AIConversation)
+        .where(
+            AIConversation.user_id == current_user.id,
+            AIConversation.course_id == uuid.UUID(course_id),
+        )
+        .order_by(AIConversation.updated_at.desc())
+    )
+    result = await db.execute(query)
+    conversations = result.scalars().all()
+
+    return [
+        ConversationResponse(
+            id=str(conv.id),
+            title=conv.title,
+            created_at=conv.created_at.isoformat(),
+        )
+        for conv in conversations
+    ]
+
+
+@router.get(
+    "/study/conversations/{conversation_id}", response_model=List[MessageResponse]
+)
+async def get_conversation_messages(
+    conversation_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get messages from a conversation."""
+    query = (
+        select(AIMessage)
+        .where(AIMessage.conversation_id == uuid.UUID(conversation_id))
+        .order_by(AIMessage.created_at.asc())
+    )
+    result = await db.execute(query)
+    messages = result.scalars().all()
+
+    return [
+        MessageResponse(
+            role=msg.role.value,
+            content=msg.content,
+            created_at=msg.created_at.isoformat(),
+        )
+        for msg in messages
+    ]
+
+
+# ── Test/Question Generator Endpoints ─────────────────────────────────────────
+
+
+class GenerateTestRequest(BaseModel):
+    topic_ids: List[str]
+    question_count: int = 10
+    difficulty: str = "medium"
+    question_types: List[str] = ["mcq", "short_answer"]
+
+
+class TestQuestionResponse(BaseModel):
+    id: str
+    question_text: str
+    question_type: str
+    answer_options: List[str] | None
+    points: int
+    order_index: int
+
+
+class TestResponse(BaseModel):
+    id: str
+    title: str
+    question_count: int
+    questions: List[TestQuestionResponse]
+
+
+class SubmitAnswerRequest(BaseModel):
+    question_id: str
+    answer_text: str
+    is_voice: bool = False
+
+
+class GradedAnswerResponse(BaseModel):
+    score: float
+    feedback: str
+    encouragement: str
+    key_points_covered: List[str]
+    key_points_missed: List[str]
+
+
+class VoiceAnswerResponse(BaseModel):
+    answer_id: str
+    status: str
+    message: str
+
+
+class TestResultsResponse(BaseModel):
+    attempt_id: str
+    total_score: float
+    max_score: int
+    completed_at: str | None
+    answers: List[GradedAnswerResponse]
+
+
+@router.post("/tests/generate", response_model=TestResponse)
+async def generate_test(
+    request: GenerateTestRequest,
+    course_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Generate a practice test."""
+    await verify_course_enrollment(db, current_user.id, uuid.UUID(course_id))
+
+    test = await question_generator.generate_test(
+        db=db,
+        course_id=course_id,
+        user_id=str(current_user.id),
+        topic_ids=request.topic_ids,
+        question_count=request.question_count,
+        difficulty=request.difficulty,
+        question_types=request.question_types,
+    )
+
+    # Refresh to get questions
+    await db.refresh(test)
+    questions_query = (
+        select(TestQuestion)
+        .where(TestQuestion.test_id == test.id)
+        .order_by(TestQuestion.order_index)
+    )
+    questions_result = await db.execute(questions_query)
+    questions = questions_result.scalars().all()
+
+    return TestResponse(
+        id=str(test.id),
+        title=test.title,
+        question_count=test.question_count,
+        questions=[
+            TestQuestionResponse(
+                id=str(q.id),
+                question_text=q.question_text,
+                question_type=q.question_type.value,
+                answer_options=q.answer_options,
+                points=q.points,
+                order_index=q.order_index,
+            )
+            for q in questions
+        ],
+    )
+
+
+@router.get("/tests/{test_id}", response_model=TestResponse)
+async def get_test(
+    test_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get a test with its questions."""
+    test_query = select(Test).where(Test.id == uuid.UUID(test_id))
+    test_result = await db.execute(test_query)
+    test = test_result.scalar_one_or_none()
+
+    if not test:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Test not found"
+        )
+
+    await verify_course_enrollment(db, current_user.id, test.course_id)
+
+    questions_query = (
+        select(TestQuestion)
+        .where(TestQuestion.test_id == test.id)
+        .order_by(TestQuestion.order_index)
+    )
+    questions_result = await db.execute(questions_query)
+    questions = questions_result.scalars().all()
+
+    return TestResponse(
+        id=str(test.id),
+        title=test.title,
+        question_count=test.question_count,
+        questions=[
+            TestQuestionResponse(
+                id=str(q.id),
+                question_text=q.question_text,
+                question_type=q.question_type.value,
+                answer_options=q.answer_options,
+                points=q.points,
+                order_index=q.order_index,
+            )
+            for q in questions
+        ],
+    )
+
+
+@router.post("/tests/{test_id}/submit", response_model=VoiceAnswerResponse)
+async def submit_test_answers(
+    test_id: str,
+    answers: List[SubmitAnswerRequest],
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Submit test answers for grading.
+
+    Workflow:
+    1. Create TestAttempt
+    2. Create TestAnswer records for each answer
+    3. Enqueue grading jobs (async processing)
+    4. Return immediately
+    5. Frontend listens for WebSocket 'grading:complete' event
+    """
+    test_query = select(Test).where(Test.id == uuid.UUID(test_id))
+    test_result = await db.execute(test_query)
+    test = test_result.scalar_one_or_none()
+
+    if not test:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Test not found"
+        )
+
+    await verify_course_enrollment(db, current_user.id, test.course_id)
+
+    # Create test attempt
+    attempt = TestAttempt(
+        test_id=test.id,
+        user_id=current_user.id,
+        max_score=test.question_count * 10,  # Assuming 10 points max per question
+    )
+    db.add(attempt)
+    await db.flush()
+
+    # Create TestAnswer records and enqueue grading jobs
+    answer_ids = []
+    for answer_req in answers:
+        # Get question to verify it exists
+        question_query = select(TestQuestion).where(
+            TestQuestion.id == uuid.UUID(answer_req.question_id)
+        )
+        question_result = await db.execute(question_query)
+        question = question_result.scalar_one_or_none()
+
+        if not question:
+            continue
+
+        # Create TestAnswer record
+        test_answer = TestAnswer(
+            attempt_id=attempt.id,
+            question_id=question.id,
+            answer_text=answer_req.answer_text,
+            # Score/feedback will be filled by grading worker
+        )
+        db.add(test_answer)
+        await db.flush()  # Get the ID
+
+        answer_ids.append(str(test_answer.id))
+
+        # Enqueue grading job
+        await redis_client.enqueue_job(
+            "voice_grade",  # Reuse same queue (handles both text and voice)
+            {
+                "answer_id": str(test_answer.id),
+                "is_voice": answer_req.is_voice,
+            },
+        )
+
+    await db.commit()
+
+    return VoiceAnswerResponse(
+        answer_id=str(attempt.id),  # Return attempt_id as identifier
+        status="processing",
+        message=f"Submitted {len(answer_ids)} answers. Grading in progress.",
+    )
+
+
+# ── Voice Answer Endpoints ────────────────────────────────────────────────────
+
+
+@router.post("/tests/{test_id}/voice-answer", response_model=VoiceAnswerResponse)
+async def upload_voice_answer(
+    test_id: str,
+    question_id: str,
+    audio_file: UploadFile = File(...),
+    attempt_id: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Upload a voice answer for a test question.
+
+    Workflow:
+    1. Upload audio to Cloudinary
+    2. Create TestAnswer record with audio URL
+    3. Enqueue grading job (transcribe + grade)
+    4. Return immediately (async grading)
+    """
+    if not settings.ENABLE_VOICE_GRADING:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Voice grading is currently disabled",
+        )
+
+    # Verify test exists
+    test_query = select(Test).where(Test.id == uuid.UUID(test_id))
+    test_result = await db.execute(test_query)
+    test = test_result.scalar_one_or_none()
+
+    if not test:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Test not found"
+        )
+
+    await verify_course_enrollment(db, current_user.id, test.course_id)
+
+    # Verify question exists
+    question_query = select(TestQuestion).where(
+        TestQuestion.id == uuid.UUID(question_id)
+    )
+    question_result = await db.execute(question_query)
+    question = question_result.scalar_one_or_none()
+
+    if not question:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Question not found"
+        )
+
+    # Get or create test attempt
+    if attempt_id:
+        attempt_query = select(TestAttempt).where(
+            TestAttempt.id == uuid.UUID(attempt_id)
+        )
+        attempt_result = await db.execute(attempt_query)
+        attempt = attempt_result.scalar_one_or_none()
+        if not attempt:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Attempt not found"
+            )
+    else:
+        # Create new attempt
+        attempt = TestAttempt(
+            test_id=test.id,
+            user_id=current_user.id,
+            max_score=test.question_count * 10,
+        )
+        db.add(attempt)
+        await db.flush()
+
+    # Upload audio to Cloudinary
+    audio_bytes = await audio_file.read()
+    upload_result = await storage_service.upload_file(
+        file=audio_bytes,
+        folder=f"voice_answers/{str(current_user.id)}",
+        resource_type="auto",  # Auto-detect audio type
+    )
+
+    # Create TestAnswer record
+    answer = TestAnswer(
+        attempt_id=attempt.id,
+        question_id=question.id,
+        answer_audio_url=upload_result["url"],
+        # Score/feedback will be filled by grading worker
+    )
+    db.add(answer)
+    await db.commit()
+
+    # Enqueue grading job
+    await redis_client.enqueue_job(
+        "voice_grade",
+        {
+            "answer_id": str(answer.id),
+            "is_voice": True,
+        },
+    )
+
+    return VoiceAnswerResponse(
+        answer_id=str(answer.id),
+        status="processing",
+        message="Voice answer uploaded. Grading in progress.",
+    )
+
+
+@router.get("/tests/attempts/{attempt_id}/results", response_model=TestResultsResponse)
+async def get_test_results(
+    attempt_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get graded results for a test attempt."""
+    # Fetch attempt with answers
+    attempt_query = select(TestAttempt).where(TestAttempt.id == uuid.UUID(attempt_id))
+    attempt_result = await db.execute(attempt_query)
+    attempt = attempt_result.scalar_one_or_none()
+
+    if not attempt:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Attempt not found"
+        )
+
+    # Verify ownership
+    if attempt.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have access to this attempt",
+        )
+
+    # Get all answers
+    answers_query = select(TestAnswer).where(TestAnswer.attempt_id == attempt.id)
+    answers_result = await db.execute(answers_query)
+    answers = answers_result.scalars().all()
+
+    # Build response
+    graded_answers = []
+    for ans in answers:
+        if ans.score is not None:  # Only include graded answers
+            graded_answers.append(
+                GradedAnswerResponse(
+                    score=float(ans.score),
+                    feedback=ans.ai_feedback or "",
+                    encouragement=ans.encouragement or "",
+                    key_points_covered=[],  # Not stored separately
+                    key_points_missed=[],
+                )
+            )
+
+    return TestResultsResponse(
+        attempt_id=str(attempt.id),
+        total_score=float(attempt.total_score or 0),
+        max_score=attempt.max_score,
+        completed_at=attempt.completed_at.isoformat() if attempt.completed_at else None,
+        answers=graded_answers,
     )

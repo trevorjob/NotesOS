@@ -68,6 +68,7 @@ from app.api.topics import router as topics_router
 from app.api.resources import router as resources_router
 from app.api.invites import router as invites_router
 from app.api.ai_features import router as ai_features_router
+from app.api.progress import router as progress_router
 from app.services.websocket import connection_manager
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
@@ -76,6 +77,7 @@ app.include_router(topics_router, prefix="/api", tags=["topics"])
 app.include_router(resources_router, prefix="/api", tags=["resources"])
 app.include_router(invites_router, prefix="/api/invites", tags=["invites"])
 app.include_router(ai_features_router, prefix="", tags=["AI Features"])
+app.include_router(progress_router, prefix="", tags=["Progress"])
 
 
 # WebSocket endpoint for real-time updates
