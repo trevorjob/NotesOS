@@ -16,7 +16,7 @@ from passlib.context import CryptContext
 
 from app.config import settings
 from app.database import get_db
-from app.models import User
+from app.models import User, RefreshToken
 
 router = APIRouter()
 security = HTTPBearer()
@@ -41,8 +41,14 @@ class LoginRequest(BaseModel):
 
 
 class TokenResponse(BaseModel):
-    token: str
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
     user: dict
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
 
 
 class UserResponse(BaseModel):
@@ -60,18 +66,12 @@ class PersonalityUpdate(BaseModel):
 
 
 # =============================================================================
-# Helpers
+# Utility Functions
 # =============================================================================
-
-
-# def _pre_hash_password(password: str) -> str:
-#     """Pre-hash password with SHA-256 to handle bcrypt's 72-byte limit."""
-#     return hashlib.sha256(password.encode()).hexdigest()
 
 
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
-    # return pwd_context.hash(_pre_hash_password(password))
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -88,6 +88,24 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     return jwt.encode(to_encode, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
 
 
+async def create_refresh_token(user_id: uuid.UUID, db: AsyncSession) -> str:
+    """Create a new refresh token for the user."""
+    # Generate unique token
+    token_data = f"{user_id}{datetime.utcnow().isoformat()}{uuid.uuid4()}"
+    token = hashlib.sha256(token_data.encode()).hexdigest()
+
+    # Create refresh token record
+    refresh_token = RefreshToken(
+        token=token,
+        user_id=user_id,
+        expires_at=datetime.utcnow() + timedelta(days=30),  # 30 days
+    )
+    db.add(refresh_token)
+    await db.commit()
+
+    return token
+
+
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: AsyncSession = Depends(get_db),
@@ -99,6 +117,7 @@ async def get_current_user(
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
     try:
         payload = jwt.decode(
             token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM]
@@ -109,10 +128,12 @@ async def get_current_user(
     except JWTError:
         raise credentials_exception
 
-    result = await db.execute(select(User).where(User.id == user_id))
+    result = await db.execute(select(User).where(User.id == uuid.UUID(user_id)))
     user = result.scalar_one_or_none()
+
     if user is None:
         raise credentials_exception
+
     return user
 
 
@@ -170,11 +191,14 @@ async def register(request: RegisterRequest, db: AsyncSession = Depends(get_db))
     await db.commit()
     await db.refresh(user)
 
-    # Generate token
-    token = create_access_token(data={"sub": str(user.id)})
+    # Generate tokens
+    access_token = create_access_token(data={"sub": str(user.id)})
+    refresh_token = await create_refresh_token(user.id, db)
 
     return {
-        "token": token,
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
         "user": {
             "id": str(user.id),
             "email": user.email,
@@ -200,11 +224,71 @@ async def login(request: LoginRequest, db: AsyncSession = Depends(get_db)):
     user.last_login = datetime.utcnow()
     await db.commit()
 
-    # Generate token
-    token = create_access_token(data={"sub": str(user.id)})
+    # Generate tokens
+    access_token = create_access_token(data={"sub": str(user.id)})
+    refresh_token = await create_refresh_token(user.id, db)
 
     return {
-        "token": token,
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+        "user": {
+            "id": str(user.id),
+            "email": user.email,
+            "full_name": user.full_name,
+            "study_personality": user.study_personality,
+        },
+    }
+
+
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh_access_token(
+    request: RefreshRequest, db: AsyncSession = Depends(get_db)
+):
+    """Refresh access token using refresh token."""
+    # Find refresh token
+    result = await db.execute(
+        select(RefreshToken).where(RefreshToken.token == request.refresh_token)
+    )
+    refresh_token_record = result.scalar_one_or_none()
+
+    if not refresh_token_record:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token",
+        )
+
+    # Check if token is valid
+    if not refresh_token_record.is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token expired or revoked",
+        )
+
+    # Get user
+    result = await db.execute(
+        select(User).where(User.id == refresh_token_record.user_id)
+    )
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+        )
+
+    # Generate new tokens
+    new_access_token = create_access_token(data={"sub": str(user.id)})
+    new_refresh_token = await create_refresh_token(user.id, db)
+
+    # Revoke old refresh token
+    refresh_token_record.is_revoked = True
+    await db.commit()
+
+    return {
+        "access_token": new_access_token,
+        "refresh_token": new_refresh_token,
+        "token_type": "bearer",
         "user": {
             "id": str(user.id),
             "email": user.email,
@@ -228,21 +312,21 @@ async def get_me(current_user: User = Depends(get_current_user)):
 
 @router.patch("/me/personality")
 async def update_personality(
-    request: PersonalityUpdate,
+    prefs: PersonalityUpdate,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update AI personality preferences."""
-    personality = current_user.study_personality or {}
+    """Update user's study personality preferences."""
+    # Update personality
+    current_personality = current_user.study_personality or {}
+    if prefs.tone:
+        current_personality["tone"] = prefs.tone
+    if prefs.emoji_usage:
+        current_personality["emoji_usage"] = prefs.emoji_usage
+    if prefs.explanation_style:
+        current_personality["explanation_style"] = prefs.explanation_style
 
-    if request.tone:
-        personality["tone"] = request.tone
-    if request.emoji_usage:
-        personality["emoji_usage"] = request.emoji_usage
-    if request.explanation_style:
-        personality["explanation_style"] = request.explanation_style
-
-    current_user.study_personality = personality
+    current_user.study_personality = current_personality
     await db.commit()
 
-    return {"message": "Personality updated! 🎉", "study_personality": personality}
+    return {"study_personality": current_personality}

@@ -3,6 +3,7 @@ NotesOS Models Package
 """
 
 from app.models.user import User
+from app.models.refresh_token import RefreshToken
 from app.models.course import Course, CourseEnrollment, Topic, CourseOutline
 from app.models.resource import (
     Resource,
@@ -36,6 +37,7 @@ from app.models.classmate import Class, Classmate
 __all__ = [
     # User
     "User",
+    "RefreshToken",
     # Course
     "Course",
     "CourseEnrollment",

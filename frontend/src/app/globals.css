@@ -1,26 +1,178 @@
 @import "tailwindcss";
 
+/* ═══════════════════════════════════════════════════════════════════════
+   NotesOS Design System — Warm & Minimal
+   No pure black or white. Deep, cozy tones.
+   ═══════════════════════════════════════════════════════════════════════ */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Backgrounds (warm creams, never white) */
+  --bg-base: #F5F0EB;
+  --bg-elevated: #FAF7F4;
+  --bg-sunken: #EDE8E1;
+
+  /* Text (espresso/clay, never black) */
+  --text-primary: #2D2420;
+  --text-secondary: #4A3F35;
+  --text-tertiary: #8C7E72;
+
+  /* Accent (ONE dark color for CTAs) */
+  --accent-primary: #3D2E28;
+  --accent-hover: #2D2420;
+
+  /* Semantic (minimal) */
+  --success: #6B8F71;
+  --error: #C75C5C;
+
+  /* Glass Morphism */
+  --glass-bg: rgba(250, 247, 244, 0.7);
+  --glass-border: rgba(237, 232, 225, 0.5);
+  --glass-shadow: 0 8px 32px 0 rgba(45, 36, 32, 0.06);
+
+  /* Spacing (8px grid) */
+  --space-1: 0.25rem;
+  /* 4px */
+  --space-2: 0.5rem;
+  /* 8px */
+  --space-3: 0.75rem;
+  /* 12px */
+  --space-4: 1rem;
+  /* 16px */
+  --space-5: 1.25rem;
+  /* 20px */
+  --space-6: 1.5rem;
+  /* 24px */
+  --space-8: 2rem;
+  /* 32px */
+  --space-10: 2.5rem;
+  /* 40px */
+  --space-12: 3rem;
+  /* 48px */
+  --space-16: 4rem;
+  /* 64px */
+  --space-20: 5rem;
+  /* 80px */
+
+  /* Border Radius */
+  --radius-sm: 0.5rem;
+  /* 8px */
+  --radius-md: 0.75rem;
+  /* 12px */
+  --radius-lg: 1rem;
+  /* 16px */
+
+  /* Transitions */
+  --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-base: 200ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  /* Map to Tailwind */
+  --color-background: var(--bg-base);
+  --color-foreground: var(--text-primary);
+  --color-primary: var(--accent-primary);
+  --color-success: var(--success);
+  --color-error: var(--error);
 }
 
+/* Dark mode (later) */
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --bg-base: #1E1A17;
+    --bg-elevated: #2A2420;
+    --bg-sunken: #161311;
+    --text-primary: #F5F0EB;
+    --text-secondary: #C4BAB0;
+    --text-tertiary: #8C7E72;
   }
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   Base Styles
+   ═══════════════════════════════════════════════════════════════════════ */
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  margin: 0;
+  padding: 0;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-sans), -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  line-height: 1.6;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Utility Classes — Glass Effects
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* Clear Glass — Light blur for content cards */
+.glass-card {
+  background: rgba(250, 247, 244, 0.6);
+  backdrop-filter: blur(12px) saturate(150%);
+  -webkit-backdrop-filter: blur(12px) saturate(150%);
+  border: 1px solid rgba(237, 232, 225, 0.4);
+  box-shadow: 0 4px 16px 0 rgba(45, 36, 32, 0.04);
+  border-radius: var(--radius-md);
+}
+
+/* Frosted Glass — Heavy blur for nav/modals */
+.glass-nav {
+  background: rgba(250, 247, 244, 0.8);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  border-bottom: 1px solid rgba(237, 232, 225, 0.6);
+  box-shadow:
+    0 1px 3px 0 rgba(45, 36, 32, 0.05),
+    0 8px 24px -4px rgba(45, 36, 32, 0.08);
+}
+
+/* Frosted Panel — For slide-outs, modals */
+.glass-panel {
+  background: rgba(250, 247, 244, 0.85);
+  backdrop-filter: blur(32px) saturate(180%);
+  -webkit-backdrop-filter: blur(32px) saturate(180%);
+  border: 1px solid rgba(237, 232, 225, 0.6);
+  box-shadow:
+    0 10px 40px -8px rgba(45, 36, 32, 0.12),
+    0 4px 16px -2px rgba(45, 36, 32, 0.08);
+}
+
+.text-primary {
+  color: var(--text-primary);
+}
+
+.text-secondary {
+  color: var(--text-secondary);
+}
+
+.text-tertiary {
+  color: var(--text-tertiary);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Animations
+   ═══════════════════════════════════════════════════════════════════════ */
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn var(--transition-base) ease-out;
 }

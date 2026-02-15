@@ -1,131 +1,131 @@
 /**
  * NotesOS - Auth Store
- * Zustand store for authentication state management
+ * Zustand store for authentication with refresh token support
  */
 
-import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
+import { api, tokenManager } from '@/lib/api';
 
 interface User {
-  id: string
-  email: string
-  full_name: string
-  avatar_url?: string
+  id: string;
+  email: string;
+  full_name: string;
+  avatar_url?: string;
   study_personality?: {
-    tone: 'encouraging' | 'direct' | 'humorous'
-    emoji_usage: 'none' | 'moderate' | 'heavy'
-    explanation_style: 'concise' | 'detailed' | 'visual'
-  }
+    tone: 'encouraging' | 'direct' | 'humorous';
+    emoji_usage: 'none' | 'moderate' | 'heavy';
+    explanation_style: 'concise' | 'detailed' | 'visual';
+  };
 }
 
 interface AuthState {
-  user: User | null
-  token: string | null
-  isAuthenticated: boolean
-  isLoading: boolean
-  
-  // Actions
-  login: (email: string, password: string) => Promise<void>
-  register: (data: { email: string; password: string; full_name: string }) => Promise<void>
-  logout: () => void
-  setUser: (user: User) => void
-  setToken: (token: string) => void
-  updatePersonality: (prefs: Partial<User['study_personality']>) => Promise<void>
-}
+  user: User | null;
+  isAuthenticated: boolean;
+  isLoading: boolean;
+  error: string | null;
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+  // Actions
+  login: (email: string, password: string) => Promise<void>;
+  register: (data: {
+    email: string;
+    password: string;
+    full_name: string;
+  }) => Promise<void>;
+  logout: () => Promise<void>;
+  setUser: (user: User) => void;
+  clearError: () => void;
+  updatePersonality: (prefs: Partial<User['study_personality']>) => Promise<void>;
+}
 
 export const useAuthStore = create<AuthState>()(
   persist(
     (set, get) => ({
       user: null,
-      token: null,
       isAuthenticated: false,
       isLoading: false,
+      error: null,
 
       login: async (email: string, password: string) => {
-        set({ isLoading: true })
+        set({ isLoading: true, error: null });
         try {
-          const res = await fetch(`${API_URL}/api/auth/login`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, password }),
-          })
-          
-          if (!res.ok) {
-            const error = await res.json()
-            throw new Error(error.detail || 'Login failed')
-          }
-          
-          const data = await res.json()
+          const response = await api.auth.login(email, password);
+          const { user, access_token, refresh_token } = response.data;
+
+          // Store tokens
+          tokenManager.setTokens(access_token, refresh_token);
+
           set({
-            user: data.user,
-            token: data.token,
+            user,
             isAuthenticated: true,
             isLoading: false,
-          })
-        } catch (error) {
-          set({ isLoading: false })
-          throw error
+          });
+        } catch (error: any) {
+          const errorMessage =
+            error.response?.data?.detail || 'Login failed. Please try again.';
+          set({ isLoading: false, error: errorMessage });
+          throw new Error(errorMessage);
         }
       },
 
       register: async (data) => {
-        set({ isLoading: true })
+        set({ isLoading: true, error: null });
         try {
-          const res = await fetch(`${API_URL}/api/auth/register`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data),
-          })
-          
-          if (!res.ok) {
-            const error = await res.json()
-            throw new Error(error.detail || 'Registration failed')
-          }
-          
-          const responseData = await res.json()
+          const response = await api.auth.register(data);
+          const { user, access_token, refresh_token } = response.data;
+
+          // Store tokens
+          tokenManager.setTokens(access_token, refresh_token);
+
           set({
-            user: responseData.user,
-            token: responseData.token,
+            user,
             isAuthenticated: true,
             isLoading: false,
-          })
-        } catch (error) {
-          set({ isLoading: false })
-          throw error
+          });
+        } catch (error: any) {
+          const errorMessage =
+            error.response?.data?.detail ||
+            'Registration failed. Please try again.';
+          set({ isLoading: false, error: errorMessage });
+          throw new Error(errorMessage);
         }
       },
 
-      logout: () => {
-        set({
-          user: null,
-          token: null,
-          isAuthenticated: false,
-        })
+      logout: async () => {
+        try {
+          await api.auth.logout();
+        } catch (error) {
+          // Ignore logout errors
+          console.error('Logout error:', error);
+        } finally {
+          // Clear tokens and state
+          tokenManager.clearTokens();
+          set({
+            user: null,
+            isAuthenticated: false,
+            error: null,
+          });
+        }
       },
 
       setUser: (user: User) => set({ user }),
-      setToken: (token: string) => set({ token, isAuthenticated: true }),
+
+      clearError: () => set({ error: null }),
 
       updatePersonality: async (prefs) => {
-        const { token, user } = get()
-        if (!token || !user) return
+        const { user } = get();
+        if (!user) return;
 
-        const res = await fetch(`${API_URL}/api/auth/me/personality`, {
-          method: 'PATCH',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`,
-          },
-          body: JSON.stringify(prefs),
-        })
-
-        if (res.ok) {
-          const data = await res.json()
+        try {
+          await api.auth.updatePersonality(prefs);
           set({
-            user: { ...user, study_personality: data.study_personality },
-          })
+            user: {
+              ...user,
+              study_personality: { ...user.study_personality, ...prefs },
+            },
+          });
+        } catch (error) {
+          console.error('Failed to update personality:', error);
         }
       },
     }),
@@ -133,9 +133,8 @@ export const useAuthStore = create<AuthState>()(
       name: 'notesos-auth',
       partialize: (state) => ({
         user: state.user,
-        token: state.token,
         isAuthenticated: state.isAuthenticated,
       }),
     }
   )
-)
+);

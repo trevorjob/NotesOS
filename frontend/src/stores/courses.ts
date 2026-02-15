@@ -1,176 +1,167 @@
 /**
  * NotesOS - Courses Store
- * Zustand store for course state management
+ * Zustand store for course management (matching backend structure)
  */
 
-import { create } from 'zustand'
+import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
+import { api } from '@/lib/api';
 
 interface Topic {
-    id: string
-    title: string
-    description?: string
-    week_number?: number
-    order_index: number
+    id: string;
+    title: string;
+    description?: string;
+    week_number?: number;
+    order_index: number;
+    mastery_level?: number;
 }
 
 interface Course {
-    id: string
-    code: string
-    name: string
-    semester?: string
-    description?: string
-    member_count?: number
-    created_by: string
-    joined_at?: string
-    topics?: Topic[]
+    id: string;
+    code: string;
+    name: string;
+    semester?: string;
+    description?: string;
+    member_count?: number;
+    created_by: string;
+    joined_at?: string;
+    topics?: Topic[];
 }
 
 interface CourseState {
-    courses: Course[]
-    currentCourse: Course | null
-    isLoading: boolean
+    courses: Course[];
+    currentCourse: Course | null;
+    isLoading: boolean;
+    error: string | null;
 
     // Actions
-    fetchCourses: () => Promise<void>
-    createCourse: (data: { code: string; name: string; semester?: string; description?: string; is_public?: boolean }) => Promise<Course>
-    joinCourse: (identifier: { search?: string; course_id?: string; invite_code?: string }) => Promise<void>
-    selectCourse: (courseId: string) => Promise<void>
-    createTopic: (courseId: string, data: { title: string; description?: string; week_number?: number }) => Promise<Topic>
-    clearCurrentCourse: () => void
+    fetchCourses: () => Promise<void>;
+    createCourse: (data: {
+        code: string;
+        name: string;
+        description?: string;
+        semester?: string;
+        is_public?: boolean;
+    }) => Promise<Course>;
+    joinCourse: (identifier: string) => Promise<void>;
+    selectCourse: (courseId: string) => Promise<void>;
+    createTopic: (courseId: string, data: {
+        title: string;
+        description?: string;
+        week_number?: number;
+    }) => Promise<Topic>;
+    clearCurrentCourse: () => void;
+    clearError: () => void;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+export const useCourseStore = create<CourseState>()(
+    persist(
+        (set, get) => ({
+            courses: [],
+            currentCourse: null,
+            isLoading: false,
+            error: null,
 
-const getToken = () => {
-    if (typeof window === 'undefined') return null
-    const stored = localStorage.getItem('notesos-auth')
-    if (stored) {
-        const parsed = JSON.parse(stored)
-        return parsed.state?.token
-    }
-    return null
-}
-
-export const useCourseStore = create<CourseState>((set, get) => ({
-    courses: [],
-    currentCourse: null,
-    isLoading: false,
-
-    fetchCourses: async () => {
-        const token = getToken()
-        if (!token) return
-
-        set({ isLoading: true })
-        try {
-            const res = await fetch(`${API_URL}/api/courses`, {
-                headers: { 'Authorization': `Bearer ${token}` },
-            })
-
-            if (res.ok) {
-                const data = await res.json()
-                set({ courses: data.courses, isLoading: false })
-            }
-        } catch {
-            set({ isLoading: false })
-        }
-    },
-
-    createCourse: async (data) => {
-        const token = getToken()
-        if (!token) throw new Error('Not authenticated')
-
-        const res = await fetch(`${API_URL}/api/courses`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`,
+            fetchCourses: async () => {
+                set({ isLoading: true, error: null });
+                try {
+                    const response = await api.courses.getAll();
+                    set({ courses: response.data.courses || [], isLoading: false });
+                } catch (error: any) {
+                    const errorMessage =
+                        error.response?.data?.detail || 'Failed to fetch courses';
+                    set({ isLoading: false, error: errorMessage });
+                }
             },
-            body: JSON.stringify(data),
-        })
 
-        if (!res.ok) {
-            const error = await res.json()
-            throw new Error(error.detail || 'Failed to create course')
-        }
+            createCourse: async (data) => {
+                set({ error: null });
+                try {
+                    const response = await api.courses.create(data);
+                    const newCourse = response.data.course;
 
-        const responseData = await res.json()
-        const newCourse = responseData.course
+                    // Refresh courses list
+                    await get().fetchCourses();
 
-        // Refresh courses list
-        await get().fetchCourses()
-
-        return newCourse
-    },
-
-    joinCourse: async (identifier) => {
-        const token = getToken()
-        if (!token) throw new Error('Not authenticated')
-
-        const res = await fetch(`${API_URL}/api/courses/join`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`,
+                    return newCourse;
+                } catch (error: any) {
+                    const errorMessage =
+                        error.response?.data?.detail || 'Failed to create course';
+                    set({ error: errorMessage });
+                    throw new Error(errorMessage);
+                }
             },
-            body: JSON.stringify(identifier),
-        })
 
-        if (!res.ok) {
-            const error = await res.json()
-            throw new Error(error.detail || 'Failed to join course')
-        }
+            joinCourse: async (identifier: string) => {
+                set({ error: null });
+                try {
+                    // Try as invite code first, then as search term
+                    await api.courses.join({ invite_code: identifier });
 
-        // Refresh courses list
-        await get().fetchCourses()
-    },
-
-    selectCourse: async (courseId: string) => {
-        const token = getToken()
-        if (!token) return
-
-        set({ isLoading: true })
-        try {
-            const res = await fetch(`${API_URL}/api/courses/${courseId}`, {
-                headers: { 'Authorization': `Bearer ${token}` },
-            })
-
-            if (res.ok) {
-                const data = await res.json()
-                set({
-                    currentCourse: { ...data.course, topics: data.topics },
-                    isLoading: false,
-                })
-            }
-        } catch {
-            set({ isLoading: false })
-        }
-    },
-
-    createTopic: async (courseId, data) => {
-        const token = getToken()
-        if (!token) throw new Error('Not authenticated')
-
-        const res = await fetch(`${API_URL}/api/courses/${courseId}/topics`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`,
+                    // Refresh courses list
+                    await get().fetchCourses();
+                } catch (error: any) {
+                    // If invite code fails, try as search term
+                    try {
+                        await api.courses.join({ search: identifier });
+                        await get().fetchCourses();
+                    } catch (searchError: any) {
+                        const errorMessage =
+                            searchError.response?.data?.detail || 'Failed to join course';
+                        set({ error: errorMessage });
+                        throw new Error(errorMessage);
+                    }
+                }
             },
-            body: JSON.stringify(data),
-        })
 
-        if (!res.ok) {
-            const error = await res.json()
-            throw new Error(error.detail || 'Failed to create topic')
+            selectCourse: async (courseId: string) => {
+                set({ isLoading: true, error: null });
+                try {
+                    const [courseResponse, topicsResponse] = await Promise.all([
+                        api.courses.getById(courseId),
+                        api.topics.getByCourse(courseId),
+                    ]);
+
+                    set({
+                        currentCourse: {
+                            ...courseResponse.data.course,
+                            topics: topicsResponse.data.topics || [],
+                        },
+                        isLoading: false,
+                    });
+                } catch (error: any) {
+                    const errorMessage =
+                        error.response?.data?.detail || 'Failed to load course';
+                    set({ isLoading: false, error: errorMessage });
+                }
+            },
+
+            createTopic: async (courseId, data) => {
+                set({ error: null });
+                try {
+                    const response = await api.topics.create(courseId, data);
+                    const newTopic = response.data.topic;
+
+                    // Refresh current course
+                    await get().selectCourse(courseId);
+
+                    return newTopic;
+                } catch (error: any) {
+                    const errorMessage =
+                        error.response?.data?.detail || 'Failed to create topic';
+                    set({ error: errorMessage });
+                    throw new Error(errorMessage);
+                }
+            },
+
+            clearCurrentCourse: () => set({ currentCourse: null }),
+            clearError: () => set({ error: null }),
+        }),
+        {
+            name: 'notesos-courses',
+            partialize: (state) => ({
+                currentCourse: state.currentCourse,
+            }),
         }
-
-        const responseData = await res.json()
-
-        // Refresh current course
-        await get().selectCourse(courseId)
-
-        return responseData.topic
-    },
-
-    clearCurrentCourse: () => set({ currentCourse: null }),
-}))
+    )
+);
