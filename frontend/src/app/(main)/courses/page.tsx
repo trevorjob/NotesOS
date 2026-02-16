@@ -70,40 +70,35 @@ export default function CoursesPage() {
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                         {courses.map((course) => (
-                            <GlassCard
+                            <button
                                 key={course.id}
-                                hover
-                                className="cursor-pointer"
                                 onClick={() => handleCourseClick(course.id)}
+                                className="text-left w-full"
                             >
-                                <div className="flex items-start justify-between mb-4">
-                                    <div>
-                                        <h3 className="text-lg font-semibold text-[var(--text-primary)] mb-1">
-                                            {course.code}
-                                        </h3>
-                                        <p className="text-sm text-[var(--text-secondary)]">
-                                            {course.name}
-                                        </p>
+                                <GlassCard hover className="cursor-pointer h-full">
+                                    <div className="flex items-start justify-between mb-4">
+                                        <div>
+                                            <h3 className="text-lg font-semibold text-[var(--text-primary)] mb-1">
+                                                {course.code}
+                                            </h3>
+                                            <p className="text-sm text-[var(--text-secondary)]">
+                                                {course.name}
+                                            </p>
+                                        </div>
+                                        {course.member_count && (
+                                            <Badge variant="default">
+                                                {course.member_count} {course.member_count === 1 ? 'member' : 'members'}
+                                            </Badge>
+                                        )}
                                     </div>
-                                    {course.member_count && (
-                                        <Badge variant="default">
-                                            {course.member_count} {course.member_count === 1 ? 'member' : 'members'}
-                                        </Badge>
+
+                                    {course.description && (
+                                        <p className="text-sm text-[var(--text-tertiary)] line-clamp-2 mb-4">
+                                            {course.description}
+                                        </p>
                                     )}
-                                </div>
-
-                                {course.description && (
-                                    <p className="text-sm text-[var(--text-tertiary)] line-clamp-2 mb-4">
-                                        {course.description}
-                                    </p>
-                                )}
-
-                                {course.university && (
-                                    <p className="text-xs text-[var(--text-tertiary)]">
-                                        {course.university}
-                                    </p>
-                                )}
-                            </GlassCard>
+                                </GlassCard>
+                            </button>
                         ))}
                     </div>
                 )}

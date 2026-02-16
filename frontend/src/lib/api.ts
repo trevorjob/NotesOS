@@ -16,7 +16,7 @@ export const apiClient = axios.create({
     headers: {
         'Content-Type': 'application/json',
     },
-    timeout: 30000,
+    timeout: 120000,
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -222,7 +222,11 @@ export const api = {
             title: string;
             description?: string;
             week_number?: number;
-        }) => apiClient.post(`/api/courses/${courseId}/topics`, data),
+            order_index: number;
+        }) => apiClient.post(`/api/courses/${courseId}/topics`, {
+            ...data,
+            course_id: courseId,
+        }),
 
         getById: (id: string) => apiClient.get(`/api/topics/${id}`),
 
@@ -237,13 +241,22 @@ export const api = {
 
     // Resources
     resources: {
-        getByTopic: (topicId: string) =>
-            apiClient.get(`/api/topics/${topicId}/resources`),
-
-        upload: (topicId: string, formData: FormData) =>
-            apiClient.post(`/api/topics/${topicId}/resources`, formData, {
-                headers: { 'Content-Type': 'multipart/form-data' },
+        getByTopic: (topicId: string, page: number = 1, pageSize: number = 20) =>
+            apiClient.get(`/api/topics/${topicId}/resources`, {
+                params: { page, page_size: pageSize },
             }),
+
+        upload: (topicId: string, courseId: string, files: File[], title?: string, isHandwritten?: boolean) => {
+            const formData = new FormData();
+            formData.append('topic_id', topicId);
+            formData.append('course_id', courseId);
+            if (title) formData.append('title', title);
+            if (isHandwritten !== undefined) formData.append('is_handwritten', String(isHandwritten));
+            files.forEach(file => formData.append('files', file));
+            return apiClient.post('/api/resources/upload', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' },
+            });
+        },
 
         getById: (id: string) => apiClient.get(`/api/resources/${id}`),
 
@@ -261,25 +274,28 @@ export const api = {
     ai: {
         // Fact Check
         verifyResource: (resourceId: string) =>
-            apiClient.post(`/api/factcheck/verify/${resourceId}`),
+            apiClient.post(`/api/resources/${resourceId}/fact-check`),
 
         // Pre-class Research
         generateResearch: (topicId: string) =>
-            apiClient.post(`/api/research/topics/${topicId}/research`),
+            apiClient.post(`/api/topics/${topicId}/research`),
 
         getResearch: (topicId: string) =>
-            apiClient.get(`/api/research/topics/${topicId}/research`),
+            apiClient.get(`/api/topics/${topicId}/research`),
 
-        // Study Agent
-        askQuestion: (data: {
+        // Study Agent (course_id as query param)
+        askQuestion: (courseId: string, data: {
             question: string;
-            topic_id: string;
-            course_id: string;
+            topic_id?: string;
             conversation_id?: string;
-        }) => apiClient.post('/api/study/ask', data),
+        }) => apiClient.post('/api/study/ask', data, {
+            params: { course_id: courseId },
+        }),
 
-        getConversations: () =>
-            apiClient.get('/api/study/conversations'),
+        getConversations: (courseId: string) =>
+            apiClient.get('/api/study/conversations', {
+                params: { course_id: courseId },
+            }),
 
         getConversation: (conversationId: string) =>
             apiClient.get(`/api/study/conversations/${conversationId}`),

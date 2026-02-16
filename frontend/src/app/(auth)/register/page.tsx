@@ -18,7 +18,6 @@ export default function RegisterPage() {
     const [fullName, setFullName] = useState('');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
-    const [university, setUniversity] = useState('');
 
     const handleSubmit = async (e: FormEvent) => {
         e.preventDefault();
@@ -29,7 +28,6 @@ export default function RegisterPage() {
                 full_name: fullName,
                 email,
                 password,
-                university: university || undefined,
             });
             router.push('/'); // Redirect to home
         } catch (err) {

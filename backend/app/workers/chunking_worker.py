@@ -32,6 +32,7 @@ async def process_chunking_job(job_data: dict):
         "note_id"
     )  # backward compat
     text = job_data["text"]
+    course_id = None
 
     async with AsyncSessionLocal() as db:
         try:

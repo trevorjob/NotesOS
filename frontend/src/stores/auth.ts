@@ -114,14 +114,14 @@ export const useAuthStore = create<AuthState>()(
 
       updatePersonality: async (prefs) => {
         const { user } = get();
-        if (!user) return;
+        if (!user || !prefs) return;
 
         try {
           await api.auth.updatePersonality(prefs);
           set({
             user: {
               ...user,
-              study_personality: { ...user.study_personality, ...prefs },
+              study_personality: { ...user.study_personality, ...prefs } as typeof user.study_personality,
             },
           });
         } catch (error) {

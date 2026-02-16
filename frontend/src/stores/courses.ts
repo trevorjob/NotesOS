@@ -49,6 +49,7 @@ interface CourseState {
         title: string;
         description?: string;
         week_number?: number;
+        order_index: number;
     }) => Promise<Topic>;
     clearCurrentCourse: () => void;
     clearError: () => void;
@@ -125,7 +126,7 @@ export const useCourseStore = create<CourseState>()(
                     set({
                         currentCourse: {
                             ...courseResponse.data.course,
-                            topics: topicsResponse.data.topics || [],
+                            topics: topicsResponse.data || [], // Array directly
                         },
                         isLoading: false,
                     });
@@ -140,7 +141,7 @@ export const useCourseStore = create<CourseState>()(
                 set({ error: null });
                 try {
                     const response = await api.topics.create(courseId, data);
-                    const newTopic = response.data.topic;
+                    const newTopic = response.data; // TopicResponse directly
 
                     // Refresh current course
                     await get().selectCourse(courseId);

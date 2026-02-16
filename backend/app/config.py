@@ -108,7 +108,14 @@ class Settings(BaseSettings):
         Return connection arguments for the database.
         Enables SSL for remote databases (like Neon).
         """
-        return {"ssl": True}
+        import ssl
+
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+        return {"ssl": ssl_context}
+
+        # return {"ssl": True}
 
 
 settings = Settings()

@@ -20,7 +20,6 @@ export default function CreateCoursePage() {
     const [code, setCode] = useState('');
     const [name, setName] = useState('');
     const [description, setDescription] = useState('');
-    const [university, setUniversity] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     const handleSubmit = async (e: FormEvent) => {
@@ -33,7 +32,6 @@ export default function CreateCoursePage() {
                 code,
                 name,
                 description: description || undefined,
-                university: university || undefined,
             });
 
             // Redirect to the new course

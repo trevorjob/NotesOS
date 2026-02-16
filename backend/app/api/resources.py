@@ -606,7 +606,11 @@ async def delete_resource(
     current_user: User = Depends(get_current_user),
 ):
     """Delete a resource. Only uploader can delete. Also deletes files from storage."""
-    resource_query = select(Resource).where(Resource.id == uuid.UUID(resource_id))
+    resource_query = (
+        select(Resource)
+        .options(selectinload(Resource.files))
+        .where(Resource.id == uuid.UUID(resource_id))
+    )
     resource_result = await db.execute(resource_query)
     resource = resource_result.scalar_one_or_none()
 
