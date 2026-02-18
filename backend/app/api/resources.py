@@ -229,7 +229,14 @@ async def create_text_resource(
 
     db.add(resource)
     await db.commit()
-    await db.refresh(resource)
+    # Re-fetch with eager loading for files
+    resource_query = (
+        select(Resource)
+        .options(selectinload(Resource.files))
+        .where(Resource.id == resource.id)
+    )
+    result = await db.execute(resource_query)
+    resource = result.scalar_one()
 
     # Enqueue for RAG chunking
     await redis_client.enqueue_job(
@@ -563,7 +570,11 @@ async def update_resource(
     current_user: User = Depends(get_current_user),
 ):
     """Update resource content/title. Only the uploader can edit."""
-    resource_query = select(Resource).where(Resource.id == uuid.UUID(resource_id))
+    resource_query = (
+        select(Resource)
+        .options(selectinload(Resource.files))
+        .where(Resource.id == uuid.UUID(resource_id))
+    )
     resource_result = await db.execute(resource_query)
     resource = resource_result.scalar_one_or_none()
 
@@ -589,7 +600,15 @@ async def update_resource(
         resource.is_processed = False
 
     await db.commit()
-    await db.refresh(resource)
+
+    # Re-fetch with eager loading for files to avoid MissingGreenlet
+    resource_query = (
+        select(Resource)
+        .options(selectinload(Resource.files))
+        .where(Resource.id == resource.id)
+    )
+    result = await db.execute(resource_query)
+    resource = result.scalar_one()
 
     if content_changed:
         await redis_client.enqueue_job(
@@ -662,7 +681,11 @@ async def reprocess_resource_ocr(
             detail="OCR reprocessing is not enabled",
         )
 
-    resource_query = select(Resource).where(Resource.id == uuid.UUID(resource_id))
+    resource_query = (
+        select(Resource)
+        .options(selectinload(Resource.files))
+        .where(Resource.id == uuid.UUID(resource_id))
+    )
     resource_result = await db.execute(resource_query)
     resource = resource_result.scalar_one_or_none()
 
@@ -741,7 +764,15 @@ async def reprocess_resource_ocr(
         resource.is_processed = False
 
         await db.commit()
-        await db.refresh(resource)
+
+        # Re-fetch with eager loading
+        resource_query = (
+            select(Resource)
+            .options(selectinload(Resource.files))
+            .where(Resource.id == resource.id)
+        )
+        result = await db.execute(resource_query)
+        resource = result.scalar_one()
 
         await redis_client.enqueue_job(
             "chunking", {"resource_id": str(resource.id), "text": resource.content}

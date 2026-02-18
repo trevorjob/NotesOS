@@ -33,9 +33,13 @@ export default function TopicPage() {
         isUploading,
         uploadProgress,
         fetchResources,
+        createTextResource,
         uploadFiles,
         deleteResource,
         factCheckResource,
+        fetchFactChecks,
+        factChecks,
+        isLoadingFactChecks,
     } = useResourcesStore();
 
     const {
@@ -51,6 +55,10 @@ export default function TopicPage() {
     const [isResearchExpanded, setIsResearchExpanded] = useState(false);
     const [researchLoading, setResearchLoading] = useState(false);
     const [generatingResearch, setGeneratingResearch] = useState(false);
+    const [uploadMode, setUploadMode] = useState<'files' | 'text'>('files');
+    const [textResourceTitle, setTextResourceTitle] = useState('');
+    const [textResourceContent, setTextResourceContent] = useState('');
+    const [isCreatingText, setIsCreatingText] = useState(false);
 
     // Load topic data
     useEffect(() => {
@@ -108,6 +116,17 @@ export default function TopicPage() {
         }
     };
 
+    // Fetch fact checks for verified resources
+    useEffect(() => {
+        if (resources.length > 0) {
+            resources.forEach(resource => {
+                if (resource.is_verified && !factChecks[resource.id] && !isLoadingFactChecks[resource.id]) {
+                    fetchFactChecks(resource.id);
+                }
+            });
+        }
+    }, [resources, factChecks, isLoadingFactChecks, fetchFactChecks]);
+
     const handleUpload = async (files: File[], title?: string, isHandwritten?: boolean) => {
         await uploadFiles(topicId, courseId, files, title, isHandwritten);
     };
@@ -129,9 +148,30 @@ export default function TopicPage() {
     const handleFactCheck = async (resourceId: string) => {
         try {
             await factCheckResource(resourceId);
-            alert('Fact check started! Check back later for results.');
+            // Fetch results after a delay
+            setTimeout(() => fetchFactChecks(resourceId), 3000);
         } catch (error) {
             console.error('Failed to start fact check:', error);
+        }
+    };
+
+    const handleCreateTextResource = async () => {
+        if (!textResourceContent.trim()) return;
+
+        setIsCreatingText(true);
+        try {
+            await createTextResource(topicId, {
+                title: textResourceTitle || undefined,
+                content: textResourceContent,
+            });
+            // Reset form
+            setTextResourceTitle('');
+            setTextResourceContent('');
+            setUploadMode('files'); // Switch back to files tab
+        } catch (error) {
+            console.error('Failed to create text resource:', error);
+        } finally {
+            setIsCreatingText(false);
         }
     };
 
@@ -278,18 +318,66 @@ export default function TopicPage() {
                                 Study Resources
                             </h2>
                             <p className="text-xs text-[var(--text-tertiary)] mt-0.5">
-                                Upload and manage your study materials
+                                Upload files or write your notes
                             </p>
                         </div>
                     </div>
 
-                    {/* Upload */}
+                    {/* Upload Mode Tabs */}
+                    <div className="flex gap-2 mb-4">
+                        <button
+                            onClick={() => setUploadMode('files')}
+                            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${uploadMode === 'files'
+                                ? 'bg-[var(--accent-primary)] text-white'
+                                : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)]'
+                                }`}
+                        >
+                            Upload Files
+                        </button>
+                        <button
+                            onClick={() => setUploadMode('text')}
+                            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${uploadMode === 'text'
+                                ? 'bg-[var(--accent-primary)] text-white'
+                                : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)]'
+                                }`}
+                        >
+                            Write Notes
+                        </button>
+                    </div>
+
+                    {/* Upload/Create Form */}
                     <div className="mb-6">
-                        <FileUpload
-                            onUpload={handleUpload}
-                            isUploading={isUploading}
-                            uploadProgress={uploadProgress}
-                        />
+                        {uploadMode === 'files' ? (
+                            <FileUpload
+                                onUpload={handleUpload}
+                                isUploading={isUploading}
+                                uploadProgress={uploadProgress}
+                            />
+                        ) : (
+                            <div className="space-y-3">
+                                <input
+                                    type="text"
+                                    placeholder="Title (optional)"
+                                    value={textResourceTitle}
+                                    onChange={(e) => setTextResourceTitle(e.target.value)}
+                                    className="w-full px-4 py-2 bg-[var(--bg-sunken)] border border-[var(--glass-border)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]"
+                                />
+                                <textarea
+                                    placeholder="Write your notes here... (supports Markdown)"
+                                    value={textResourceContent}
+                                    onChange={(e) => setTextResourceContent(e.target.value)}
+                                    rows={8}
+                                    className="w-full px-4 py-3 bg-[var(--bg-sunken)] border border-[var(--glass-border)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)] font-mono"
+                                />
+                                <button
+                                    onClick={handleCreateTextResource}
+                                    disabled={!textResourceContent.trim() || isCreatingText}
+                                    className="w-full px-4 py-2 bg-[var(--accent-primary)] hover:bg-[var(--accent-hover)] text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    {isCreatingText ? 'Saving...' : 'Save Notes'}
+                                </button>
+                            </div>
+                        )}
                     </div>
 
                     {/* Resource list */}
@@ -317,6 +405,8 @@ export default function TopicPage() {
                                     currentUserId={user?.id}
                                     onDelete={handleDeleteResource}
                                     onFactCheck={handleFactCheck}
+                                    factChecks={factChecks[resource.id] || []}
+                                    isLoadingFactChecks={isLoadingFactChecks[resource.id] || false}
                                 />
                             ))}
                         </div>

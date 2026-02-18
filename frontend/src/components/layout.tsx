@@ -6,7 +6,7 @@
 'use client';
 
 import { ReactNode, useState, useEffect, useRef } from 'react';
-import { ChevronDown, User } from 'lucide-react';
+import { ChevronDown, User, Flame } from 'lucide-react';
 import { useCourseStore } from '@/stores/courses';
 import { useRouter } from 'next/navigation';
 
@@ -110,7 +110,7 @@ export function GlassNav({ currentCourse, onCourseSwitch, onProfileClick, streak
                 <div className="flex items-center gap-4">
                     {streak !== undefined && (
                         <button className="flex items-center gap-1.5 text-sm font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors">
-                            <span>🔥</span>
+                            <Flame className="w-4 h-4" />
                             <span>{streak}</span>
                         </button>
                     )}

@@ -154,15 +154,19 @@ interface PageHeaderProps {
     title: string;
     subtitle?: string;
     action?: ReactNode;
+    icon?: ReactNode;
 }
 
-export function PageHeader({ title, subtitle, action }: PageHeaderProps) {
+export function PageHeader({ title, subtitle, action, icon }: PageHeaderProps) {
     return (
         <div className="flex items-start justify-between mb-12">
             <div>
-                <h1 className="text-4xl font-semibold text-[var(--text-primary)] mb-3">
-                    {title}
-                </h1>
+                <div className="flex items-center gap-3 mb-3">
+                    {icon && <div className="text-[var(--accent-primary)]">{icon}</div>}
+                    <h1 className="text-4xl font-semibold text-[var(--text-primary)]">
+                        {title}
+                    </h1>
+                </div>
                 {subtitle && (
                     <p className="text-base text-[var(--text-tertiary)]">{subtitle}</p>
                 )}

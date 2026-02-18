@@ -8,6 +8,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Loader2, ExternalLink } from 'lucide-react';
 import { Button } from './ui';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 interface Message {
     role: 'user' | 'assistant';
@@ -79,11 +80,13 @@ export function AIChat({ messages, onSendMessage, isLoading = false }: AIChatPro
                         >
                             <div
                                 className={`max-w-[80%] rounded-lg px-4 py-2 ${message.role === 'user'
-                                        ? 'bg-[var(--accent-primary)] text-white'
-                                        : 'bg-[var(--bg-sunken)] text-[var(--text-primary)]'
+                                    ? 'bg-[var(--accent-primary)] text-white'
+                                    : 'bg-[var(--bg-sunken)] text-[var(--text-primary)]'
                                     }`}
                             >
-                                <div className="text-sm whitespace-pre-wrap">{message.content}</div>
+                                <div className="text-sm">
+                                    <MarkdownRenderer content={message.content} />
+                                </div>
 
                                 {/* Sources */}
                                 {message.sources && message.sources.length > 0 && (

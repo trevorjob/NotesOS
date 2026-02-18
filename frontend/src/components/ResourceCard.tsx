@@ -1,14 +1,32 @@
 /**
  * Resource Card Component
- * Glass card displaying a resource with markdown rendering, metadata, OCR status, verification badge
+ * Glass card displaying a resource with markdown rendering, metadata, OCR status, verification badge, fact-checks, and original file viewing
  */
 
 'use client';
 
-import { useState } from 'react';
-import { FileText, Image, File, Check, AlertTriangle, Trash2, ChevronDown, ChevronUp, Eye, X } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { FileText, Image, File, Check, AlertTriangle, Trash2, ChevronDown, ChevronUp, Eye, X, ExternalLink, Loader2 } from 'lucide-react';
 import { GlassCard } from './ui';
 import { MarkdownRenderer } from './MarkdownRenderer';
+
+interface ResourceFile {
+    id: string;
+    file_url: string;
+    file_name?: string;
+    file_order: number;
+    ocr_confidence?: number;
+}
+
+interface FactCheck {
+    id: string;
+    claim_text: string;
+    verification_status: string;
+    confidence_score: number;
+    ai_explanation: string;
+    sources: any[];
+    created_at: string;
+}
 
 interface ResourceCardProps {
     resource: {
@@ -24,15 +42,27 @@ interface ResourceCardProps {
         created_at: string;
         uploaded_by: string;
         file_url?: string;
+        files?: ResourceFile[];
     };
     currentUserId?: string;
     onDelete?: (id: string) => void;
     onFactCheck?: (id: string) => void;
+    factChecks?: FactCheck[];
+    isLoadingFactChecks?: boolean;
 }
 
-export function ResourceCard({ resource, currentUserId, onDelete, onFactCheck }: ResourceCardProps) {
+export function ResourceCard({
+    resource,
+    currentUserId,
+    onDelete,
+    onFactCheck,
+    factChecks = [],
+    isLoadingFactChecks = false
+}: ResourceCardProps) {
     const [isExpanded, setIsExpanded] = useState(false);
     const [showFullView, setShowFullView] = useState(false);
+    const [showFactChecks, setShowFactChecks] = useState(false);
+    const [activeTab, setActiveTab] = useState<'content' | 'original'>('content');
 
     const timeAgo = (date: string) => {
         const seconds = Math.floor((Date.now() - new Date(date).getTime()) / 1000);
@@ -43,7 +73,7 @@ export function ResourceCard({ resource, currentUserId, onDelete, onFactCheck }:
     };
 
     const getTypeIcon = () => {
-        switch (resource.resource_type) {
+        switch (resource.resource_type.toLowerCase()) {
             case 'pdf':
                 return <FileText className="w-4 h-4" />;
             case 'image':
@@ -54,6 +84,19 @@ export function ResourceCard({ resource, currentUserId, onDelete, onFactCheck }:
     };
 
     const canDelete = currentUserId === resource.uploaded_by;
+    const hasOriginalFiles = resource.file_url || (resource.files && resource.files.length > 0);
+
+    const getStatusColor = (status: string) => {
+        switch (status.toLowerCase()) {
+            case 'verified':
+                return 'text-[var(--success)] bg-[var(--success)]/10';
+            case 'disputed':
+            case 'unverified':
+                return 'text-[var(--error)] bg-[var(--error)]/10';
+            default:
+                return 'text-[var(--text-tertiary)] bg-[var(--bg-sunken)]';
+        }
+    };
 
     return (
         <>
@@ -82,10 +125,11 @@ export function ResourceCard({ resource, currentUserId, onDelete, onFactCheck }:
                         {!resource.is_verified && onFactCheck && (
                             <button
                                 onClick={() => onFactCheck(resource.id)}
-                                className="text-xs px-2 py-1 rounded text-[var(--text-secondary)] hover:bg-[var(--bg-sunken)] transition-colors"
+                                disabled={isLoadingFactChecks}
+                                className="text-xs px-2 py-1 rounded text-[var(--text-secondary)] hover:bg-[var(--bg-sunken)] transition-colors disabled:opacity-50"
                                 title="Verify with AI"
                             >
-                                Verify
+                                {isLoadingFactChecks ? 'Checking...' : 'Verify'}
                             </button>
                         )}
                         {canDelete && onDelete && (
@@ -102,14 +146,12 @@ export function ResourceCard({ resource, currentUserId, onDelete, onFactCheck }:
 
                 {/* Badges */}
                 <div className="flex flex-wrap items-center gap-2 mb-3">
-                    {/* Type badge */}
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[var(--bg-sunken)] text-[var(--text-secondary)] text-xs">
                         {getTypeIcon()}
                         {resource.resource_type}
                     </span>
 
-                    {/* OCR status */}
-                    {resource.resource_type !== 'text' && (
+                    {resource.resource_type.toLowerCase() !== 'text' && (
                         <span className={`text-xs px-2 py-0.5 rounded-full ${resource.is_processed
                             ? 'bg-[var(--success)]/10 text-[var(--success)]'
                             : 'bg-[var(--bg-sunken)] text-[var(--text-tertiary)]'
@@ -118,7 +160,6 @@ export function ResourceCard({ resource, currentUserId, onDelete, onFactCheck }:
                         </span>
                     )}
 
-                    {/* Verification badge with more detail */}
                     {resource.is_verified ? (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[var(--success)]/10 text-[var(--success)] text-xs">
                             <Check className="w-3 h-3" />
@@ -132,9 +173,53 @@ export function ResourceCard({ resource, currentUserId, onDelete, onFactCheck }:
                             Low confidence ({Math.round(resource.ocr_confidence * 100)}%)
                         </span>
                     ) : null}
+
+                    {factChecks.length > 0 && (
+                        <button
+                            onClick={() => setShowFactChecks(!showFactChecks)}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[var(--accent-primary)]/10 text-[var(--accent-primary)] text-xs hover:bg-[var(--accent-primary)]/20 transition-colors"
+                        >
+                            {factChecks.filter(fc => fc.verification_status === 'verified').length}/{factChecks.length} verified
+                            {showFactChecks ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                        </button>
+                    )}
                 </div>
 
-                {/* Content preview (markdown rendered, expandable) */}
+                {/* Fact Checks Results */}
+                {showFactChecks && factChecks.length > 0 && (
+                    <div className="mb-3 p-3 bg-[var(--bg-sunken)] rounded-lg space-y-2">
+                        <h4 className="text-xs font-medium text-[var(--text-primary)] mb-2">Fact Check Results</h4>
+                        {factChecks.map((fc, idx) => (
+                            <div key={fc.id} className="text-xs space-y-1">
+                                <div className="flex items-start gap-2">
+                                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${getStatusColor(fc.verification_status)}`}>
+                                        {fc.verification_status}
+                                    </span>
+                                    <span className="flex-1 text-[var(--text-secondary)]">{fc.claim_text}</span>
+                                </div>
+                                {fc.ai_explanation && (
+                                    <p className="text-[var(--text-tertiary)] pl-2 border-l-2 border-[var(--glass-border)]">
+                                        {fc.ai_explanation}
+                                    </p>
+                                )}
+                                {fc.confidence_score && (
+                                    <div className="flex items-center gap-2 pl-2">
+                                        <span className="text-[var(--text-tertiary)]">Confidence:</span>
+                                        <div className="flex-1 h-1.5 bg-[var(--bg-base)] rounded-full overflow-hidden">
+                                            <div
+                                                className="h-full bg-[var(--accent-primary)]"
+                                                style={{ width: `${fc.confidence_score * 100}%` }}
+                                            />
+                                        </div>
+                                        <span className="text-[var(--text-tertiary)]">{Math.round(fc.confidence_score * 100)}%</span>
+                                    </div>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                )}
+
+                {/* Content preview */}
                 <div className="text-sm">
                     {isExpanded ? (
                         <MarkdownRenderer content={resource.content} className="max-h-96 overflow-y-auto" />
@@ -167,13 +252,11 @@ export function ResourceCard({ resource, currentUserId, onDelete, onFactCheck }:
             {/* Full View Modal */}
             {showFullView && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-                    {/* Backdrop */}
                     <div
                         className="absolute inset-0 bg-black/50 backdrop-blur-sm"
                         onClick={() => setShowFullView(false)}
                     />
 
-                    {/* Modal Content */}
                     <div className="relative w-full max-w-4xl max-h-[90vh] bg-[var(--bg-base)] rounded-lg shadow-2xl flex flex-col">
                         {/* Header */}
                         <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--glass-border)]">
@@ -193,24 +276,76 @@ export function ResourceCard({ resource, currentUserId, onDelete, onFactCheck }:
                             </button>
                         </div>
 
-                        {/* Content */}
-                        <div className="flex-1 overflow-y-auto px-6 py-6">
-                            <MarkdownRenderer content={resource.content} />
-                        </div>
-
-                        {/* Footer with actions */}
-                        {resource.file_url && (
-                            <div className="px-6 py-4 border-t border-[var(--glass-border)] flex justify-end">
-                                <a
-                                    href={resource.file_url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="px-4 py-2 bg-[var(--accent-primary)] hover:bg-[var(--accent-hover)] text-white rounded-lg text-sm font-medium transition-colors"
+                        {/* Tabs if original files exist */}
+                        {hasOriginalFiles && (
+                            <div className="flex border-b border-[var(--glass-border)] px-6">
+                                <button
+                                    onClick={() => setActiveTab('content')}
+                                    className={`px-4 py-2 text-sm font-medium transition-colors ${activeTab === 'content'
+                                        ? 'text-[var(--accent-primary)] border-b-2 border-[var(--accent-primary)]'
+                                        : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]'
+                                        }`}
                                 >
-                                    Open Original File
-                                </a>
+                                    Extracted Text
+                                </button>
+                                <button
+                                    onClick={() => setActiveTab('original')}
+                                    className={`px-4 py-2 text-sm font-medium transition-colors ${activeTab === 'original'
+                                        ? 'text-[var(--accent-primary)] border-b-2 border-[var(--accent-primary)]'
+                                        : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]'
+                                        }`}
+                                >
+                                    Original File
+                                </button>
                             </div>
                         )}
+
+                        {/* Content */}
+                        <div className="flex-1 overflow-y-auto px-6 py-6">
+                            {activeTab === 'content' ? (
+                                <MarkdownRenderer content={resource.content} />
+                            ) : (
+                                <div className="space-y-4">
+                                    {resource.resource_type.toLowerCase() === 'image' && resource.files && resource.files.length > 0 ? (
+                                        <>
+                                            <p className="text-sm text-[var(--text-tertiary)] mb-4">Original images ({resource.files.length})</p>
+                                            <div className="space-y-4">
+                                                {resource.files
+                                                    .sort((a, b) => a.file_order - b.file_order)
+                                                    .map((file, idx) => (
+                                                        <div key={file.id} className="border border-[var(--glass-border)] rounded-lg overflow-hidden">
+                                                            <img
+                                                                src={file.file_url}
+                                                                alt={file.file_name || `Page ${idx + 1}`}
+                                                                className="w-full"
+                                                            />
+                                                            {file.file_name && (
+                                                                <div className="px-3 py-2 bg-[var(--bg-sunken)] text-xs text-[var(--text-secondary)]">
+                                                                    {file.file_name}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    ))}
+                                            </div>
+                                        </>
+                                    ) : resource.file_url ? (
+                                        <div className="text-center py-8">
+                                            <a
+                                                href={resource.file_url}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="inline-flex items-center gap-2 px-4 py-2 bg-[var(--accent-primary)] hover:bg-[var(--accent-hover)] text-white rounded-lg text-sm font-medium transition-colors"
+                                            >
+                                                <ExternalLink className="w-4 h-4" />
+                                                Open {resource.resource_type.toUpperCase()} in new tab
+                                            </a>
+                                        </div>
+                                    ) : (
+                                        <p className="text-sm text-[var(--text-tertiary)] text-center py-8">No original file available</p>
+                                    )}
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
             )}

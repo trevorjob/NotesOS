@@ -43,54 +43,59 @@ export function AIChatOverlay({ messages, onSendMessage, isLoading, courseId }: 
                 <MessageSquare className="w-6 h-6 group-hover:scale-110 transition-transform" />
             </button>
 
-            {/* Full-Page Overlay */}
-            {isOpen && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center">
-                    {/* Backdrop */}
-                    <div
-                        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
-                        onClick={() => setIsOpen(false)}
-                    />
+            {/* Full-Page Overlay - always mounted for smooth transitions */}
+            <div
+                className={`fixed inset-0 z-50 flex items-center justify-center transition-all duration-300 ${isOpen
+                        ? 'opacity-100 pointer-events-auto'
+                        : 'opacity-0 pointer-events-none'
+                    }`}
+            >
+                {/* Backdrop */}
+                <div
+                    className={`absolute inset-0 bg-black/50 backdrop-blur-sm transition-opacity duration-300 ${isOpen ? 'opacity-100' : 'opacity-0'
+                        }`}
+                    onClick={() => setIsOpen(false)}
+                />
 
-                    {/* Modal Content */}
-                    <div className="relative w-full h-full max-w-full max-h-full bg-[var(--bg-base)] shadow-2xl flex flex-col animate-in fade-in slide-in-from-bottom-4 duration-300">
-                        {/* Header */}
-                        <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--glass-border)] glass-nav">
-                            <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-full bg-[var(--accent-primary)]/10 flex items-center justify-center">
-                                    <MessageSquare className="w-5 h-5 text-[var(--accent-primary)]" />
-                                </div>
-                                <div>
-                                    <h2 className="text-lg font-semibold text-[var(--text-primary)]">
-                                        AI Study Assistant
-                                    </h2>
-                                    <p className="text-xs text-[var(--text-tertiary)]">
-                                        Ask questions about your course materials
-                                    </p>
-                                </div>
+                {/* Modal Content */}
+                <div className={`relative w-full h-full max-w-full max-h-full bg-[var(--bg-base)] shadow-2xl flex flex-col transition-all duration-300 ${isOpen ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0'
+                    }`}>
+                    {/* Header */}
+                    <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--glass-border)] glass-nav">
+                        <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-full bg-[var(--accent-primary)]/10 flex items-center justify-center">
+                                <MessageSquare className="w-5 h-5 text-[var(--accent-primary)]" />
                             </div>
-
-                            {/* Close Button */}
-                            <button
-                                onClick={() => setIsOpen(false)}
-                                className="w-10 h-10 rounded-lg hover:bg-[var(--bg-sunken)] flex items-center justify-center text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
-                                aria-label="Close chat"
-                            >
-                                <X className="w-5 h-5" />
-                            </button>
+                            <div>
+                                <h2 className="text-lg font-semibold text-[var(--text-primary)]">
+                                    AI Study Assistant
+                                </h2>
+                                <p className="text-xs text-[var(--text-tertiary)]">
+                                    Ask questions about your course materials
+                                </p>
+                            </div>
                         </div>
 
-                        {/* Chat Container */}
-                        <div className="flex-1 overflow-hidden">
-                            <AIChat
-                                messages={messages}
-                                onSendMessage={onSendMessage}
-                                isLoading={isLoading}
-                            />
-                        </div>
+                        {/* Close Button */}
+                        <button
+                            onClick={() => setIsOpen(false)}
+                            className="w-10 h-10 rounded-lg hover:bg-[var(--bg-sunken)] flex items-center justify-center text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+                            aria-label="Close chat"
+                        >
+                            <X className="w-5 h-5" />
+                        </button>
+                    </div>
+
+                    {/* Chat Container */}
+                    <div className="flex-1 overflow-hidden">
+                        <AIChat
+                            messages={messages}
+                            onSendMessage={onSendMessage}
+                            isLoading={isLoading}
+                        />
                     </div>
                 </div>
-            )}
+            </div>
         </>
     );
 }

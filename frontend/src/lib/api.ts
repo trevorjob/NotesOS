@@ -246,6 +246,12 @@ export const api = {
                 params: { page, page_size: pageSize },
             }),
 
+        createText: (topicId: string, data: { title?: string; content: string }) =>
+            apiClient.post(`/api/topics/${topicId}/resources/text`, {
+                topic_id: topicId,
+                ...data,
+            }),
+
         upload: (topicId: string, courseId: string, files: File[], title?: string, isHandwritten?: boolean) => {
             const formData = new FormData();
             formData.append('topic_id', topicId);
@@ -276,6 +282,9 @@ export const api = {
         verifyResource: (resourceId: string) =>
             apiClient.post(`/api/resources/${resourceId}/fact-check`),
 
+        getFactChecks: (resourceId: string) =>
+            apiClient.get(`/api/resources/${resourceId}/fact-checks`),
+
         // Pre-class Research
         generateResearch: (topicId: string) =>
             apiClient.post(`/api/topics/${topicId}/research`),
@@ -301,12 +310,13 @@ export const api = {
             apiClient.get(`/api/study/conversations/${conversationId}`),
 
         // Tests
-        generateTest: (data: {
-            course_id: string;
+        generateTest: (courseId: string, data: {
             topic_ids: string[];
             question_count: number;
             test_type: 'practice' | 'quiz' | 'exam';
-        }) => apiClient.post('/api/tests/generate', data),
+        }) => apiClient.post('/api/tests/generate', data, {
+            params: { course_id: courseId },
+        }),
 
         getTest: (testId: string) =>
             apiClient.get(`/api/tests/${testId}`),
@@ -314,12 +324,13 @@ export const api = {
         submitAnswers: (testId: string, answers: Array<{
             question_id: string;
             answer_text: string;
-        }>) => apiClient.post(`/api/tests/${testId}/submit`, { answers }),
+        }>) => apiClient.post(`/api/tests/${testId}/submit`, answers),
 
-        submitVoiceAnswer: (testId: string, questionId: string, audioFile: File) => {
+        submitVoiceAnswer: (testId: string, questionId: string, audioFile: File, attemptId?: string) => {
             const formData = new FormData();
-            formData.append('audio', audioFile);
+            formData.append('audio_file', audioFile);
             formData.append('question_id', questionId);
+            if (attemptId) formData.append('attempt_id', attemptId);
             return apiClient.post(`/api/tests/${testId}/voice-answer`, formData, {
                 headers: { 'Content-Type': 'multipart/form-data' },
             });
