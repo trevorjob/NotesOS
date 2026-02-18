@@ -35,6 +35,7 @@ interface AuthState {
   logout: () => Promise<void>;
   setUser: (user: User) => void;
   clearError: () => void;
+  clearSession: () => void;
   updatePersonality: (prefs: Partial<User['study_personality']>) => Promise<void>;
 }
 
@@ -111,6 +112,11 @@ export const useAuthStore = create<AuthState>()(
       setUser: (user: User) => set({ user }),
 
       clearError: () => set({ error: null }),
+
+      clearSession: () => {
+        tokenManager.clearTokens();
+        set({ user: null, isAuthenticated: false, error: null });
+      },
 
       updatePersonality: async (prefs) => {
         const { user } = get();

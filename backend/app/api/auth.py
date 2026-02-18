@@ -65,6 +65,10 @@ class PersonalityUpdate(BaseModel):
     explanation_style: Optional[str] = None
 
 
+class LogoutRequest(BaseModel):
+    refresh_token: str
+
+
 # =============================================================================
 # Utility Functions
 # =============================================================================
@@ -296,6 +300,22 @@ async def refresh_access_token(
             "study_personality": user.study_personality,
         },
     }
+
+
+@router.post("/logout")
+async def logout(
+    request: LogoutRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Revoke the refresh token. Client should clear tokens locally regardless."""
+    result = await db.execute(
+        select(RefreshToken).where(RefreshToken.token == request.refresh_token)
+    )
+    refresh_token_record = result.scalar_one_or_none()
+    if refresh_token_record:
+        refresh_token_record.is_revoked = True
+        await db.commit()
+    return {"message": "Logged out"}
 
 
 @router.get("/me", response_model=UserResponse)

@@ -18,6 +18,7 @@ class FactCheckState(TypedDict):
     content: str
     claims: List[Dict[str, Any]]
     current_claim_index: int
+    search_results: List[Dict[str, Any]]
     verifications: List[Dict[str, Any]]
     final_report: Dict[str, Any]
 
@@ -163,7 +164,7 @@ Return ONLY the JSON array, no other text."""
 
         sources_text = "\n\n".join(
             [
-                f"Source {i + 1}: {s['title']}\n{s['snippet']}\nURL: {s['url']}"
+                f"[{i + 1}] {s['title']}\n{s['snippet']}\nURL: {s['url']}"
                 for i, s in enumerate(sources)
             ]
         )
@@ -179,11 +180,11 @@ Return JSON:
 {{
   "status": "verified" | "disputed" | "unverified",
   "confidence": 0.0-1.0,
-  "explanation": "brief explanation of why",
-  "sources_used": [0, 1, 2]  // indices of sources that support this
+  "explanation": "brief explanation of why, citing sources as [1], [2] etc.",
+  "sources_used": [0, 1, 2]  // indices of sources that support this (0-based)
 }}
 
-Return ONLY valid JSON, no other text."""
+Return ONLY valid JSON, no other text. Refer to sources in the explanation using [1], [2] format corresponding to the source numbers provided above."""
 
         response = await self._call_deepseek(prompt)
 

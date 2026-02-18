@@ -24,7 +24,7 @@ export default function LoginPage() {
 
         try {
             await login(email, password);
-            router.push('/'); // Redirect to home (course home)
+            router.push('/courses');
         } catch (err) {
             // Error is already set in store
             console.error('Login failed:', err);

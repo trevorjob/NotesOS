@@ -57,7 +57,7 @@ export default function CoursePage() {
 
     if (isLoading) {
         return (
-            <MainLayout currentCourse={currentCourse ? { code: currentCourse.code, name: currentCourse.name } : undefined}>
+            <MainLayout currentCourse={currentCourse ? { id: currentCourse.id, code: currentCourse.code, name: currentCourse.name } : undefined}>
                 <div className="flex items-center justify-center min-h-[60vh]">
                     <p className="text-[var(--text-tertiary)]">Loading course...</p>
                 </div>
@@ -78,7 +78,7 @@ export default function CoursePage() {
     const topics = currentCourse.topics || [];
 
     return (
-        <MainLayout currentCourse={{ code: currentCourse.code, name: currentCourse.name }}>
+        <MainLayout currentCourse={{ id: currentCourse.id, code: currentCourse.code, name: currentCourse.name }}>
             <div className="max-w-[1400px] mx-auto px-8 md:px-20 py-12">
                 {/* Header */}
                 <div className="mb-8">

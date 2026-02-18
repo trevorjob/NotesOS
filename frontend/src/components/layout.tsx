@@ -16,6 +16,7 @@ import { useRouter } from 'next/navigation';
 
 interface GlassNavProps {
     currentCourse?: {
+        id: string;
         code: string;
         name: string;
     };
@@ -82,7 +83,7 @@ export function GlassNav({ currentCourse, onCourseSwitch, onProfileClick, streak
                                         <button
                                             key={course.id}
                                             onClick={() => handleCourseSelect(course.id)}
-                                            className={`w-full px-4 py-3 text-left hover:bg-[var(--bg-sunken)] transition-colors border-b border-[var(--glass-border)] last:border-0 ${course.id === currentCourse.code ? 'bg-[var(--accent-primary)]/5' : ''
+                                            className={`w-full px-4 py-3 text-left hover:bg-[var(--bg-sunken)] transition-colors border-b border-[var(--glass-border)] last:border-0 ${course.id === currentCourse?.id ? 'bg-[var(--accent-primary)]/5' : ''
                                                 }`}
                                         >
                                             <div className="text-sm font-medium text-[var(--text-primary)]">
@@ -134,6 +135,7 @@ export function GlassNav({ currentCourse, onCourseSwitch, onProfileClick, streak
 interface MainLayoutProps {
     children: ReactNode;
     currentCourse?: {
+        id: string;
         code: string;
         name: string;
     };

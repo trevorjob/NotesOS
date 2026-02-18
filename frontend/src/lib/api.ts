@@ -177,7 +177,10 @@ export const api = {
         login: (email: string, password: string) =>
             apiClient.post('/api/auth/login', { email, password }),
 
-        logout: () => apiClient.post('/api/auth/logout'),
+        logout: () =>
+            apiClient.post('/api/auth/logout', {
+                refresh_token: tokenManager.getRefreshToken() ?? '',
+            }),
 
         refresh: (refreshToken: string) =>
             apiClient.post('/api/auth/refresh', { refresh_token: refreshToken }),

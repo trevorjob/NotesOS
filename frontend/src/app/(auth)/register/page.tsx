@@ -29,7 +29,7 @@ export default function RegisterPage() {
                 email,
                 password,
             });
-            router.push('/'); // Redirect to home
+            router.push('/courses');
         } catch (err) {
             // Error is already set in store
             console.error('Registration failed:', err);
