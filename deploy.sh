@@ -15,9 +15,9 @@ set -euo pipefail
 #   Restart:       sudo ./deploy.sh restart
 #   Stop:          sudo ./deploy.sh stop
 
-APP_DIR="/opt/notesos"
+APP_DIR="/opt/NotesOS"
 APP_USER="notesos"
-ENV_FILE="${APP_DIR}/.env"
+ENV_FILE="${APP_DIR}/backend/.env"
 
 SERVICES=(
     notesos-backend
@@ -128,20 +128,20 @@ cmd_setup() {
     source "$ENV_FILE"
 
     # ── 8. PostgreSQL database ──────────────────────────
-    info "Setting up PostgreSQL database..."
-    local DB_NAME="${POSTGRES_DB:-notesos}"
-    local DB_USER="${POSTGRES_USER:-notesos}"
-    local DB_PASS="${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}"
+    # info "Setting up PostgreSQL database..."
+    # local DB_NAME="${POSTGRES_DB:-notesos}"
+    # local DB_USER="${POSTGRES_USER:-notesos}"
+    # local DB_PASS="${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}"
 
-    sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='${DB_USER}'" \
-        | grep -q 1 || sudo -u postgres psql -c "CREATE USER ${DB_USER} WITH PASSWORD '${DB_PASS}';"
+    # sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='${DB_USER}'" \
+    #     | grep -q 1 || sudo -u postgres psql -c "CREATE USER ${DB_USER} WITH PASSWORD '${DB_PASS}';"
 
-    sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" \
-        | grep -q 1 || sudo -u postgres psql -c "CREATE DATABASE ${DB_NAME} OWNER ${DB_USER};"
+    # sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" \
+    #     | grep -q 1 || sudo -u postgres psql -c "CREATE DATABASE ${DB_NAME} OWNER ${DB_USER};"
 
-    sudo -u postgres psql -d "$DB_NAME" -c "CREATE EXTENSION IF NOT EXISTS vector;"
+    # sudo -u postgres psql -d "$DB_NAME" -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
-    ok "Database ${DB_NAME} ready"
+    # ok "Database ${DB_NAME} ready"
 
     # ── 9. Backend venv + deps ──────────────────────────
     info "Setting up backend Python environment..."
@@ -155,16 +155,16 @@ cmd_setup() {
     ok "Backend dependencies installed"
 
     # ── 10. Run migrations ──────────────────────────────
-    info "Running database migrations..."
-    sudo -u "$APP_USER" bash -c "
-        cd ${APP_DIR}/backend
-        source venv/bin/activate
-        set -a; source ${ENV_FILE}; set +a
-        export DATABASE_URL='postgresql+asyncpg://${DB_USER}:${DB_PASS}@localhost:5432/${DB_NAME}'
-        export DATABASE_SSL=false
-        alembic upgrade head
-    "
-    ok "Migrations applied"
+    # info "Running database migrations..."
+    # sudo -u "$APP_USER" bash -c "
+    #     cd ${APP_DIR}/backend
+    #     source venv/bin/activate
+    #     set -a; source ${ENV_FILE}; set +a
+    #     export DATABASE_URL='postgresql+asyncpg://${DB_USER}:${DB_PASS}@localhost:5432/${DB_NAME}'
+    #     export DATABASE_SSL=false
+    #     alembic upgrade head
+    # "
+    # ok "Migrations applied"
 
     # ── 11. Frontend build ──────────────────────────────
     info "Building frontend..."
