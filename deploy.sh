@@ -233,26 +233,30 @@ TMPCONF
     # ── 13. Systemd services ────────────────────────────
     info "Installing systemd services..."
 
-    # Write the DATABASE_URL into the env file if not already there
-    # grep -q "^DATABASE_URL=" "$ENV_FILE" && \
-    #     sed -i "s|^DATABASE_URL=.*|DATABASE_URL=postgresql+asyncpg://${DB_USER}:${DB_PASS}@localhost:5432/${DB_NAME}|" "$ENV_FILE" || \
-    #     echo "DATABASE_URL=postgresql+asyncpg://${DB_USER}:${DB_PASS}@localhost:5432/${DB_NAME}" >> "$ENV_FILE"
-
-    # grep -q "^REDIS_URL=" "$ENV_FILE" || echo "REDIS_URL=redis://localhost:6379" >> "$ENV_FILE"
-    # grep -q "^DATABASE_SSL=" "$ENV_FILE" || echo "DATABASE_SSL=false" >> "$ENV_FILE"
-
     for svc in "${SERVICES[@]}"; do
-        cp "${APP_DIR}/deploy/${svc}.service" "/etc/systemd/system/${svc}.service"
+        sed -e "s|__APP_DIR__|${APP_DIR}|g" \
+            -e "s|__APP_USER__|${APP_USER}|g" \
+            "${APP_DIR}/deploy/${svc}.service" > "/etc/systemd/system/${svc}.service"
     done
 
     systemctl daemon-reload
 
+    local failed=0
     for svc in "${SERVICES[@]}"; do
         systemctl enable "$svc"
-        systemctl start "$svc"
+        if systemctl start "$svc"; then
+            ok "${svc} started"
+        else
+            err "${svc} failed to start — check: journalctl -u ${svc} -n 30"
+            failed=$((failed + 1))
+        fi
     done
 
-    ok "All services started"
+    if [ "$failed" -eq 0 ]; then
+        ok "All services started"
+    else
+        err "${failed} service(s) failed. Check logs above."
+    fi
 
     # ── 14. Firewall ────────────────────────────────────
     if command -v ufw &>/dev/null; then
