@@ -6,7 +6,7 @@
 'use client';
 
 import { ReactNode, useState, useEffect, useRef } from 'react';
-import { ChevronDown, User, Flame } from 'lucide-react';
+import { ChevronDown, User, Flame, Users } from 'lucide-react';
 import { useCourseStore } from '@/stores/courses';
 import { useRouter } from 'next/navigation';
 
@@ -107,7 +107,7 @@ export function GlassNav({ currentCourse, onCourseSwitch, onProfileClick, streak
                     </div>
                 )}
 
-                {/* Right side — Streak + Profile */}
+                {/* Right side — Streak + Invites + Profile */}
                 <div className="flex items-center gap-4">
                     {streak !== undefined && (
                         <button className="flex items-center gap-1.5 text-sm font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors">
@@ -115,6 +115,14 @@ export function GlassNav({ currentCourse, onCourseSwitch, onProfileClick, streak
                             <span>{streak}</span>
                         </button>
                     )}
+
+                    <button
+                        onClick={() => router.push('/invites')}
+                        className="flex items-center gap-1.5 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors px-3 py-2 rounded-lg hover:bg-[var(--bg-sunken)]"
+                    >
+                        <Users className="w-4 h-4" />
+                        <span className="hidden md:inline">Invites</span>
+                    </button>
 
                     <button
                         onClick={onProfileClick}
@@ -143,9 +151,14 @@ interface MainLayoutProps {
 }
 
 export function MainLayout({ children, currentCourse, streak }: MainLayoutProps) {
+    const router = useRouter();
     return (
         <div className="min-h-screen bg-[var(--bg-base)]">
-            <GlassNav currentCourse={currentCourse} streak={streak} />
+            <GlassNav
+                currentCourse={currentCourse}
+                streak={streak}
+                onProfileClick={() => router.push('/profile')}
+            />
             <main className="pt-16">
                 {children}
             </main>

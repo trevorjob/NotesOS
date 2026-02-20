@@ -100,7 +100,7 @@ Grading Rubric:
 
 Return JSON:
 {{
-  "score": 0-100,
+  "score": 0-10,
   "key_points_covered": ["point 1", "point 2", ...],
   "key_points_missed": ["point 3", "point 4", ...],
   "feedback": "Detailed explanation of grade..."
@@ -110,7 +110,7 @@ Return ONLY valid JSON, no other text."""
 
     def _generate_encouragement(self, score: float) -> str:
         """Generate score-based encouragement with emojis."""
-        if score >= 90:
+        if score >= 9:
             return random.choice(
                 [
                     "🔥 Absolutely crushing it!",
@@ -119,7 +119,7 @@ Return ONLY valid JSON, no other text."""
                     "🎯 Perfect! You nailed it!",
                 ]
             )
-        elif score >= 70:
+        elif score >= 7:
             return random.choice(
                 [
                     "💪 Solid answer! Just a few tweaks needed.",
@@ -128,7 +128,7 @@ Return ONLY valid JSON, no other text."""
                     "✨ Nice work! You've got the main idea.",
                 ]
             )
-        elif score >= 50:
+        elif score >= 5:
             return random.choice(
                 [
                     "🌱 You're getting there! Let's clarify a few things.",

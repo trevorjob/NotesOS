@@ -208,6 +208,14 @@ export const api = {
             is_public?: boolean;
         }) => apiClient.post('/api/courses', data),
 
+        batchCreate: (courses: Array<{
+            code: string;
+            name: string;
+            description?: string;
+            semester?: string;
+            is_public?: boolean;
+        }>) => apiClient.post('/api/courses/batch', { courses }),
+
         // Backend expects: { invite_code?, search?, course_id? }
         join: (data: {
             invite_code?: string;
@@ -240,6 +248,12 @@ export const api = {
         }>) => apiClient.put(`/api/topics/${id}`, data),
 
         delete: (id: string) => apiClient.delete(`/api/topics/${id}`),
+
+        batchCreate: (courseId: string, topics: Array<{
+            title: string;
+            week_number?: number;
+            order_index: number;
+        }>) => apiClient.post(`/api/courses/${courseId}/topics/batch`, { topics }),
     },
 
     // Resources
@@ -316,13 +330,25 @@ export const api = {
         generateTest: (courseId: string, data: {
             topic_ids: string[];
             question_count: number;
-            test_type: 'practice' | 'quiz' | 'exam';
-        }) => apiClient.post('/api/tests/generate', data, {
+            difficulty?: string;
+            question_types?: string[];
+        }) => apiClient.post('/api/tests/generate', {
+            topic_ids: data.topic_ids,
+            question_count: data.question_count,
+            difficulty: data.difficulty ?? 'medium',
+            question_types: data.question_types ?? ['mcq', 'short_answer'],
+        }, {
             params: { course_id: courseId },
         }),
 
         getTest: (testId: string) =>
             apiClient.get(`/api/tests/${testId}`),
+
+        listTests: (courseId: string) =>
+            apiClient.get('/api/tests', { params: { course_id: courseId } }),
+
+        listAttempts: (testId: string) =>
+            apiClient.get(`/api/tests/${testId}/attempts`),
 
         submitAnswers: (testId: string, answers: Array<{
             question_id: string;
@@ -332,9 +358,10 @@ export const api = {
         submitVoiceAnswer: (testId: string, questionId: string, audioFile: File, attemptId?: string) => {
             const formData = new FormData();
             formData.append('audio_file', audioFile);
-            formData.append('question_id', questionId);
-            if (attemptId) formData.append('attempt_id', attemptId);
+            const params: Record<string, string> = { question_id: questionId };
+            if (attemptId) params.attempt_id = attemptId;
             return apiClient.post(`/api/tests/${testId}/voice-answer`, formData, {
+                params,
                 headers: { 'Content-Type': 'multipart/form-data' },
             });
         },
@@ -364,6 +391,27 @@ export const api = {
 
         getRecommendations: (courseId: string) =>
             apiClient.get(`/api/progress/${courseId}/recommendations`),
+    },
+
+    // Invites (Global Class Invites)
+    invites: {
+        createClass: (name?: string) =>
+            apiClient.post('/api/invites/global', { name: name || null }),
+
+        listMyInvites: () =>
+            apiClient.get('/api/invites/global'),
+
+        listClassmates: (classId: string) =>
+            apiClient.get(`/api/invites/global/${classId}/classmates`),
+
+        joinClass: (inviteCode: string) =>
+            apiClient.post('/api/invites/global/join', { invite_code: inviteCode }),
+
+        deleteClass: (classId: string) =>
+            apiClient.delete(`/api/invites/global/${classId}`),
+
+        deactivateClass: (classId: string) =>
+            apiClient.patch(`/api/invites/global/${classId}/deactivate`),
     },
 };
 

@@ -79,6 +79,21 @@ export default withPWA({
         networkTimeoutSeconds: 10,
       },
     },
+    // Cache app shell / document requests for offline fallback
+    {
+      urlPattern: ({ request }) =>
+        request.mode === "navigate" &&
+        new URL(request.url).origin === self.location.origin,
+      handler: "NetworkFirst",
+      options: {
+        cacheName: "documents",
+        expiration: {
+          maxEntries: 32,
+          maxAgeSeconds: 24 * 60 * 60, // 24 hours
+        },
+        networkTimeoutSeconds: 10,
+      },
+    },
   ],
 })(nextConfig);
 

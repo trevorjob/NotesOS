@@ -45,6 +45,13 @@ class Course(Base):
     enrollments = relationship(
         "CourseEnrollment", back_populates="course", cascade="all, delete-orphan"
     )
+    tests = relationship("Test", back_populates="course", cascade="all, delete-orphan")
+    user_progress = relationship(
+        "UserProgress", back_populates="course", cascade="all, delete-orphan"
+    )
+    ai_conversations = relationship(
+        "AIConversation", back_populates="course", cascade="all, delete-orphan"
+    )
 
 
 class CourseEnrollment(Base):
@@ -91,6 +98,15 @@ class Topic(Base):
     )
     research = relationship(
         "PreClassResearch", back_populates="topic", cascade="all, delete-orphan"
+    )
+    study_sessions = relationship(
+        "StudySession", back_populates="topic", cascade="all, delete-orphan"
+    )
+    user_progress = relationship(
+        "UserProgress", back_populates="topic", cascade="all, delete-orphan"
+    )
+    ai_conversations = relationship(
+        "AIConversation", back_populates="topic", cascade="all, delete-orphan"
     )
 
 

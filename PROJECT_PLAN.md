@@ -250,6 +250,27 @@
 
 ---
 
+## 📱 PWA Setup (Progressive Web App)
+
+**Goal:** Installable app with offline-capable caching and service worker.
+
+**Implemented:**
+- **next-pwa** in `frontend/next.config.ts`: service worker generated at build, registered automatically (`register: true`, `skipWaiting: true`), disabled in development. Uses webpack (run `next build --webpack`; the frontend `build` script is set to use `--webpack` so the PWA plugin runs).
+- **Caching:** Runtime caching for Google Fonts (CacheFirst), static assets (fonts, images, JS, CSS — StaleWhileRevalidate), `/api/*` (NetworkFirst, 5 min cache), and **same-origin navigation** (NetworkFirst, 24h) for offline fallback.
+- **Manifest:** `frontend/public/manifest.json` — name, short_name, theme_color, background_color, display standalone, orientation, icons (72–512px).
+- **Layout:** Root layout sets `manifest: "/manifest.json"`, `themeColor`, viewport.
+- **Icons:** `frontend/public/icons/` — placeholder icons (theme #3D2E28). Generate with `npm run generate-pwa-icons` (requires `pngjs`). Replace with app logo for production.
+
+**Checklist:**
+- [x] Service worker (next-pwa, dest: public)
+- [x] Runtime caching (fonts, static assets, API, documents)
+- [x] Web app manifest linked from layout
+- [x] PWA icons in place (placeholder or custom)
+- [ ] Optional: Offline fallback page (next-pwa can show cached shell)
+- [ ] Optional: Add to home screen prompt / installability UX
+
+---
+
 ## 📊 Progress Tracking
 
 ### Phase 1: Foundation & Auth
@@ -300,4 +321,17 @@
 
 ---
 
-**Last Updated:** 2026-02-18
+## ✅ Coverage Check (Is Everything Covered?)
+
+When wrapping up, verify:
+
+1. **Phases 1–4** — Use the Progress Tracking checkboxes; ensure each task’s acceptance criteria are met.
+2. **PWA** — See “PWA Setup” above: SW, caching, manifest, icons. Test install (e.g. Chrome “Install app”) and offline behavior.
+3. **Auth & routing** — Root redirect, protected routes, session restore, logout.
+4. **API parity** — Frontend stores and pages call all backend endpoints you rely on (courses, topics, resources, progress, tests, invites, etc.).
+5. **Error handling** — ErrorBoundary in place; loading and empty states where needed.
+6. **Docs** — `CODEBASE_SUMMARY.md` and this plan updated to match current state.
+
+---
+
+**Last Updated:** 2026-02-19

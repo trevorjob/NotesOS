@@ -43,10 +43,13 @@ interface ResourceCardProps {
         uploaded_by: string;
         file_url?: string;
         files?: ResourceFile[];
+        processing_status?: 'processing' | 'completed' | 'failed'; // From WebSocket
     };
     currentUserId?: string;
     onDelete?: (id: string) => void;
     onFactCheck?: (id: string) => void;
+    onUpdate?: (id: string, data: Partial<{ title: string; description: string }>) => void;
+    onReprocess?: (id: string) => void;
     factChecks?: FactCheck[];
     isLoadingFactChecks?: boolean;
 }
@@ -56,6 +59,8 @@ export function ResourceCard({
     currentUserId,
     onDelete,
     onFactCheck,
+    onUpdate,
+    onReprocess,
     factChecks = [],
     isLoadingFactChecks = false
 }: ResourceCardProps) {
@@ -63,6 +68,10 @@ export function ResourceCard({
     const [showFullView, setShowFullView] = useState(false);
     const [showFactChecks, setShowFactChecks] = useState(false);
     const [activeTab, setActiveTab] = useState<'content' | 'original'>('content');
+    const [isEditing, setIsEditing] = useState(false);
+    const [editTitle, setEditTitle] = useState(resource.title || '');
+    const [editDescription, setEditDescription] = useState(resource.description || '');
+    const [isSaving, setIsSaving] = useState(false);
 
     const timeAgo = (date: string) => {
         const seconds = Math.floor((Date.now() - new Date(date).getTime()) / 1000);
@@ -107,6 +116,11 @@ export function ResourceCard({
                         <h3 className="text-sm font-medium text-[var(--text-primary)] truncate">
                             {resource.title || 'Untitled Resource'}
                         </h3>
+                        {resource.description && (
+                            <p className="text-xs text-[var(--text-secondary)] mt-0.5 line-clamp-1">
+                                {resource.description}
+                            </p>
+                        )}
                         <p className="text-xs text-[var(--text-tertiary)] mt-0.5">
                             {resource.uploader_name} · {timeAgo(resource.created_at)}
                         </p>
@@ -141,8 +155,72 @@ export function ResourceCard({
                                 <Trash2 className="w-4 h-4" />
                             </button>
                         )}
+                        {canDelete && onUpdate && (
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    setIsEditing(true);
+                                    setEditTitle(resource.title || '');
+                                    setEditDescription(resource.description || '');
+                                }}
+                                className="text-xs px-2 py-1 rounded text-[var(--text-secondary)] hover:bg-[var(--bg-sunken)] transition-colors"
+                                title="Edit title and description"
+                            >
+                                Edit
+                            </button>
+                        )}
                     </div>
                 </div>
+
+                {isEditing && onUpdate && (
+                    <div className="mb-3 space-y-2">
+                        <input
+                            type="text"
+                            value={editTitle}
+                            onChange={(e) => setEditTitle(e.target.value)}
+                            placeholder="Title"
+                            className="w-full px-3 py-2 bg-[var(--bg-sunken)] border border-[var(--glass-border)] rounded text-xs text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]"
+                        />
+                        <textarea
+                            value={editDescription}
+                            onChange={(e) => setEditDescription(e.target.value)}
+                            placeholder="Short description (optional)"
+                            rows={2}
+                            className="w-full px-3 py-2 bg-[var(--bg-sunken)] border border-[var(--glass-border)] rounded text-xs text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)] resize-none"
+                        />
+                        <div className="flex gap-2 justify-end">
+                            <button
+                                type="button"
+                                onClick={() => setIsEditing(false)}
+                                className="px-3 py-1 rounded text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-sunken)] transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={async () => {
+                                    if (!editTitle.trim()) return;
+                                    setIsSaving(true);
+                                    try {
+                                        await Promise.resolve(
+                                            onUpdate(resource.id, {
+                                                title: editTitle.trim(),
+                                                description: editDescription || undefined,
+                                            })
+                                        );
+                                        setIsEditing(false);
+                                    } finally {
+                                        setIsSaving(false);
+                                    }
+                                }}
+                                className="px-3 py-1 rounded text-xs bg-[var(--accent-primary)] text-white hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50"
+                                disabled={isSaving || !editTitle.trim()}
+                            >
+                                {isSaving ? 'Saving...' : 'Save'}
+                            </button>
+                        </div>
+                    </div>
+                )}
 
                 {/* Badges */}
                 <div className="flex flex-wrap items-center gap-2 mb-3">
@@ -152,12 +230,34 @@ export function ResourceCard({
                     </span>
 
                     {resource.resource_type.toLowerCase() !== 'text' && (
-                        <span className={`text-xs px-2 py-0.5 rounded-full ${resource.is_processed
-                            ? 'bg-[var(--success)]/10 text-[var(--success)]'
-                            : 'bg-[var(--bg-sunken)] text-[var(--text-tertiary)]'
-                            }`}>
-                            {resource.is_processed ? 'Processed' : 'Processing...'}
+                        <span className={`text-xs px-2 py-0.5 rounded-full inline-flex items-center gap-1 ${
+                            resource.processing_status === 'processing' || (!resource.is_processed && !resource.processing_status)
+                                ? 'bg-[var(--accent-primary)]/10 text-[var(--accent-primary)]'
+                                : resource.processing_status === 'failed'
+                                ? 'bg-[var(--error)]/10 text-[var(--error)]'
+                                : resource.is_processed || resource.processing_status === 'completed'
+                                ? 'bg-[var(--success)]/10 text-[var(--success)]'
+                                : 'bg-[var(--bg-sunken)] text-[var(--text-tertiary)]'
+                        }`}>
+                            {(resource.processing_status === 'processing' || (!resource.is_processed && !resource.processing_status)) && (
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                            )}
+                            {resource.processing_status === 'failed'
+                                ? 'Processing failed'
+                                : resource.processing_status === 'processing' || (!resource.is_processed && !resource.processing_status)
+                                ? 'Processing...'
+                                : 'Processed'}
                         </span>
+                    )}
+
+                    {onReprocess && resource.resource_type.toLowerCase() !== 'text' && resource.ocr_confidence !== undefined && resource.ocr_confidence < 0.8 && (
+                        <button
+                            type="button"
+                            onClick={() => onReprocess(resource.id)}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[var(--bg-sunken)] text-[var(--text-secondary)] text-xs hover:text-[var(--text-primary)] hover:bg-[var(--bg-sunken)]/80 transition-colors"
+                        >
+                            Reprocess OCR
+                        </button>
                     )}
 
                     {resource.is_verified ? (

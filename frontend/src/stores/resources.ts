@@ -34,6 +34,7 @@ interface Resource {
     files: ResourceFile[];
     created_at: string;
     updated_at: string;
+    processing_status?: 'processing' | 'completed' | 'failed'; // For WebSocket updates
 }
 
 interface ResourcesState {
@@ -56,6 +57,9 @@ interface ResourcesState {
     deleteResource: (resourceId: string) => Promise<void>;
     factCheckResource: (resourceId: string) => Promise<void>;
     fetchFactChecks: (resourceId: string) => Promise<void>;
+    updateResourceProcessingStatus: (resourceId: string, status: 'processing' | 'completed' | 'failed') => void;
+    updateResource: (resourceId: string, data: Partial<{ title: string; description: string }>) => Promise<void>;
+    reprocessResourceOCR: (resourceId: string) => Promise<void>;
     clearError: () => void;
 }
 
@@ -151,9 +155,8 @@ export const useResourcesStore = create<ResourcesState>()((set, get) => ({
         set({ error: null });
         try {
             await api.ai.verifyResource(resourceId);
-            // Note: Fact checking is async, will update via websocket or polling
-            // Fetch results immediately (they may become available)
-            setTimeout(() => get().fetchFactChecks(resourceId), 2000);
+            // Fact checking is async, will update via websocket (fact_check_complete event)
+            // No need for setTimeout polling - WebSocket will notify us
         } catch (error: any) {
             const errorMessage =
                 error.response?.data?.detail || 'Failed to start fact check';
@@ -178,6 +181,56 @@ export const useResourcesStore = create<ResourcesState>()((set, get) => ({
                 isLoadingFactChecks: { ...state.isLoadingFactChecks, [resourceId]: false },
             }));
             // Silently fail - fact checks may not exist yet
+        }
+    },
+
+    updateResourceProcessingStatus: (resourceId: string, status: 'processing' | 'completed' | 'failed') => {
+        set((state) => ({
+            resources: state.resources.map((r) =>
+                r.id === resourceId
+                    ? {
+                        ...r,
+                        is_processed: status === 'completed' ? true : r.is_processed,
+                        processing_status: status,
+                    }
+                    : r
+            ),
+        }));
+    },
+
+    updateResource: async (resourceId: string, data: Partial<{ title: string; description: string }>) => {
+        set({ error: null });
+        try {
+            await api.resources.update(resourceId, data);
+            const { currentTopicId } = get();
+            if (currentTopicId) {
+                await get().fetchResources(currentTopicId);
+            }
+        } catch (error: any) {
+            const errorMessage =
+                error.response?.data?.detail || 'Failed to update resource';
+            set({ error: errorMessage });
+            throw new Error(errorMessage);
+        }
+    },
+
+    reprocessResourceOCR: async (resourceId: string) => {
+        set({ error: null });
+        try {
+            await api.resources.reprocessOCR(resourceId);
+            // Optimistically mark as processing
+            set((state) => ({
+                resources: state.resources.map((r) =>
+                    r.id === resourceId
+                        ? { ...r, processing_status: 'processing', is_processed: false }
+                        : r
+                ),
+            }));
+        } catch (error: any) {
+            const errorMessage =
+                error.response?.data?.detail || 'Failed to reprocess OCR';
+            set({ error: errorMessage });
+            throw new Error(errorMessage);
         }
     },
 

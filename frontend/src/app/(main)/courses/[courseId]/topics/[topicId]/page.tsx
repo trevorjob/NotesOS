@@ -5,12 +5,13 @@
 
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { ArrowLeft, BookOpen, FileText, Sparkles, Loader2, ChevronDown, ChevronUp, ExternalLink } from 'lucide-react';
 import { useCourseStore } from '@/stores/courses';
 import { useResourcesStore } from '@/stores/resources';
 import { useAIChatStore } from '@/stores/aiChat';
+import { useProgressStore } from '@/stores/progress';
 import { useAuthStore } from '@/stores/auth';
 import { GlassCard, Button } from '@/components/ui';
 import { ResourceCard } from '@/components/ResourceCard';
@@ -18,6 +19,7 @@ import { FileUpload } from '@/components/FileUpload';
 import { AIChatOverlay } from '@/components/AIChatOverlay';
 import { MarkdownRenderer } from '@/components/MarkdownRenderer';
 import { api } from '@/lib/api';
+import { connectWebSocket, WebSocketClient, WebSocketMessage } from '@/lib/websocket';
 
 export default function TopicPage() {
     const params = useParams();
@@ -40,6 +42,8 @@ export default function TopicPage() {
         fetchFactChecks,
         factChecks,
         isLoadingFactChecks,
+        updateResource,
+        reprocessResourceOCR,
     } = useResourcesStore();
 
     const {
@@ -49,6 +53,10 @@ export default function TopicPage() {
         askQuestion,
         clearCurrentConversation,
     } = useAIChatStore();
+
+    const { startSession, endSession } = useProgressStore();
+    const sessionIdRef = useRef<string | null>(null);
+    const wsClientRef = useRef<WebSocketClient | null>(null);
 
     const [topic, setTopic] = useState<any>(null);
     const [research, setResearch] = useState<any>(null);
@@ -103,6 +111,56 @@ export default function TopicPage() {
         return () => clearCurrentConversation();
     }, [courseId, fetchConversations, clearCurrentConversation]);
 
+    // Track reading session for progress
+    useEffect(() => {
+        startSession(topicId, 'reading').then((id) => {
+            sessionIdRef.current = id;
+        });
+        return () => {
+            const sid = sessionIdRef.current;
+            if (sid) endSession(sid);
+            sessionIdRef.current = null;
+        };
+    }, [topicId, startSession, endSession]);
+
+    // WebSocket connection for real-time updates
+    useEffect(() => {
+        if (!courseId) return;
+
+        const { updateResourceProcessingStatus } = useResourcesStore.getState();
+        const client = connectWebSocket(courseId, {
+            onMessage: (message: WebSocketMessage) => {
+                if (message.type === 'processing_status') {
+                    updateResourceProcessingStatus(message.resource_id, message.status);
+                } else if (message.type === 'fact_check_complete') {
+                    if (message.resource_id) {
+                        fetchFactChecks(message.resource_id);
+                    }
+                } else if (message.type === 'resource_created' || message.type === 'resource_updated') {
+                    fetchResources(topicId);
+                } else if (message.type === 'resource_deleted') {
+                    fetchResources(topicId);
+                }
+            },
+            onOpen: () => {
+                console.log('[TopicPage] WebSocket connected');
+            },
+            onClose: () => {
+                console.log('[TopicPage] WebSocket disconnected');
+            },
+            onError: (error) => {
+                console.error('[TopicPage] WebSocket error:', error);
+            },
+        });
+
+        wsClientRef.current = client;
+
+        return () => {
+            client.disconnect();
+            wsClientRef.current = null;
+        };
+    }, [courseId, topicId, fetchResources, fetchFactChecks]);
+
     const handleGenerateResearch = async () => {
         setGeneratingResearch(true);
         try {
@@ -145,11 +203,25 @@ export default function TopicPage() {
         }
     };
 
+    const handleUpdateResource = async (resourceId: string, data: Partial<{ title: string; description: string }>) => {
+        try {
+            await updateResource(resourceId, data);
+        } catch (error) {
+            console.error('Failed to update resource:', error);
+        }
+    };
+
+    const handleReprocessOCR = async (resourceId: string) => {
+        try {
+            await reprocessResourceOCR(resourceId);
+        } catch (error) {
+            console.error('Failed to reprocess OCR:', error);
+        }
+    };
+
     const handleFactCheck = async (resourceId: string) => {
         try {
             await factCheckResource(resourceId);
-            // Fetch results after a delay
-            setTimeout(() => fetchFactChecks(resourceId), 3000);
         } catch (error) {
             console.error('Failed to start fact check:', error);
         }
@@ -405,6 +477,8 @@ export default function TopicPage() {
                                     currentUserId={user?.id}
                                     onDelete={handleDeleteResource}
                                     onFactCheck={handleFactCheck}
+                                    onUpdate={handleUpdateResource}
+                                    onReprocess={handleReprocessOCR}
                                     factChecks={factChecks[resource.id] || []}
                                     isLoadingFactChecks={isLoadingFactChecks[resource.id] || false}
                                 />

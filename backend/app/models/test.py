@@ -49,7 +49,9 @@ class Test(Base):
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
+
     # Relationships
+    course = relationship("Course", back_populates="tests")
     questions = relationship(
         "TestQuestion", back_populates="test", cascade="all, delete-orphan"
     )

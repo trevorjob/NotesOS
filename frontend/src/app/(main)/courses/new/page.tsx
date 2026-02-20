@@ -15,27 +15,53 @@ import { GlassCard, PageHeader, Input, Button } from '@/components/ui';
 
 export default function CreateCoursePage() {
     const router = useRouter();
-    const { createCourse, error, clearError } = useCourseStore();
+    const { createCourse, error, clearError, fetchCourses } = useCourseStore();
 
+    const [mode, setMode] = useState<'single' | 'batch'>('single');
     const [code, setCode] = useState('');
     const [name, setName] = useState('');
     const [description, setDescription] = useState('');
+    const [batchText, setBatchText] = useState('');
+    const [batchError, setBatchError] = useState<string | null>(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     const handleSubmit = async (e: FormEvent) => {
         e.preventDefault();
         clearError();
+        setBatchError(null);
         setIsSubmitting(true);
 
         try {
-            const course = await createCourse({
-                code,
-                name,
-                description: description || undefined,
-            });
+            if (mode === 'batch') {
+                if (!batchText.trim()) {
+                    setBatchError('Paste some JSON describing your courses.');
+                    setIsSubmitting(false);
+                    return;
+                }
+                let parsed: Array<{ code: string; name: string; description?: string; semester?: string; is_public?: boolean }>;
+                try {
+                    parsed = JSON.parse(batchText);
+                    if (!Array.isArray(parsed)) {
+                        throw new Error('Expected an array of courses');
+                    }
+                } catch (e: any) {
+                    setBatchError(e.message || 'Invalid JSON');
+                    setIsSubmitting(false);
+                    return;
+                }
 
-            // Redirect to the new course
-            router.push(`/courses/${course.id}`);
+                await api.courses.batchCreate(parsed);
+                await fetchCourses();
+                router.push('/courses');
+            } else {
+                const course = await createCourse({
+                    code,
+                    name,
+                    description: description || undefined,
+                });
+
+                router.push(`/courses/${course.id}`);
+            }
         } catch (err) {
             console.error('Failed to create course:', err);
             setIsSubmitting(false);
@@ -65,65 +91,118 @@ export default function CreateCoursePage() {
                         </div>
                     )}
 
-                    <form onSubmit={handleSubmit} className="space-y-5">
-                        <Input
-                            label="Course Code"
-                            type="text"
-                            placeholder="HIST 101"
-                            value={code}
-                            onChange={(e) => setCode(e.target.value)}
-                            required
-                        />
-
-                        <Input
-                            label="Course Name"
-                            type="text"
-                            placeholder="Introduction to World History"
-                            value={name}
-                            onChange={(e) => setName(e.target.value)}
-                            required
-                        />
-
-                        {/* <div className="flex flex-col gap-1.5">
-                            <label className="text-sm font-medium text-[var(--text-primary)]">
-                                Description (optional)
-                            </label>
-                            <textarea
-                                className="px-4 py-2.5 bg-[var(--bg-sunken)] border-0 rounded-lg text-base text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)] transition-all resize-none"
-                                placeholder="Brief description of the course..."
-                                rows={4}
-                                value={description}
-                                onChange={(e) => setDescription(e.target.value)}
-                            />
-                        </div>
-
-                        <Input
-                            label="University (optional)"
-                            type="text"
-                            placeholder="Stanford University"
-                            value={university}
-                            onChange={(e) => setUniversity(e.target.value)}
-                        /> */}
-
-                        <div className="flex gap-3 pt-4">
-                            <Button
+                    <div className="space-y-5">
+                        <div className="flex gap-2 mb-2">
+                            <button
                                 type="button"
-                                variant="secondary"
-                                onClick={() => router.back()}
-                                disabled={isSubmitting}
+                                onClick={() => {
+                                    setMode('single');
+                                    setBatchError(null);
+                                }}
+                                className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                                    mode === 'single'
+                                        ? 'bg-[var(--accent-primary)] text-white'
+                                        : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                                }`}
                             >
-                                Cancel
-                            </Button>
-                            <Button
-                                type="submit"
-                                variant="primary"
-                                className="flex-1"
-                                disabled={isSubmitting}
+                                Single course
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setMode('batch');
+                                    setBatchError(null);
+                                }}
+                                className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                                    mode === 'batch'
+                                        ? 'bg-[var(--accent-primary)] text-white'
+                                        : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                                }`}
                             >
-                                {isSubmitting ? 'Creating...' : 'Create Course'}
-                            </Button>
+                                Batch create
+                            </button>
                         </div>
-                    </form>
+
+                        <form onSubmit={handleSubmit} className="space-y-5">
+                            {mode === 'single' ? (
+                                <>
+                                    <Input
+                                        label="Course Code"
+                                        type="text"
+                                        placeholder="HIST 101"
+                                        value={code}
+                                        onChange={(e) => setCode(e.target.value)}
+                                        required
+                                    />
+
+                                    <Input
+                                        label="Course Name"
+                                        type="text"
+                                        placeholder="Introduction to World History"
+                                        value={name}
+                                        onChange={(e) => setName(e.target.value)}
+                                        required
+                                    />
+
+                                    <div className="flex flex-col gap-1.5">
+                                        <label className="text-sm font-medium text-[var(--text-primary)]">
+                                            Description (optional)
+                                        </label>
+                                        <textarea
+                                            className="px-4 py-2.5 bg-[var(--bg-sunken)] border border-[var(--glass-border)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)] transition-all resize-none"
+                                            placeholder="Brief description of the course..."
+                                            rows={4}
+                                            value={description}
+                                            onChange={(e) => setDescription(e.target.value)}
+                                        />
+                                    </div>
+                                </>
+                            ) : (
+                                <>
+                                    <div className="flex flex-col gap-1.5">
+                                        <label className="text-sm font-medium text-[var(--text-primary)]">
+                                            Courses JSON
+                                        </label>
+                                        <textarea
+                                            className="px-4 py-2.5 bg-[var(--bg-sunken)] border border-[var(--glass-border)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)] transition-all font-mono"
+                                            placeholder={`[
+  { "code": "HIST 101", "name": "Intro to History" },
+  { "code": "MATH 201", "name": "Calculus I" }
+]`}
+                                            rows={8}
+                                            value={batchText}
+                                            onChange={(e) => setBatchText(e.target.value)}
+                                        />
+                                        <p className="text-xs text-[var(--text-tertiary)]">
+                                            Up to 10 courses at once. Each item should include at least <code>code</code> and <code>name</code>.
+                                        </p>
+                                        {batchError && (
+                                            <p className="text-xs text-[var(--error)]">{batchError}</p>
+                                        )}
+                                    </div>
+                                </>
+                            )}
+
+                            <div className="flex gap-3 pt-4">
+                                <Button
+                                    type="button"
+                                    variant="secondary"
+                                    onClick={() => router.back()}
+                                    disabled={isSubmitting}
+                                >
+                                    Cancel
+                                </Button>
+                                <Button
+                                    type="submit"
+                                    variant="primary"
+                                    className="flex-1"
+                                    disabled={isSubmitting}
+                                >
+                                    {isSubmitting ? 'Creating...' : mode === 'batch' ? 'Create Courses' : 'Create Course'}
+                                </Button>
+                            </div>
+                        </form>
+                    </div>
                 </GlassCard>
             </div>
         </MainLayout>

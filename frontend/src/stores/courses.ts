@@ -51,6 +51,13 @@ interface CourseState {
         week_number?: number;
         order_index: number;
     }) => Promise<Topic>;
+    updateTopic: (courseId: string, topicId: string, data: {
+        title?: string;
+        description?: string;
+        week_number?: number;
+        order_index?: number;
+    }) => Promise<Topic>;
+    deleteTopic: (courseId: string, topicId: string) => Promise<void>;
     clearCurrentCourse: () => void;
     clearError: () => void;
 }
@@ -150,6 +157,39 @@ export const useCourseStore = create<CourseState>()(
                 } catch (error: any) {
                     const errorMessage =
                         error.response?.data?.detail || 'Failed to create topic';
+                    set({ error: errorMessage });
+                    throw new Error(errorMessage);
+                }
+            },
+
+            updateTopic: async (courseId, topicId, data) => {
+                set({ error: null });
+                try {
+                    const response = await api.topics.update(topicId, data);
+                    const updatedTopic = response.data as Topic;
+
+                    // Refresh current course to reflect updated topic list/details
+                    await get().selectCourse(courseId);
+
+                    return updatedTopic;
+                } catch (error: any) {
+                    const errorMessage =
+                        error.response?.data?.detail || 'Failed to update topic';
+                    set({ error: errorMessage });
+                    throw new Error(errorMessage);
+                }
+            },
+
+            deleteTopic: async (courseId, topicId) => {
+                set({ error: null });
+                try {
+                    await api.topics.delete(topicId);
+
+                    // Refresh current course after deletion
+                    await get().selectCourse(courseId);
+                } catch (error: any) {
+                    const errorMessage =
+                        error.response?.data?.detail || 'Failed to delete topic';
                     set({ error: errorMessage });
                     throw new Error(errorMessage);
                 }

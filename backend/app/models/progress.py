@@ -16,6 +16,7 @@ from sqlalchemy import (
     Numeric,
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.orm import relationship
 
 from app.database import Base
 
@@ -51,6 +52,9 @@ class StudySession(Base):
     notes_reviewed = Column(JSONB, nullable=True, default=[])  # Array of note IDs
     concepts_covered = Column(JSONB, nullable=True, default=[])
 
+    # Relationships
+    topic = relationship("Topic", back_populates="study_sessions")
+
 
 class UserProgress(Base):
     """Track user progress per topic."""
@@ -73,6 +77,10 @@ class UserProgress(Base):
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )
 
+    # Relationships
+    course = relationship("Course", back_populates="user_progress")
+    topic = relationship("Topic", back_populates="user_progress")
+
 
 class AIConversation(Base):
     """AI chat conversation context."""
@@ -90,6 +98,10 @@ class AIConversation(Base):
     updated_at = Column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )
+
+    # Relationships
+    course = relationship("Course", back_populates="ai_conversations")
+    topic = relationship("Topic", back_populates="ai_conversations")
 
 
 class AIMessage(Base):
