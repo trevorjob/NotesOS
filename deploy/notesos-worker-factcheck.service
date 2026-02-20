@@ -1,0 +1,17 @@
+[Unit]
+Description=NotesOS Fact-Check Worker
+After=network.target postgresql.service redis-server.service
+Requires=postgresql.service redis-server.service
+
+[Service]
+Type=exec
+User=notesos
+Group=notesos
+WorkingDirectory=/opt/notesos/backend
+EnvironmentFile=/opt/notesos/.env
+ExecStart=/opt/notesos/backend/venv/bin/python -m app.workers.fact_check_worker
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

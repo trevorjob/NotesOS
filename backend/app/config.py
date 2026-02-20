@@ -102,20 +102,20 @@ class Settings(BaseSettings):
 
         return url
 
+    # Set to "true" when connecting to a remote DB that requires SSL (e.g. Neon)
+    DATABASE_SSL: bool = False
+
     @property
     def DB_CONNECT_ARGS(self) -> dict:
-        """
-        Return connection arguments for the database.
-        Enables SSL for remote databases (like Neon).
-        """
-        import ssl
+        """Return connection arguments. Enables SSL only when DATABASE_SSL=true."""
+        if self.DATABASE_SSL:
+            import ssl
 
-        ssl_context = ssl.create_default_context()
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
-        return {"ssl": ssl_context}
-
-        # return {"ssl": True}
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+            return {"ssl": ssl_context}
+        return {}
 
 
 settings = Settings()
