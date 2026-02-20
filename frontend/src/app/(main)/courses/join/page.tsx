@@ -17,7 +17,7 @@ import { api } from '@/lib/api';
 export default function JoinCoursePage() {
     const router = useRouter();
     const searchParams = useSearchParams();
-    const { joinCourse, error, clearError } = useCourseStore();
+    const { joinCourse, error, clearError, setError } = useCourseStore();
 
     const [joinMode, setJoinMode] = useState<'course' | 'class'>('course');
     const [identifier, setIdentifier] = useState('');
@@ -116,11 +116,10 @@ export default function JoinCoursePage() {
                                         setIdentifier('');
                                         clearError();
                                     }}
-                                    className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                                        joinMode === 'course'
+                                    className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${joinMode === 'course'
                                             ? 'bg-[var(--accent-primary)] text-white'
                                             : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                                    }`}
+                                        }`}
                                 >
                                     Course Code
                                 </button>
@@ -131,11 +130,10 @@ export default function JoinCoursePage() {
                                         setIdentifier('');
                                         clearError();
                                     }}
-                                    className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                                        joinMode === 'class'
+                                    className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${joinMode === 'class'
                                             ? 'bg-[var(--accent-primary)] text-white'
                                             : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                                    }`}
+                                        }`}
                                 >
                                     Class Code
                                 </button>

@@ -12,6 +12,7 @@ import { ArrowLeft } from 'lucide-react';
 import { useCourseStore } from '@/stores/courses';
 import { MainLayout } from '@/components/layout';
 import { GlassCard, PageHeader, Input, Button } from '@/components/ui';
+import { api } from '@/lib/api';
 
 export default function CreateCoursePage() {
     const router = useRouter();
@@ -99,11 +100,10 @@ export default function CreateCoursePage() {
                                     setMode('single');
                                     setBatchError(null);
                                 }}
-                                className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                                    mode === 'single'
+                                className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${mode === 'single'
                                         ? 'bg-[var(--accent-primary)] text-white'
                                         : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                                }`}
+                                    }`}
                             >
                                 Single course
                             </button>
@@ -113,11 +113,10 @@ export default function CreateCoursePage() {
                                     setMode('batch');
                                     setBatchError(null);
                                 }}
-                                className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                                    mode === 'batch'
+                                className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${mode === 'batch'
                                         ? 'bg-[var(--accent-primary)] text-white'
                                         : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                                }`}
+                                    }`}
                             >
                                 Batch create
                             </button>

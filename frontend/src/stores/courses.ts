@@ -59,6 +59,7 @@ interface CourseState {
     }) => Promise<Topic>;
     deleteTopic: (courseId: string, topicId: string) => Promise<void>;
     clearCurrentCourse: () => void;
+    setError: (error: string | null) => void;
     clearError: () => void;
 }
 
@@ -196,6 +197,7 @@ export const useCourseStore = create<CourseState>()(
             },
 
             clearCurrentCourse: () => set({ currentCourse: null }),
+            setError: (error: string | null) => set({ error }),
             clearError: () => set({ error: null }),
         }),
         {

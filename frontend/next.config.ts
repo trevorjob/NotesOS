@@ -81,7 +81,7 @@ export default withPWA({
     },
     // Cache app shell / document requests for offline fallback
     {
-      urlPattern: ({ request }) =>
+      urlPattern: ({ request }: { request: any }) =>
         request.mode === "navigate" &&
         new URL(request.url).origin === self.location.origin,
       handler: "NetworkFirst",

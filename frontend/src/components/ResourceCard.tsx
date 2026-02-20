@@ -48,7 +48,7 @@ interface ResourceCardProps {
     currentUserId?: string;
     onDelete?: (id: string) => void;
     onFactCheck?: (id: string) => void;
-    onUpdate?: (id: string, data: Partial<{ title: string; description: string }>) => void;
+    onUpdate?: (id: string, data: Partial<{ title: string }>) => void;
     onReprocess?: (id: string) => void;
     factChecks?: FactCheck[];
     isLoadingFactChecks?: boolean;
@@ -70,7 +70,6 @@ export function ResourceCard({
     const [activeTab, setActiveTab] = useState<'content' | 'original'>('content');
     const [isEditing, setIsEditing] = useState(false);
     const [editTitle, setEditTitle] = useState(resource.title || '');
-    const [editDescription, setEditDescription] = useState(resource.description || '');
     const [isSaving, setIsSaving] = useState(false);
 
     const timeAgo = (date: string) => {
@@ -116,11 +115,6 @@ export function ResourceCard({
                         <h3 className="text-sm font-medium text-[var(--text-primary)] truncate">
                             {resource.title || 'Untitled Resource'}
                         </h3>
-                        {resource.description && (
-                            <p className="text-xs text-[var(--text-secondary)] mt-0.5 line-clamp-1">
-                                {resource.description}
-                            </p>
-                        )}
                         <p className="text-xs text-[var(--text-tertiary)] mt-0.5">
                             {resource.uploader_name} · {timeAgo(resource.created_at)}
                         </p>
@@ -161,10 +155,9 @@ export function ResourceCard({
                                     e.stopPropagation();
                                     setIsEditing(true);
                                     setEditTitle(resource.title || '');
-                                    setEditDescription(resource.description || '');
                                 }}
                                 className="text-xs px-2 py-1 rounded text-[var(--text-secondary)] hover:bg-[var(--bg-sunken)] transition-colors"
-                                title="Edit title and description"
+                                title="Edit title"
                             >
                                 Edit
                             </button>
@@ -180,13 +173,6 @@ export function ResourceCard({
                             onChange={(e) => setEditTitle(e.target.value)}
                             placeholder="Title"
                             className="w-full px-3 py-2 bg-[var(--bg-sunken)] border border-[var(--glass-border)] rounded text-xs text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]"
-                        />
-                        <textarea
-                            value={editDescription}
-                            onChange={(e) => setEditDescription(e.target.value)}
-                            placeholder="Short description (optional)"
-                            rows={2}
-                            className="w-full px-3 py-2 bg-[var(--bg-sunken)] border border-[var(--glass-border)] rounded text-xs text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)] resize-none"
                         />
                         <div className="flex gap-2 justify-end">
                             <button
@@ -205,7 +191,6 @@ export function ResourceCard({
                                         await Promise.resolve(
                                             onUpdate(resource.id, {
                                                 title: editTitle.trim(),
-                                                description: editDescription || undefined,
                                             })
                                         );
                                         setIsEditing(false);
@@ -230,23 +215,22 @@ export function ResourceCard({
                     </span>
 
                     {resource.resource_type.toLowerCase() !== 'text' && (
-                        <span className={`text-xs px-2 py-0.5 rounded-full inline-flex items-center gap-1 ${
-                            resource.processing_status === 'processing' || (!resource.is_processed && !resource.processing_status)
+                        <span className={`text-xs px-2 py-0.5 rounded-full inline-flex items-center gap-1 ${resource.processing_status === 'processing' || (!resource.is_processed && !resource.processing_status)
                                 ? 'bg-[var(--accent-primary)]/10 text-[var(--accent-primary)]'
                                 : resource.processing_status === 'failed'
-                                ? 'bg-[var(--error)]/10 text-[var(--error)]'
-                                : resource.is_processed || resource.processing_status === 'completed'
-                                ? 'bg-[var(--success)]/10 text-[var(--success)]'
-                                : 'bg-[var(--bg-sunken)] text-[var(--text-tertiary)]'
-                        }`}>
+                                    ? 'bg-[var(--error)]/10 text-[var(--error)]'
+                                    : resource.is_processed || resource.processing_status === 'completed'
+                                        ? 'bg-[var(--success)]/10 text-[var(--success)]'
+                                        : 'bg-[var(--bg-sunken)] text-[var(--text-tertiary)]'
+                            }`}>
                             {(resource.processing_status === 'processing' || (!resource.is_processed && !resource.processing_status)) && (
                                 <Loader2 className="w-3 h-3 animate-spin" />
                             )}
                             {resource.processing_status === 'failed'
                                 ? 'Processing failed'
                                 : resource.processing_status === 'processing' || (!resource.is_processed && !resource.processing_status)
-                                ? 'Processing...'
-                                : 'Processed'}
+                                    ? 'Processing...'
+                                    : 'Processed'}
                         </span>
                     )}
 
