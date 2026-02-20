@@ -362,7 +362,7 @@ cmd_deploy() {
     sudo -u "$APP_USER" bash -c "
         cd ${APP_DIR}/frontend
         npm ci
-        NEXT_PUBLIC_API_URL='${NEXT_PUBLIC_API_URL}' npm run build
+        npm run build
     "
     ok "Frontend built"
 

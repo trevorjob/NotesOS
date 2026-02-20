@@ -67,8 +67,17 @@ class Settings(BaseSettings):
     ENABLE_PRE_CLASS_RESEARCH: bool = True
     ENABLE_VOICE_GRADING: bool = True
 
-    # CORS
-    CORS_ORIGINS: List[str] = ["http://localhost:3000"]
+    # CORS — comma-separated in .env, e.g. https://example.com,https://other.com
+    CORS_ORIGINS: str = "http://localhost:3000"
+
+    @property
+    def cors_origins_list(self) -> List[str]:
+        """Parse CORS_ORIGINS as a comma-separated string."""
+        raw = self.CORS_ORIGINS.strip()
+        if raw.startswith("["):
+            import json
+            return json.loads(raw)
+        return [o.strip() for o in raw.split(",") if o.strip()]
 
     class Config:
         env_file = ".env"
