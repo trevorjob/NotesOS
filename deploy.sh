@@ -171,7 +171,6 @@ cmd_setup() {
     sudo -u "$APP_USER" bash -c "
         cd ${APP_DIR}/frontend
         npm ci
-        # NEXT_PUBLIC_API_URL='${NEXT_PUBLIC_API_URL:?Set NEXT_PUBLIC_API_URL in .env}' npm run build
         npm run build
     "
     ok "Frontend built"
