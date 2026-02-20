@@ -82,6 +82,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"
 
     @property
     def ASYNC_DATABASE_URL(self) -> str:
