@@ -234,12 +234,12 @@ TMPCONF
     info "Installing systemd services..."
 
     # Write the DATABASE_URL into the env file if not already there
-    grep -q "^DATABASE_URL=" "$ENV_FILE" && \
-        sed -i "s|^DATABASE_URL=.*|DATABASE_URL=postgresql+asyncpg://${DB_USER}:${DB_PASS}@localhost:5432/${DB_NAME}|" "$ENV_FILE" || \
-        echo "DATABASE_URL=postgresql+asyncpg://${DB_USER}:${DB_PASS}@localhost:5432/${DB_NAME}" >> "$ENV_FILE"
+    # grep -q "^DATABASE_URL=" "$ENV_FILE" && \
+    #     sed -i "s|^DATABASE_URL=.*|DATABASE_URL=postgresql+asyncpg://${DB_USER}:${DB_PASS}@localhost:5432/${DB_NAME}|" "$ENV_FILE" || \
+    #     echo "DATABASE_URL=postgresql+asyncpg://${DB_USER}:${DB_PASS}@localhost:5432/${DB_NAME}" >> "$ENV_FILE"
 
-    grep -q "^REDIS_URL=" "$ENV_FILE" || echo "REDIS_URL=redis://localhost:6379" >> "$ENV_FILE"
-    grep -q "^DATABASE_SSL=" "$ENV_FILE" || echo "DATABASE_SSL=false" >> "$ENV_FILE"
+    # grep -q "^REDIS_URL=" "$ENV_FILE" || echo "REDIS_URL=redis://localhost:6379" >> "$ENV_FILE"
+    # grep -q "^DATABASE_SSL=" "$ENV_FILE" || echo "DATABASE_SSL=false" >> "$ENV_FILE"
 
     for svc in "${SERVICES[@]}"; do
         cp "${APP_DIR}/deploy/${svc}.service" "/etc/systemd/system/${svc}.service"
