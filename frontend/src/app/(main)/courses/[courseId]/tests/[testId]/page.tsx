@@ -27,8 +27,7 @@ export default function TakeTestPage() {
         currentTest,
         lastAttemptId,
         getTest,
-        submitAnswers,
-        submitVoiceAnswer,
+        submitFull,
         isSubmitting,
         error,
         clearTest,
@@ -50,7 +49,7 @@ export default function TakeTestPage() {
     }, [courseId, fetchStreak]);
 
     useEffect(() => {
-        getTest(testId).catch(() => {});
+        getTest(testId).catch(() => { });
         return () => clearTest();
     }, [testId]);
 
@@ -90,32 +89,24 @@ export default function TakeTestPage() {
 
     const handleSubmit = async () => {
         const list = currentTest?.questions ?? [];
-        const questionIdsWithVoice = Object.keys(voiceBlobs);
-        const textAnswers = list
-            .filter((q) => !voiceBlobs[q.id] && answers[q.id]?.trim())
-            .map((q) => ({ question_id: q.id, answer_text: answers[q.id] }));
 
-        if (textAnswers.length === 0 && questionIdsWithVoice.length === 0) return;
+        // Build unified answer list: text answers + voice-flagged answers
+        const allAnswers = list
+            .filter((q) => voiceBlobs[q.id] || answers[q.id]?.trim())
+            .map((q) => ({
+                question_id: q.id,
+                answer_text: voiceBlobs[q.id] ? '' : (answers[q.id] ?? ''),
+                is_voice: !!voiceBlobs[q.id],
+            }));
+
+        if (allAnswers.length === 0) return;
 
         clearError();
         try {
-            let attemptIdResult: string | null = null;
-
-            if (textAnswers.length > 0) {
-                attemptIdResult = await submitAnswers(testId, textAnswers);
-            }
-
-            for (const qId of questionIdsWithVoice) {
-                const file = voiceBlobs[qId];
-                if (!file) continue;
-                const res = await submitVoiceAnswer(testId, qId, file, attemptIdResult ?? undefined);
-                if (!attemptIdResult) attemptIdResult = res;
-            }
-
-            const id = attemptIdResult ?? lastAttemptId;
-            if (id) router.push(`/courses/${courseId}/tests/${testId}/results?attemptId=${id}`);
+            const attemptId = await submitFull(testId, allAnswers, voiceBlobs);
+            router.push(`/courses/${courseId}/tests/${testId}/results?attemptId=${attemptId}`);
         } catch {
-            // Error in store
+            // Error handled in store
         }
     };
 
@@ -273,11 +264,10 @@ function QuestionBlock({
                     <button
                         type="button"
                         onClick={isRecording ? onStopRecord : onStartRecord}
-                        className={`flex items-center gap-2 text-sm font-medium px-3 py-2 rounded-lg transition-colors ${
-                            isRecording
-                                ? 'bg-[var(--error)]/20 text-[var(--error)]'
-                                : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                        }`}
+                        className={`flex items-center gap-2 text-sm font-medium px-3 py-2 rounded-lg transition-colors ${isRecording
+                            ? 'bg-[var(--error)]/20 text-[var(--error)]'
+                            : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                            }`}
                     >
                         {isRecording ? (
                             <>

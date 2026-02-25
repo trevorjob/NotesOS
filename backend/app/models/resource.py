@@ -64,8 +64,12 @@ class Resource(Base):
     __tablename__ = "resources"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    topic_id = Column(UUID(as_uuid=True), ForeignKey("topics.id"), nullable=False)
-    uploaded_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    topic_id = Column(
+        UUID(as_uuid=True), ForeignKey("topics.id"), nullable=False, index=True
+    )
+    uploaded_by = Column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
 
     title = Column(String(255), nullable=True)  # Optional - auto-generated if empty
     content = Column(Text, nullable=False)  # Typed text, or extracted/OCR text
@@ -122,7 +126,9 @@ class ResourceFile(Base):
     __tablename__ = "resource_files"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    resource_id = Column(UUID(as_uuid=True), ForeignKey("resources.id"), nullable=False)
+    resource_id = Column(
+        UUID(as_uuid=True), ForeignKey("resources.id"), nullable=False, index=True
+    )
 
     # File info
     file_url = Column(Text, nullable=False)
@@ -146,7 +152,9 @@ class ResourceChunk(Base):
     __tablename__ = "resource_chunks"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    resource_id = Column(UUID(as_uuid=True), ForeignKey("resources.id"), nullable=False)
+    resource_id = Column(
+        UUID(as_uuid=True), ForeignKey("resources.id"), nullable=False, index=True
+    )
 
     chunk_text = Column(Text, nullable=False)
     chunk_index = Column(Integer, nullable=False)
@@ -166,7 +174,9 @@ class FactCheck(Base):
     __tablename__ = "fact_checks"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    resource_id = Column(UUID(as_uuid=True), ForeignKey("resources.id"), nullable=False)
+    resource_id = Column(
+        UUID(as_uuid=True), ForeignKey("resources.id"), nullable=False, index=True
+    )
 
     claim_text = Column(Text, nullable=False)
     verification_status = Column(
@@ -196,7 +206,9 @@ class PreClassResearch(Base):
     __tablename__ = "pre_class_research"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    topic_id = Column(UUID(as_uuid=True), ForeignKey("topics.id"), nullable=False)
+    topic_id = Column(
+        UUID(as_uuid=True), ForeignKey("topics.id"), nullable=False, index=True
+    )
 
     research_content = Column(Text, nullable=False)
     sources = Column(JSONB, nullable=False, default=[])

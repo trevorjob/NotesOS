@@ -4,11 +4,19 @@ Fact Checker, Pre-class Research, Study Agent, and Test Generator endpoints.
 """
 
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    status,
+    Query,
+    Request,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
 import uuid
+import json
 
 from app.database import get_db
 from app.models.resource import Resource, FactCheck, PreClassResearch
@@ -437,7 +445,9 @@ class GradedAnswerResponse(BaseModel):
 
 class VoiceAnswerResponse(BaseModel):
     answer_id: str
-    attempt_id: str | None = None  # For redirect to results; submit uses answer_id as attempt_id
+    attempt_id: str | None = (
+        None  # For redirect to results; submit uses answer_id as attempt_id
+    )
     status: str
     message: str
 
@@ -579,7 +589,9 @@ async def list_test_attempts(
     test_result = await db.execute(test_query)
     test = test_result.scalar_one_or_none()
     if not test:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Test not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Test not found"
+        )
     await verify_course_enrollment(db, current_user.id, test.course_id)
 
     attempt_query = (
@@ -601,23 +613,56 @@ async def list_test_attempts(
     ]
 
 
-@router.post("/tests/{test_id}/submit", response_model=VoiceAnswerResponse)
-async def submit_test_answers(
+@router.post("/tests/{test_id}/submit-full", response_model=VoiceAnswerResponse)
+async def submit_test_full(
+    request: Request,
     test_id: str,
-    answers: List[SubmitAnswerRequest],
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
-    Submit test answers for grading.
+    Submit all answers in a single multipart request.
+
+    Form fields:
+      answers  (required) — JSON: [{question_id, answer_text, is_voice}]
+      voice_<question_id> (optional) — audio file for voice answers
 
     Workflow:
-    1. Create TestAttempt
-    2. Create TestAnswer records for each answer
-    3. Enqueue grading jobs (async processing)
-    4. Return immediately
-    5. Frontend listens for WebSocket 'grading:complete' event
+      1. Parse form data: JSON answers + any voice_<question_id> file fields
+      2. Create one TestAttempt
+      3. For each answer: create TestAnswer, upload voice if present, enqueue grading job
+      4. Single commit, return attempt_id
+      5. Frontend listens for WebSocket 'grading:complete'
     """
+    # Read raw multipart form (supports dynamic file field names)
+    form = await request.form()
+
+    answers_raw = form.get("answers")
+    if not answers_raw:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="'answers' field is required",
+        )
+
+    # Parse answers JSON
+    try:
+        answers_data = json.loads(str(answers_raw))
+        if not isinstance(answers_data, list):
+            raise ValueError
+    except (json.JSONDecodeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="'answers' must be a JSON array",
+        )
+
+    # Collect any voice files keyed as voice_<question_id>
+    voice_files: dict = {
+        key[6:]: value  # strip "voice_" prefix → question_id
+        for key, value in form.multi_items()
+        if key.startswith("voice_")
+    }
+
+    # Verify test
     test_query = select(Test).where(Test.id == uuid.UUID(test_id))
     test_result = await db.execute(test_query)
     test = test_result.scalar_one_or_none()
@@ -633,44 +678,61 @@ async def submit_test_answers(
     attempt = TestAttempt(
         test_id=test.id,
         user_id=current_user.id,
-        max_score=test.question_count * 10,  # Assuming 10 points max per question
+        max_score=test.question_count * 10,
     )
     db.add(attempt)
     await db.flush()
 
-    # Create TestAnswer records and enqueue grading jobs
-    answer_ids = []
-    for answer_req in answers:
-        # Get question to verify it exists
-        question_query = select(TestQuestion).where(
-            TestQuestion.id == uuid.UUID(answer_req.question_id)
-        )
-        question_result = await db.execute(question_query)
-        question = question_result.scalar_one_or_none()
+    answer_count = 0
+    for item in answers_data:
+        q_id = item.get("question_id")
+        answer_text = item.get("answer_text", "")
+        is_voice = bool(item.get("is_voice", False))
 
+        if not q_id:
+            continue
+
+        question_result = await db.execute(
+            select(TestQuestion).where(TestQuestion.id == uuid.UUID(q_id))
+        )
+        question = question_result.scalar_one_or_none()
         if not question:
             continue
 
-        # Create TestAnswer record
+        audio_url: str | None = None
+
+        # Upload voice file if present and voice grading is enabled
+        if is_voice and settings.ENABLE_VOICE_GRADING:
+            upload_file = voice_files.get(q_id)
+            if upload_file is not None:
+                audio_bytes = await upload_file.read()
+                upload_result = await storage_service.upload_file(
+                    file=audio_bytes,
+                    folder=f"voice_answers/{current_user.id}",
+                    resource_type="auto",
+                )
+                audio_url = upload_result["url"]
+
         test_answer = TestAnswer(
             attempt_id=attempt.id,
             question_id=question.id,
-            answer_text=answer_req.answer_text,
-            # Score/feedback will be filled by grading worker
+            # Store either text or audio URL — not both
+            answer_text=answer_text if not audio_url else None,
+            answer_audio_url=audio_url,
         )
         db.add(test_answer)
-        await db.flush()  # Get the ID
+        await db.flush()
 
-        answer_ids.append(str(test_answer.id))
-
-        # Enqueue grading job
         await redis_client.enqueue_job(
-            "voice_grade",  # Reuse same queue (handles both text and voice)
+            "voice_grade",
             {
                 "answer_id": str(test_answer.id),
-                "is_voice": answer_req.is_voice,
+                "is_voice": bool(
+                    audio_url
+                ),  # True only when audio was actually uploaded
             },
         )
+        answer_count += 1
 
     await db.commit()
 
@@ -678,114 +740,7 @@ async def submit_test_answers(
         answer_id=str(attempt.id),
         attempt_id=str(attempt.id),
         status="processing",
-        message=f"Submitted {len(answer_ids)} answers. Grading in progress.",
-    )
-
-
-# ── Voice Answer Endpoints ────────────────────────────────────────────────────
-
-
-@router.post("/tests/{test_id}/voice-answer", response_model=VoiceAnswerResponse)
-async def upload_voice_answer(
-    test_id: str,
-    question_id: str,
-    audio_file: UploadFile = File(...),
-    attempt_id: str | None = None,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """
-    Upload a voice answer for a test question.
-
-    Workflow:
-    1. Upload audio to Cloudinary
-    2. Create TestAnswer record with audio URL
-    3. Enqueue grading job (transcribe + grade)
-    4. Return immediately (async grading)
-    """
-    if not settings.ENABLE_VOICE_GRADING:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Voice grading is currently disabled",
-        )
-
-    # Verify test exists
-    test_query = select(Test).where(Test.id == uuid.UUID(test_id))
-    test_result = await db.execute(test_query)
-    test = test_result.scalar_one_or_none()
-
-    if not test:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Test not found"
-        )
-
-    await verify_course_enrollment(db, current_user.id, test.course_id)
-
-    # Verify question exists
-    question_query = select(TestQuestion).where(
-        TestQuestion.id == uuid.UUID(question_id)
-    )
-    question_result = await db.execute(question_query)
-    question = question_result.scalar_one_or_none()
-
-    if not question:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Question not found"
-        )
-
-    # Get or create test attempt
-    if attempt_id:
-        attempt_query = select(TestAttempt).where(
-            TestAttempt.id == uuid.UUID(attempt_id)
-        )
-        attempt_result = await db.execute(attempt_query)
-        attempt = attempt_result.scalar_one_or_none()
-        if not attempt:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Attempt not found"
-            )
-    else:
-        # Create new attempt
-        attempt = TestAttempt(
-            test_id=test.id,
-            user_id=current_user.id,
-            max_score=test.question_count * 10,
-        )
-        db.add(attempt)
-        await db.flush()
-
-    # Upload audio to Cloudinary
-    audio_bytes = await audio_file.read()
-    upload_result = await storage_service.upload_file(
-        file=audio_bytes,
-        folder=f"voice_answers/{str(current_user.id)}",
-        resource_type="auto",  # Auto-detect audio type
-    )
-
-    # Create TestAnswer record
-    answer = TestAnswer(
-        attempt_id=attempt.id,
-        question_id=question.id,
-        answer_audio_url=upload_result["url"],
-        # Score/feedback will be filled by grading worker
-    )
-    db.add(answer)
-    await db.commit()
-
-    # Enqueue grading job
-    await redis_client.enqueue_job(
-        "voice_grade",
-        {
-            "answer_id": str(answer.id),
-            "is_voice": True,
-        },
-    )
-
-    return VoiceAnswerResponse(
-        answer_id=str(answer.id),
-        attempt_id=str(attempt.id),
-        status="processing",
-        message="Voice answer uploaded. Grading in progress.",
+        message=f"Submitted {answer_count} answers. Grading in progress.",
     )
 
 

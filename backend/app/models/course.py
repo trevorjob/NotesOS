@@ -23,7 +23,9 @@ class Course(Base):
     semester = Column(String(50), nullable=True)
 
     # Course creator (but no special permissions beyond deletion)
-    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    created_by = Column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
 
     # Privacy
     is_public = Column(Boolean, default=True, nullable=False)
@@ -60,8 +62,12 @@ class CourseEnrollment(Base):
     __tablename__ = "course_enrollments"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id"), nullable=False)
+    user_id = Column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
+    course_id = Column(
+        UUID(as_uuid=True), ForeignKey("courses.id"), nullable=False, index=True
+    )
     joined_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # Relationships
@@ -79,7 +85,9 @@ class Topic(Base):
     __tablename__ = "topics"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id"), nullable=False)
+    course_id = Column(
+        UUID(as_uuid=True), ForeignKey("courses.id"), nullable=False, index=True
+    )
     title = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     week_number = Column(Integer, nullable=True)
@@ -116,8 +124,12 @@ class CourseOutline(Base):
     __tablename__ = "course_outlines"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id"), nullable=False)
-    uploaded_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    course_id = Column(
+        UUID(as_uuid=True), ForeignKey("courses.id"), nullable=False, index=True
+    )
+    uploaded_by = Column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
     outline_content = Column(Text, nullable=False)
     file_url = Column(Text, nullable=True)
     parsed_topics = Column(Text, nullable=True)  # JSONB in production

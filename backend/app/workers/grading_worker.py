@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from datetime import datetime
 
-from app.database import get_db
+from app.database import worker_session
 from app.models.test import TestAnswer, TestAttempt
 from app.services.redis_client import redis_client
 from app.services.transcription import transcription_service
@@ -33,7 +33,7 @@ async def process_grading_job(job_data: dict):
 
     print(f"[GRADING WORKER] Processing grading job for answer {answer_id}")
 
-    async for db in get_db():
+    async with worker_session() as db:
         try:
             # Fetch answer with question loaded
             answer_query = (
@@ -117,8 +117,6 @@ async def process_grading_job(job_data: dict):
 
             traceback.print_exc()
             await db.rollback()
-        finally:
-            break  # Exit async for loop after first iteration
 
 
 async def _update_attempt_score(db, attempt_id):

@@ -8,7 +8,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.database import get_db
+from app.database import worker_session
 from app.models.resource import Resource, FactCheck, VerificationStatus
 from app.services.fact_checker import fact_checker
 from app.services.redis_client import redis_client
@@ -29,7 +29,7 @@ async def process_fact_check_job(job_data: dict):
 
     print(f"[FACT CHECK WORKER] Starting fact check for resource {resource_id}")
 
-    async for db in get_db():
+    async with worker_session() as db:
         try:
             # Fetch resource with topic loaded (for course_id)
             resource_query = (

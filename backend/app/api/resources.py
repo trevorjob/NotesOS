@@ -14,7 +14,7 @@ import asyncio
 import os
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 from pydantic import BaseModel
 import uuid
@@ -28,6 +28,8 @@ from app.services.storage import storage_service
 from app.services.file_processor import file_processor
 from app.services.ocr_cleaner import ocr_cleaner
 from app.services.redis_client import redis_client
+from app.services.cache import cache, resources_list_key, resource_key
+from app.config import settings
 
 
 router = APIRouter()
@@ -155,6 +157,13 @@ async def list_resources(
 
     await verify_course_enrollment(db, current_user.id, topic.course_id)
 
+    # ── Cache read-through ────────────────────────────────────────────────────
+    cache_key = resources_list_key(topic_id, page, page_size)
+    cached = await cache.get(cache_key)
+    if cached is not None:
+        return cached
+    # ─────────────────────────────────────────────────────────────────────────
+
     offset = (page - 1) * page_size
     resources_query = (
         select(Resource)
@@ -167,25 +176,36 @@ async def list_resources(
     resources_result = await db.execute(resources_query)
     resources = resources_result.scalars().all()
 
-    # Total count
-    count_query = select(Resource).where(Resource.topic_id == uuid.UUID(topic_id))
-    count_result = await db.execute(count_query)
-    total = len(count_result.scalars().all())
+    # Total count — single scalar query, no row fetching
+    total = await db.scalar(
+        select(func.count()).where(Resource.topic_id == uuid.UUID(topic_id))
+    )
 
-    # Build responses with uploader names
+    # Batch-load uploader names in one query
     from app.models.user import User as UserModel
 
-    resource_responses = []
-    for resource in resources:
-        uploader_query = select(UserModel).where(UserModel.id == resource.uploaded_by)
-        uploader_result = await db.execute(uploader_query)
-        uploader = uploader_result.scalar_one_or_none()
-        uploader_name = uploader.full_name if uploader else "Unknown"
-        resource_responses.append(build_resource_response(resource, uploader_name))
+    uploader_ids = list({r.uploaded_by for r in resources})
+    uploader_map: dict = {}
+    if uploader_ids:
+        uploader_result = await db.execute(
+            select(UserModel.id, UserModel.full_name).where(
+                UserModel.id.in_(uploader_ids)
+            )
+        )
+        uploader_map = {row.id: row.full_name for row in uploader_result}
 
-    return ResourceListResponse(
+    resource_responses = [
+        build_resource_response(r, uploader_map.get(r.uploaded_by, "Unknown"))
+        for r in resources
+    ]
+
+    result_payload = ResourceListResponse(
         resources=resource_responses, total=total, page=page, page_size=page_size
     )
+    await cache.set(
+        cache_key, result_payload.model_dump(), ttl_sec=settings.CACHE_TTL_RESOURCES
+    )
+    return result_payload
 
 
 @router.post(
@@ -242,6 +262,9 @@ async def create_text_resource(
     await redis_client.enqueue_job(
         "chunking", {"resource_id": str(resource.id), "text": resource.content}
     )
+
+    # Invalidate resource list cache for this topic
+    await cache.delete_pattern(f"notesos:v1:resources:topic:{topic_id}:")
 
     return build_resource_response(resource, current_user.full_name)
 
@@ -351,6 +374,9 @@ async def upload_resources(
         responses.append(
             build_resource_response(refreshed_resource, current_user.full_name)
         )
+
+    # Invalidate resource list cache for this topic (uploads change the list)
+    await cache.delete_pattern(f"notesos:v1:resources:topic:{topic_id}:")
 
     return responses
 
@@ -615,6 +641,10 @@ async def update_resource(
             "chunking", {"resource_id": str(resource.id), "text": resource.content}
         )
 
+    # Invalidate list cache and single resource cache
+    await cache.delete_pattern(f"notesos:v1:resources:topic:{resource.topic_id}:")
+    await cache.delete(resource_key(resource_id))
+
     return build_resource_response(resource, current_user.full_name)
 
 
@@ -661,6 +691,10 @@ async def delete_resource(
 
     await db.delete(resource)
     await db.commit()
+
+    # Invalidate list cache and single resource cache
+    await cache.delete_pattern(f"notesos:v1:resources:topic:{resource.topic_id}:")
+    await cache.delete(resource_key(resource_id))
 
     return None
 

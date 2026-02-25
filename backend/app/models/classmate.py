@@ -32,7 +32,9 @@ class Class(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
     # Owner of this class (whose courses will be shared)
-    owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    owner_id = Column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
 
     # Human-readable name (optional)
     name = Column(String(100), nullable=True)  # e.g., "CS101 Study Group"
@@ -69,10 +71,14 @@ class Classmate(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
     # Which class invite they used
-    class_id = Column(UUID(as_uuid=True), ForeignKey("classes.id"), nullable=False)
+    class_id = Column(
+        UUID(as_uuid=True), ForeignKey("classes.id"), nullable=False, index=True
+    )
 
     # Who joined
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    user_id = Column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
 
     # When they joined
     joined_at = Column(DateTime, default=datetime.utcnow, nullable=False)

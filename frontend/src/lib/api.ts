@@ -350,18 +350,20 @@ export const api = {
         listAttempts: (testId: string) =>
             apiClient.get(`/api/tests/${testId}/attempts`),
 
-        submitAnswers: (testId: string, answers: Array<{
-            question_id: string;
-            answer_text: string;
-        }>) => apiClient.post(`/api/tests/${testId}/submit`, answers),
-
-        submitVoiceAnswer: (testId: string, questionId: string, audioFile: File, attemptId?: string) => {
+        submitFull: (
+            testId: string,
+            answers: Array<{ question_id: string; answer_text: string; is_voice?: boolean }>,
+            voiceFiles?: Record<string, File>,
+        ) => {
             const formData = new FormData();
-            formData.append('audio_file', audioFile);
-            const params: Record<string, string> = { question_id: questionId };
-            if (attemptId) params.attempt_id = attemptId;
-            return apiClient.post(`/api/tests/${testId}/voice-answer`, formData, {
-                params,
+            formData.append('answers', JSON.stringify(answers));
+            // Append each voice file as voice_<question_id>
+            if (voiceFiles) {
+                Object.entries(voiceFiles).forEach(([questionId, file]) => {
+                    formData.append(`voice_${questionId}`, file);
+                });
+            }
+            return apiClient.post(`/api/tests/${testId}/submit-full`, formData, {
                 headers: { 'Content-Type': 'multipart/form-data' },
             });
         },

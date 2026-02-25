@@ -25,9 +25,9 @@ export default function TestResultsPage() {
 
     const { currentCourse, selectCourse } = useCourseStore();
     const { streak, fetchStreak } = useProgressStore();
-    const { results, getTestResults } = useTestsStore();
+    const { results, getTestResults, listenForGrading } = useTestsStore();
 
-    const [pollCount, setPollCount] = useState(0);
+    const [gradingDone, setGradingDone] = useState(false);
 
     useEffect(() => {
         selectCourse(courseId);
@@ -37,21 +37,23 @@ export default function TestResultsPage() {
         if (courseId) fetchStreak(courseId);
     }, [courseId, fetchStreak]);
 
+    // Initial fetch
     useEffect(() => {
         if (!attemptId) return;
-        getTestResults(attemptId).catch(() => {});
+        getTestResults(attemptId).catch(() => { });
     }, [attemptId]);
 
-    // Keep polling while grading incomplete (no answers yet or completed_at null)
-    const gradingIncomplete = results && (results.answers.length === 0 || results.completed_at == null);
+    // Listen for grading:complete over WebSocket instead of polling
     useEffect(() => {
-        if (!attemptId || !gradingIncomplete) return;
-        const t = setTimeout(() => {
-            setPollCount((c) => c + 1);
-            getTestResults(attemptId).catch(() => {});
-        }, 3000);
-        return () => clearTimeout(t);
-    }, [attemptId, gradingIncomplete, pollCount, getTestResults]);
+        if (!attemptId || !courseId || gradingDone) return;
+        // If already complete on initial fetch, skip WebSocket
+        if (results?.completed_at != null) {
+            setGradingDone(true);
+            return;
+        }
+        const cleanup = listenForGrading(attemptId, courseId, () => setGradingDone(true));
+        return cleanup;
+    }, [attemptId, courseId, gradingDone, results?.completed_at]);
 
     if (!currentCourse) {
         return (
