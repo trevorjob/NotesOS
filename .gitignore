@@ -59,3 +59,4 @@ frontend/public/workbox-*.js.map
 frontend/public/worker-*.js
 frontend/public/worker-*.js.map
 IMPROVEMENTS_PLAN.md
+.agent/

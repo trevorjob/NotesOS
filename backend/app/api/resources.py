@@ -26,7 +26,7 @@ from app.api.auth import get_current_user, verify_course_enrollment
 from app.models.user import User
 from app.services.storage import storage_service
 from app.services.file_processor import file_processor
-from app.services.ocr_cleaner import ocr_cleaner
+from app.services.vision_transcribe import vision_transcribe
 from app.services.redis_client import redis_client
 from app.services.cache import cache, resources_list_key, resource_key
 from app.config import settings
@@ -389,14 +389,15 @@ async def _create_image_resource(
     is_handwritten: Optional[bool],
     image_files: List[UploadFile],
 ) -> Resource:
-    """Create a single image Resource with multiple ResourceFile pages."""
-    combined_text = []
-    total_confidence = 0.0
-    confidence_count = 0
-    primary_provider = None
-    primary_source = SourceType.PRINTED
-    any_cleaned = False
+    """
+    Create a single image Resource with multiple ResourceFile pages.
 
+    Flow:
+    1. Upload all images to Cloudinary concurrently.
+    2. Create ResourceFile records.
+    3. Call GPT-4o Vision with all image URLs in one request → clean transcript.
+    4. Store transcript as resource.content.
+    """
     # Auto-generate title
     if not title:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -406,94 +407,50 @@ async def _create_image_resource(
         topic_id=topic.id,
         uploaded_by=user.id,
         title=title,
-        content="",  # Will be filled after processing
+        content="",  # Filled after transcription
         resource_type=ResourceKind.IMAGE,
-        source_type=SourceType.PRINTED,  # Updated below
+        source_type=SourceType.PRINTED,
         is_processed=False,
     )
     db.add(resource)
     await db.flush()  # Get resource.id
 
-    for idx, file in enumerate(image_files):
-        file_content = await file.read()
-        ext = os.path.splitext(file.filename or "")[1].lower()
+    # ── Step 1: Upload all images concurrently ──────────────────────────────
+    file_contents: list[bytes] = []
+    for file in image_files:
+        file_contents.append(await file.read())
 
-        # Upload to Cloudinary AND run OCR concurrently (they're independent)
-        upload_task = storage_service.upload_file(
-            file=file_content,
+    upload_tasks = [
+        storage_service.upload_file(
+            file=content,
             folder=f"notesos/{topic.course_id}/{topic.id}",
         )
-        ocr_task = file_processor.process_from_bytes(
-            file_bytes=file_content, file_format=ext, is_handwritten=is_handwritten
-        )
-        upload_result, processing_result = await asyncio.gather(upload_task, ocr_task)
-        file_url = upload_result["url"]
+        for content in file_contents
+    ]
+    upload_results = await asyncio.gather(*upload_tasks)
+    image_urls = [r["url"] for r in upload_results]
 
-        extracted_text = processing_result["text"]
-        source_type_str = processing_result["source_type"]
-        needs_cleaning = processing_result["needs_cleaning"]
-        ocr_confidence = processing_result.get("ocr_confidence")
-        ocr_provider = processing_result.get("ocr_provider")
-        needs_aggressive = processing_result.get("needs_aggressive_cleanup", False)
-
-        # Track source type priority: HANDWRITTEN > PRINTED
-        current_source = SourceType[source_type_str.upper()]
-        if current_source == SourceType.HANDWRITTEN:
-            primary_source = SourceType.HANDWRITTEN
-
-        if ocr_provider:
-            primary_provider = ocr_provider
-        if ocr_confidence is not None:
-            total_confidence += float(ocr_confidence)
-            confidence_count += 1
-
-        # Clean OCR if needed
-        page_ocr_text = extracted_text if needs_cleaning else None
-        final_text = extracted_text
-
-        if needs_cleaning:
-            print(
-                f"[OCR DEBUG] Cleaning needed. Extracted text preview: {extracted_text[:100]}..."
-            )
-            print(
-                f"[OCR DEBUG] Confidence: {ocr_confidence}, Aggressive: {needs_aggressive}"
-            )
-            any_cleaned = True
-            cleaning_result = await ocr_cleaner.clean_ocr_text(
-                extracted_text,
-                aggressive=True,
-                needs_aggressive_cleanup=needs_aggressive,
-            )
-            final_text = cleaning_result["cleaned_text"]
-            print(
-                f"[OCR DEBUG] Cleaning complete. Cleaned text preview: {final_text[:100]}..."
-            )
-            print(
-                f"[OCR DEBUG] Corrections made: {len(cleaning_result.get('corrections_made', []))}"
-            )
-
-        combined_text.append(final_text)
-
-        # Create ResourceFile for this page
+    # ── Step 2: Create ResourceFile records ─────────────────────────────────
+    for idx, (file, file_url) in enumerate(zip(image_files, image_urls)):
         resource_file = ResourceFile(
             resource_id=resource.id,
             file_url=file_url,
             file_name=file.filename,
             file_order=idx,
-            ocr_text=page_ocr_text,
-            ocr_confidence=ocr_confidence,
-            ocr_provider=ocr_provider,
+            ocr_text=None,
+            ocr_confidence=None,
+            ocr_provider="gpt-vision",
         )
         db.add(resource_file)
 
-    # Update resource with combined data
-    resource.content = "\n\n---\n\n".join(combined_text)
-    resource.source_type = primary_source
-    resource.ocr_cleaned = any_cleaned
-    resource.ocr_confidence = (
-        total_confidence / confidence_count if confidence_count > 0 else None
-    )
-    resource.ocr_provider = primary_provider
+    # ── Step 3: Transcribe all images in one Vision API call ─────────────────
+    transcript = await vision_transcribe.transcribe_images(image_urls)
+
+    # ── Step 4: Persist transcript ───────────────────────────────────────────
+    resource.content = transcript
+    resource.ocr_cleaned = False  # Vision output is already clean
+    resource.ocr_confidence = None
+    resource.ocr_provider = "gpt-vision"
 
     return resource
 
@@ -699,22 +656,18 @@ async def delete_resource(
     return None
 
 
-@router.post("/resources/{resource_id}/reprocess-ocr", response_model=ResourceResponse)
-async def reprocess_resource_ocr(
+@router.post("/resources/{resource_id}/retranscribe", response_model=ResourceResponse)
+async def retranscribe_resource(
     resource_id: str,
-    use_premium_ocr: bool = True,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Reprocess OCR for an image resource using improved transcription."""
-    from app.config import settings
+    """
+    Re-transcribe an image resource using GPT-4o Vision.
 
-    if not settings.ALLOW_USER_REQUESTED_REPROCESS:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="OCR reprocessing is not enabled",
-        )
-
+    Replaces resource.content with a fresh AI transcript and re-enqueues chunking.
+    Only the original uploader can trigger this.
+    """
     resource_query = (
         select(Resource)
         .options(selectinload(Resource.files))
@@ -731,70 +684,40 @@ async def reprocess_resource_ocr(
     if resource.uploaded_by != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the uploader can reprocess this resource",
+            detail="Only the uploader can re-transcribe this resource",
         )
 
     if resource.resource_type != ResourceKind.IMAGE:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only image resources can be reprocessed",
+            detail="Only image resources can be re-transcribed",
         )
 
     if not resource.files:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No image files available for reprocessing",
+            detail="No image files available for transcription",
         )
 
     try:
-        import httpx
-        from app.services.hybrid_ocr import hybrid_ocr
+        # Collect image URLs in page order
+        image_urls = [
+            rf.file_url for rf in sorted(resource.files, key=lambda x: x.file_order)
+        ]
 
-        combined_text = []
-        total_confidence = 0.0
-        confidence_count = 0
-        primary_provider = None
+        # Single Vision API call for all pages
+        transcript = await vision_transcribe.transcribe_images(image_urls)
 
-        for rf in sorted(resource.files, key=lambda x: x.file_order):
-            async with httpx.AsyncClient() as client:
-                response = await client.get(rf.file_url, timeout=30.0)
-                response.raise_for_status()
-                image_bytes = response.content
-
-            ocr_result = await hybrid_ocr.process_handwritten_note(
-                image_bytes,
-                is_premium_user=use_premium_ocr,
-            )
-
-            new_raw_text = ocr_result["text"]
-            cleaning_result = await ocr_cleaner.clean_ocr_text(
-                new_raw_text,
-                aggressive=True,
-                needs_aggressive_cleanup=ocr_result.get(
-                    "needs_aggressive_cleanup", False
-                ),
-            )
-            new_cleaned_text = cleaning_result["cleaned_text"]
-
-            # Update ResourceFile
-            rf.ocr_text = new_raw_text
-            rf.ocr_confidence = ocr_result["confidence"]
-            rf.ocr_provider = ocr_result["provider"]
-
-            combined_text.append(new_cleaned_text)
-
-            if ocr_result["confidence"] is not None:
-                total_confidence += float(ocr_result["confidence"])
-                confidence_count += 1
-            primary_provider = ocr_result["provider"]
+        # Update provider tag on each ResourceFile
+        for rf in resource.files:
+            rf.ocr_provider = "gpt-vision"
+            rf.ocr_confidence = None
 
         # Update Resource
-        resource.content = "\n\n---\n\n".join(combined_text)
-        resource.ocr_cleaned = True
-        resource.ocr_confidence = (
-            total_confidence / confidence_count if confidence_count > 0 else None
-        )
-        resource.ocr_provider = primary_provider
+        resource.content = transcript
+        resource.ocr_cleaned = False
+        resource.ocr_confidence = None
+        resource.ocr_provider = "gpt-vision"
         resource.is_processed = False
 
         await db.commit()
@@ -817,5 +740,5 @@ async def reprocess_resource_ocr(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"OCR reprocessing failed: {str(e)}",
+            detail=f"Re-transcription failed: {str(e)}",
         )

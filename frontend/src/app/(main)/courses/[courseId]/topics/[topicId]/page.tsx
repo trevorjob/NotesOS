@@ -43,7 +43,7 @@ export default function TopicPage() {
         factChecks,
         isLoadingFactChecks,
         updateResource,
-        reprocessResourceOCR,
+        retranscribeResource,
     } = useResourcesStore();
 
     const {
@@ -211,11 +211,11 @@ export default function TopicPage() {
         }
     };
 
-    const handleReprocessOCR = async (resourceId: string) => {
+    const handleRetranscribe = async (resourceId: string) => {
         try {
-            await reprocessResourceOCR(resourceId);
+            await retranscribeResource(resourceId);
         } catch (error) {
-            console.error('Failed to reprocess OCR:', error);
+            console.error('Failed to re-transcribe resource:', error);
         }
     };
 
@@ -478,7 +478,7 @@ export default function TopicPage() {
                                     onDelete={handleDeleteResource}
                                     onFactCheck={handleFactCheck}
                                     onUpdate={handleUpdateResource}
-                                    onReprocess={handleReprocessOCR}
+                                    onReprocess={handleRetranscribe}
                                     factChecks={factChecks[resource.id] || []}
                                     isLoadingFactChecks={isLoadingFactChecks[resource.id] || false}
                                 />

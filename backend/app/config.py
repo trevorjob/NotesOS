@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     VOYAGE_AI_API_KEY: str = ""
     SERPER_API_KEY: str = ""
+    VISION_MODEL: str = "gpt-4o"  # Model used for image transcription
 
     # Cost-Optimized AI Provider
     PRIMARY_AI_PROVIDER: str = "deepseek"  # or "claude" for upgrade

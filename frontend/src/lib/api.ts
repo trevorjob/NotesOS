@@ -290,7 +290,7 @@ export const api = {
 
         delete: (id: string) => apiClient.delete(`/api/resources/${id}`),
 
-        reprocessOCR: (id: string) => apiClient.post(`/api/resources/${id}/reprocess-ocr`),
+        retranscribe: (id: string) => apiClient.post(`/api/resources/${id}/retranscribe`),
     },
 
     // AI Features

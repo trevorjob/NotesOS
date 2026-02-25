@@ -59,7 +59,7 @@ interface ResourcesState {
     fetchFactChecks: (resourceId: string) => Promise<void>;
     updateResourceProcessingStatus: (resourceId: string, status: 'processing' | 'completed' | 'failed') => void;
     updateResource: (resourceId: string, data: Partial<{ title: string; description: string }>) => Promise<void>;
-    reprocessResourceOCR: (resourceId: string) => Promise<void>;
+    retranscribeResource: (resourceId: string) => Promise<void>;
     clearError: () => void;
 }
 
@@ -214,10 +214,10 @@ export const useResourcesStore = create<ResourcesState>()((set, get) => ({
         }
     },
 
-    reprocessResourceOCR: async (resourceId: string) => {
+    retranscribeResource: async (resourceId: string) => {
         set({ error: null });
         try {
-            await api.resources.reprocessOCR(resourceId);
+            await api.resources.retranscribe(resourceId);
             // Optimistically mark as processing
             set((state) => ({
                 resources: state.resources.map((r) =>
@@ -228,7 +228,7 @@ export const useResourcesStore = create<ResourcesState>()((set, get) => ({
             }));
         } catch (error: any) {
             const errorMessage =
-                error.response?.data?.detail || 'Failed to reprocess OCR';
+                error.response?.data?.detail || 'Failed to re-transcribe resource';
             set({ error: errorMessage });
             throw new Error(errorMessage);
         }
