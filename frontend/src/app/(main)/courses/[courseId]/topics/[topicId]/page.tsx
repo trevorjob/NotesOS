@@ -132,9 +132,9 @@ export default function TopicPage() {
             onMessage: (message: WebSocketMessage) => {
                 if (message.type === 'processing_status') {
                     updateResourceProcessingStatus(message.resource_id, message.status);
-                } else if (message.type === 'fact_check_complete') {
-                    if (message.resource_id) {
-                        fetchFactChecks(message.resource_id);
+                } else if (message.type === 'fact_check:complete') {
+                    if (message.data?.resource_id) {
+                        fetchFactChecks(message.data.resource_id);
                     }
                 } else if (message.type === 'resource_created' || message.type === 'resource_updated') {
                     fetchResources(topicId);

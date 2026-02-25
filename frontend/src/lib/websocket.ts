@@ -7,7 +7,7 @@ import { tokenManager } from './api';
 
 export type WebSocketMessage =
     | { type: 'processing_status'; resource_id: string; status: 'processing' | 'completed' | 'failed' }
-    | { type: 'fact_check_complete'; resource_id: string }
+    | { type: 'fact_check:complete'; data: { resource_id: string; topic_id: string; summary: string; stats: Record<string, number> } }
     | { type: 'grading:complete'; answer_id: string; attempt_id: string; score: number; encouragement: string }
     | { type: 'resource_created'; data: any }
     | { type: 'resource_updated'; data: any }

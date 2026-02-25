@@ -430,16 +430,20 @@ export function ResourceCard({
                         </span>
                     )}
 
-                    {/* Reprocess OCR */}
-                    {onReprocess && resource.resource_type.toLowerCase() !== 'text' &&
-                        resource.ocr_confidence !== undefined && resource.ocr_confidence < 0.8 && (
-                            <button
-                                onClick={() => onReprocess(resource.id)}
-                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[var(--bg-sunken)] text-[var(--text-tertiary)] text-xs hover:bg-[var(--bg-base)] transition-colors"
-                            >
-                                Reprocess OCR
-                            </button>
-                        )}
+                    {/* Re-transcribe — image resources only, uploader only */}
+                    {onReprocess && canDelete && resource.resource_type.toLowerCase() === 'image' && (
+                        <button
+                            onClick={() => onReprocess(resource.id)}
+                            disabled={resource.processing_status === 'processing'}
+                            title="Re-transcribe with GPT-4o Vision"
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[var(--bg-sunken)] text-[var(--text-tertiary)] text-xs hover:bg-[var(--bg-elevated)] hover:text-[var(--text-secondary)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {resource.processing_status === 'processing' ? (
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : null}
+                            Re-transcribe
+                        </button>
+                    )}
                 </div>
 
                 {/* ── Content preview ───────────────────────────────────── */}
