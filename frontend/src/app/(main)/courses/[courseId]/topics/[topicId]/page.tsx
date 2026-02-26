@@ -7,12 +7,13 @@
 
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, BookOpen, FileText, Sparkles, Loader2, ChevronDown, ChevronUp, ExternalLink } from 'lucide-react';
+import { ArrowLeft, BookOpen, FileText, Sparkles, Loader2, ChevronDown, ChevronUp, ExternalLink, WifiOff } from 'lucide-react';
 import { useCourseStore } from '@/stores/courses';
 import { useResourcesStore } from '@/stores/resources';
 import { useAIChatStore } from '@/stores/aiChat';
 import { useProgressStore } from '@/stores/progress';
 import { useAuthStore } from '@/stores/auth';
+import { useNetworkStore } from '@/stores/network';
 import { GlassCard, Button } from '@/components/ui';
 import { ResourceCard } from '@/components/ResourceCard';
 import { FileUpload } from '@/components/FileUpload';
@@ -55,6 +56,7 @@ export default function TopicPage() {
     } = useAIChatStore();
 
     const { startSession, endSession } = useProgressStore();
+    const { isOnline } = useNetworkStore();
     const sessionIdRef = useRef<string | null>(null);
     const wsClientRef = useRef<WebSocketClient | null>(null);
 
@@ -368,10 +370,16 @@ export default function TopicPage() {
                                         <Button
                                             onClick={handleGenerateResearch}
                                             variant="primary"
-                                            disabled={generatingResearch}
+                                            disabled={generatingResearch || !isOnline}
+                                            title={!isOnline ? 'AI requires internet' : undefined}
                                         >
                                             {generatingResearch ? 'Generating...' : 'Generate Research'}
                                         </Button>
+                                        {!isOnline && (
+                                            <p className="text-xs text-[var(--text-tertiary)] mt-2">
+                                                AI features require an internet connection
+                                            </p>
+                                        )}
                                     </div>
                                 )}
                             </div>
@@ -395,62 +403,71 @@ export default function TopicPage() {
                         </div>
                     </div>
 
-                    {/* Upload Mode Tabs */}
-                    <div className="flex gap-2 mb-4">
-                        <button
-                            onClick={() => setUploadMode('files')}
-                            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${uploadMode === 'files'
-                                ? 'bg-[var(--accent-primary)] text-white'
-                                : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)]'
-                                }`}
-                        >
-                            Upload Files
-                        </button>
-                        <button
-                            onClick={() => setUploadMode('text')}
-                            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${uploadMode === 'text'
-                                ? 'bg-[var(--accent-primary)] text-white'
-                                : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)]'
-                                }`}
-                        >
-                            Write Notes
-                        </button>
-                    </div>
+                    {/* Upload Mode Tabs — hidden when offline */}
+                    {isOnline && (
+                        <div className="flex gap-2 mb-4">
+                            <button
+                                onClick={() => setUploadMode('files')}
+                                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${uploadMode === 'files'
+                                    ? 'bg-[var(--accent-primary)] text-white'
+                                    : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)]'
+                                    }`}
+                            >
+                                Upload Files
+                            </button>
+                            <button
+                                onClick={() => setUploadMode('text')}
+                                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${uploadMode === 'text'
+                                    ? 'bg-[var(--accent-primary)] text-white'
+                                    : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)]'
+                                    }`}
+                            >
+                                Write Notes
+                            </button>
+                        </div>
+                    )}
 
-                    {/* Upload/Create Form */}
-                    <div className="mb-6">
-                        {uploadMode === 'files' ? (
-                            <FileUpload
-                                onUpload={handleUpload}
-                                isUploading={isUploading}
-                                uploadProgress={uploadProgress}
-                            />
-                        ) : (
-                            <div className="space-y-3">
-                                <input
-                                    type="text"
-                                    placeholder="Title (optional)"
-                                    value={textResourceTitle}
-                                    onChange={(e) => setTextResourceTitle(e.target.value)}
-                                    className="w-full px-4 py-2 bg-[var(--bg-sunken)] border border-[var(--glass-border)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]"
+                    {/* Upload/Create Form — hidden when offline */}
+                    {isOnline ? (
+                        <div className="mb-6">
+                            {uploadMode === 'files' ? (
+                                <FileUpload
+                                    onUpload={handleUpload}
+                                    isUploading={isUploading}
+                                    uploadProgress={uploadProgress}
                                 />
-                                <textarea
-                                    placeholder="Write your notes here... (supports Markdown)"
-                                    value={textResourceContent}
-                                    onChange={(e) => setTextResourceContent(e.target.value)}
-                                    rows={8}
-                                    className="w-full px-4 py-3 bg-[var(--bg-sunken)] border border-[var(--glass-border)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)] font-mono"
-                                />
-                                <button
-                                    onClick={handleCreateTextResource}
-                                    disabled={!textResourceContent.trim() || isCreatingText}
-                                    className="w-full px-4 py-2 bg-[var(--accent-primary)] hover:bg-[var(--accent-hover)] text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                                >
-                                    {isCreatingText ? 'Saving...' : 'Save Notes'}
-                                </button>
-                            </div>
-                        )}
-                    </div>
+                            ) : (
+                                <div className="space-y-3">
+                                    <input
+                                        type="text"
+                                        placeholder="Title (optional)"
+                                        value={textResourceTitle}
+                                        onChange={(e) => setTextResourceTitle(e.target.value)}
+                                        className="w-full px-4 py-2 bg-[var(--bg-sunken)] border border-[var(--glass-border)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]"
+                                    />
+                                    <textarea
+                                        placeholder="Write your notes here... (supports Markdown)"
+                                        value={textResourceContent}
+                                        onChange={(e) => setTextResourceContent(e.target.value)}
+                                        rows={8}
+                                        className="w-full px-4 py-3 bg-[var(--bg-sunken)] border border-[var(--glass-border)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)] font-mono"
+                                    />
+                                    <button
+                                        onClick={handleCreateTextResource}
+                                        disabled={!textResourceContent.trim() || isCreatingText}
+                                        className="w-full px-4 py-2 bg-[var(--accent-primary)] hover:bg-[var(--accent-hover)] text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        {isCreatingText ? 'Saving...' : 'Save Notes'}
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    ) : (
+                        <div className="mb-6 px-4 py-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-700 flex items-center gap-2">
+                            <WifiOff className="w-3.5 h-3.5 shrink-0" />
+                            Uploading and writing notes requires an internet connection.
+                        </div>
+                    )}
 
                     {/* Resource list */}
                     {resourcesLoading ? (

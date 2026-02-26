@@ -5,6 +5,7 @@
 
 import { create } from 'zustand';
 import { api } from '@/lib/api';
+import { offlineDb } from '@/lib/offlineDb';
 
 interface ResourceFile {
     id: string;
@@ -78,18 +79,36 @@ export const useResourcesStore = create<ResourcesState>()((set, get) => ({
 
     fetchResources: async (topicId: string, page = 1) => {
         set({ isLoading: true, error: null, currentTopicId: topicId });
+
+        // Offline: serve from IndexedDB (only page 1; cached data isn't paginated)
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+            const cached = await offlineDb.getResourcesByTopic(topicId);
+            set({ resources: cached as unknown as Resource[], total: cached.length, page: 1, isLoading: false });
+            return;
+        }
+
         try {
             const response = await api.resources.getByTopic(topicId, page, get().pageSize);
+            const resources = response.data.resources || [];
             set({
-                resources: response.data.resources || [],
+                resources,
                 total: response.data.total || 0,
                 page: response.data.page || 1,
                 isLoading: false,
             });
+            // Write-through to IDB (only for page 1 — first page is what we cache)
+            if (page === 1 && resources.length > 0) {
+                offlineDb.putResources(topicId, resources).catch(() => { });
+            }
         } catch (error: any) {
-            const errorMessage =
-                error.response?.data?.detail || 'Failed to fetch resources';
-            set({ isLoading: false, error: errorMessage });
+            // Network error — try IDB cache
+            const cached = await offlineDb.getResourcesByTopic(topicId);
+            if (cached.length > 0) {
+                set({ resources: cached as unknown as Resource[], total: cached.length, page: 1, isLoading: false });
+            } else {
+                const errorMessage = error.response?.data?.detail || 'Failed to fetch resources';
+                set({ isLoading: false, error: errorMessage });
+            }
         }
     },
 
@@ -138,6 +157,9 @@ export const useResourcesStore = create<ResourcesState>()((set, get) => ({
         try {
             await api.resources.delete(resourceId);
 
+            // Evict from IDB cache
+            offlineDb.deleteResource(resourceId).catch(() => { });
+
             // Refresh current topic's resources
             const { currentTopicId } = get();
             if (currentTopicId) {
@@ -170,17 +192,35 @@ export const useResourcesStore = create<ResourcesState>()((set, get) => ({
             isLoadingFactChecks: { ...state.isLoadingFactChecks, [resourceId]: true },
             error: null,
         }));
+
+        // Offline: serve from IndexedDB
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+            const cached = await offlineDb.getFactChecks(resourceId);
+            set((state) => ({
+                factChecks: { ...state.factChecks, [resourceId]: cached as any[] },
+                isLoadingFactChecks: { ...state.isLoadingFactChecks, [resourceId]: false },
+            }));
+            return;
+        }
+
         try {
             const response = await api.ai.getFactChecks(resourceId);
+            const checks = response.data || [];
             set((state) => ({
-                factChecks: { ...state.factChecks, [resourceId]: response.data },
+                factChecks: { ...state.factChecks, [resourceId]: checks },
                 isLoadingFactChecks: { ...state.isLoadingFactChecks, [resourceId]: false },
             }));
+            // Write-through to IDB
+            if (checks.length > 0) {
+                offlineDb.putFactChecks(resourceId, checks).catch(() => { });
+            }
         } catch (error: any) {
+            // Network error — try IDB cache
+            const cached = await offlineDb.getFactChecks(resourceId);
             set((state) => ({
+                factChecks: { ...state.factChecks, [resourceId]: cached as any[] },
                 isLoadingFactChecks: { ...state.isLoadingFactChecks, [resourceId]: false },
             }));
-            // Silently fail - fact checks may not exist yet
         }
     },
 

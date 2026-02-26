@@ -10,10 +10,11 @@ import { useState, useEffect, useRef } from 'react';
 import {
     FileText, Image, File, Check, AlertTriangle, Trash2,
     ChevronDown, ChevronUp, Eye, X, ExternalLink, Loader2,
-    ShieldCheck, ShieldAlert, Shield, ChevronRight,
+    ShieldCheck, ShieldAlert, Shield, ChevronRight, WifiOff,
 } from 'lucide-react';
 import { GlassCard } from './ui';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { useNetworkStore } from '@/stores/network';
 
 interface ResourceFile {
     id: string;
@@ -177,6 +178,7 @@ function VerificationArea({
     onFactCheck,
 }: VerificationAreaProps) {
     const [claimsExpanded, setClaimsExpanded] = useState(false);
+    const { isOnline } = useNetworkStore();
 
     const verifiedCount = factChecks.filter(
         (fc) => fc.verification_status.toLowerCase() === 'verified'
@@ -248,9 +250,14 @@ function VerificationArea({
                 </span>
                 <button
                     onClick={() => onFactCheck(resource.id)}
-                    className="text-xs px-3 py-1 rounded-lg border border-[#D6D3D1] text-[var(--text-secondary)] hover:bg-[var(--bg-sunken)] hover:border-[var(--text-tertiary)] transition-colors font-medium"
+                    disabled={!isOnline}
+                    title={!isOnline ? 'AI requires internet' : undefined}
+                    className="text-xs px-3 py-1 rounded-lg border border-[#D6D3D1] text-[var(--text-secondary)] hover:bg-[var(--bg-sunken)] hover:border-[var(--text-tertiary)] transition-colors font-medium disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:border-[#D6D3D1]"
                 >
-                    Verify with AI
+                    {!isOnline
+                        ? <span className="flex items-center gap-1"><WifiOff className="w-3 h-3" /> Verify with AI</span>
+                        : 'Verify with AI'
+                    }
                 </button>
             </div>
         );
@@ -306,6 +313,7 @@ export function ResourceCard({
 
     const canDelete = currentUserId === resource.uploaded_by;
     const hasOriginalFiles = resource.file_url || (resource.files && resource.files.length > 0);
+    const { isOnline } = useNetworkStore();
 
     return (
         <>
@@ -434,12 +442,14 @@ export function ResourceCard({
                     {onReprocess && canDelete && resource.resource_type.toLowerCase() === 'image' && (
                         <button
                             onClick={() => onReprocess(resource.id)}
-                            disabled={resource.processing_status === 'processing'}
-                            title="Re-transcribe with GPT-4o Vision"
-                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[var(--bg-sunken)] text-[var(--text-tertiary)] text-xs hover:bg-[var(--bg-elevated)] hover:text-[var(--text-secondary)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            disabled={resource.processing_status === 'processing' || !isOnline}
+                            title={!isOnline ? 'AI requires internet' : 'Re-transcribe with GPT-4o Vision'}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[var(--bg-sunken)] text-[var(--text-tertiary)] text-xs hover:bg-[var(--bg-elevated)] hover:text-[var(--text-secondary)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                         >
                             {resource.processing_status === 'processing' ? (
                                 <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : !isOnline ? (
+                                <WifiOff className="w-3 h-3" />
                             ) : null}
                             Re-transcribe
                         </button>

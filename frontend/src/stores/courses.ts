@@ -6,6 +6,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { api } from '@/lib/api';
+import { offlineDb } from '@/lib/offlineDb';
 
 interface Topic {
     id: string;
@@ -73,13 +74,30 @@ export const useCourseStore = create<CourseState>()(
 
             fetchCourses: async () => {
                 set({ isLoading: true, error: null });
+
+                // Offline: serve from IndexedDB
+                if (typeof navigator !== 'undefined' && !navigator.onLine) {
+                    const cached = await offlineDb.getCourses();
+                    set({ courses: cached as Course[], isLoading: false });
+                    return;
+                }
+
                 try {
                     const response = await api.courses.getAll();
-                    set({ courses: response.data.courses || [], isLoading: false });
+                    const courses = response.data.courses || [];
+                    set({ courses, isLoading: false });
+                    // Write-through to IDB
+                    offlineDb.putCourses(courses).catch(() => { });
                 } catch (error: any) {
-                    const errorMessage =
-                        error.response?.data?.detail || 'Failed to fetch courses';
-                    set({ isLoading: false, error: errorMessage });
+                    // Network error — try IDB cache
+                    const cached = await offlineDb.getCourses();
+                    if (cached.length > 0) {
+                        set({ courses: cached as Course[], isLoading: false });
+                    } else {
+                        const errorMessage =
+                            error.response?.data?.detail || 'Failed to fetch courses';
+                        set({ isLoading: false, error: errorMessage });
+                    }
                 }
             },
 
@@ -125,19 +143,37 @@ export const useCourseStore = create<CourseState>()(
 
             selectCourse: async (courseId: string) => {
                 set({ isLoading: true, error: null });
+
+                // Offline: serve from IndexedDB
+                if (typeof navigator !== 'undefined' && !navigator.onLine) {
+                    const courses = await offlineDb.getCourses();
+                    const course = courses.find(c => c.id === courseId);
+                    const topics = await offlineDb.getTopicsByCourse(courseId);
+                    if (course) {
+                        set({ currentCourse: { ...course, topics } as Course, isLoading: false });
+                    } else {
+                        set({ isLoading: false, error: 'Course not available offline' });
+                    }
+                    return;
+                }
+
                 try {
                     const [courseResponse, topicsResponse] = await Promise.all([
                         api.courses.getById(courseId),
                         api.topics.getByCourse(courseId),
                     ]);
 
-                    set({
-                        currentCourse: {
-                            ...courseResponse.data.course,
-                            topics: topicsResponse.data || [], // Array directly
-                        },
-                        isLoading: false,
-                    });
+                    const topics = topicsResponse.data || [];
+                    const course = {
+                        ...courseResponse.data.course,
+                        topics,
+                    };
+
+                    set({ currentCourse: course, isLoading: false });
+
+                    // Write-through to IDB
+                    offlineDb.putCourses([courseResponse.data.course]).catch(() => { });
+                    offlineDb.putTopics(courseId, topics).catch(() => { });
                 } catch (error: any) {
                     const errorMessage =
                         error.response?.data?.detail || 'Failed to load course';
