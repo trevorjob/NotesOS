@@ -7,6 +7,7 @@
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
+    "capture:screens": "node scripts/capture-screenshots.mjs",
     "generate-pwa-icons": "node scripts/generate-pwa-icons.js"
   },
   "dependencies": {
@@ -30,6 +31,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
+    "playwright": "^1.55.0",
     "pngjs": "^7.0.0",
     "tailwindcss": "^4",
     "typescript": "^5"

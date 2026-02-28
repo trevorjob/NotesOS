@@ -46,8 +46,7 @@ export default function JoinCoursePage() {
                     owner_name: response.data.owner_name,
                     class_name: response.data.class_name || undefined,
                 });
-                // Refresh courses list
-                await useCourseStore.getState().fetchCourses();
+                await useCourseStore.getState().fetchCourses(true);
             } else {
                 await joinCourse(identifier);
                 router.push('/courses');

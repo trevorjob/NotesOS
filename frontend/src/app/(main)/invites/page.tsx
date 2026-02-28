@@ -5,7 +5,7 @@
 
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, Plus, Users, Copy, CheckCircle, XCircle, Trash2, Eye } from 'lucide-react';
@@ -43,9 +43,12 @@ export default function InvitesPage() {
     const [classmates, setClassmates] = useState<Record<string, Classmate[]>>({});
     const [copiedCode, setCopiedCode] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const isFetchingRef = useRef(false);
 
     useEffect(() => {
-        loadInvites();
+        if (isFetchingRef.current) return;
+        isFetchingRef.current = true;
+        loadInvites().finally(() => { isFetchingRef.current = false; });
     }, []);
 
     const loadInvites = async () => {

@@ -59,6 +59,11 @@ export default function TopicPage() {
     const { isOnline } = useNetworkStore();
     const sessionIdRef = useRef<string | null>(null);
     const wsClientRef = useRef<WebSocketClient | null>(null);
+    // In-flight guards — prevent StrictMode double-invoke from creating duplicate
+    // DB records (startSession) or firing redundant network requests.
+    const isFetchingTopicRef = useRef(false);
+    const isFetchingResearchRef = useRef(false);
+    const isStartingSessionRef = useRef(false);
 
     const [topic, setTopic] = useState<any>(null);
     const [research, setResearch] = useState<any>(null);
@@ -72,15 +77,12 @@ export default function TopicPage() {
 
     // Load topic data
     useEffect(() => {
-        const loadTopic = async () => {
-            try {
-                const response = await api.topics.getById(topicId);
-                setTopic(response.data);
-            } catch (error) {
-                console.error('Failed to load topic:', error);
-            }
-        };
-        loadTopic();
+        if (isFetchingTopicRef.current) return;
+        isFetchingTopicRef.current = true;
+        api.topics.getById(topicId)
+            .then((response) => setTopic(response.data))
+            .catch((error) => console.error('Failed to load topic:', error))
+            .finally(() => { isFetchingTopicRef.current = false; });
     }, [topicId]);
 
     // Load resources
@@ -90,19 +92,13 @@ export default function TopicPage() {
 
     // Load research
     useEffect(() => {
-        const loadResearch = async () => {
-            setResearchLoading(true);
-            try {
-                const response = await api.ai.getResearch(topicId);
-                setResearch(response.data);
-            } catch (error) {
-                // Research doesn't exist yet
-                setResearch(null);
-            } finally {
-                setResearchLoading(false);
-            }
-        };
-        loadResearch();
+        if (isFetchingResearchRef.current) return;
+        isFetchingResearchRef.current = true;
+        setResearchLoading(true);
+        api.ai.getResearch(topicId)
+            .then((response) => setResearch(response.data))
+            .catch(() => setResearch(null))
+            .finally(() => { setResearchLoading(false); isFetchingResearchRef.current = false; });
     }, [topicId]);
 
     // Load conversations
@@ -113,8 +109,11 @@ export default function TopicPage() {
         return () => clearCurrentConversation();
     }, [courseId, fetchConversations, clearCurrentConversation]);
 
-    // Track reading session for progress
+    // Track reading session for progress — guarded to avoid creating duplicate
+    // session records from React StrictMode's double effect invocation.
     useEffect(() => {
+        if (isStartingSessionRef.current) return;
+        isStartingSessionRef.current = true;
         startSession(topicId, 'reading').then((id) => {
             sessionIdRef.current = id;
         });
@@ -122,6 +121,7 @@ export default function TopicPage() {
             const sid = sessionIdRef.current;
             if (sid) endSession(sid);
             sessionIdRef.current = null;
+            isStartingSessionRef.current = false;
         };
     }, [topicId, startSession, endSession]);
 
@@ -260,7 +260,7 @@ export default function TopicPage() {
     return (
         <div className="min-h-screen bg-[var(--bg-base)] pt-16">
             {/* Header */}
-            <div className="border-b border-[var(--glass-border)] bg-[var(--bg-base)]/80 backdrop-blur-md sticky top-16 z-30">
+            <div className="border-b border-[var(--glass-border)] bg-[var(--bg-base)]/80 backdrop-blur-md z-30">
                 <div className="max-w-5xl mx-auto px-6 md:px-12 py-4">
                     <button
                         onClick={() => router.push(`/courses/${courseId}`)}

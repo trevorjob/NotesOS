@@ -5,7 +5,7 @@
 
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, Loader2, FileQuestion, ChevronDown, ChevronRight, Minus, Plus } from 'lucide-react';
@@ -178,14 +178,17 @@ export default function TestsPage() {
     const [questionCount, setQuestionCount] = useState(10);
     const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium');
     const [questionTypes, setQuestionTypes] = useState<string[]>(['mcq', 'short_answer']);
+    const isFetchingTestsRef = useRef(false);
 
     useEffect(() => { selectCourse(courseId); }, [courseId, selectCourse]);
     useEffect(() => { if (courseId) fetchStreak(courseId); }, [courseId, fetchStreak]);
     useEffect(() => {
-        if (!courseId) return;
+        if (!courseId || isFetchingTestsRef.current) return;
+        isFetchingTestsRef.current = true;
         api.ai.listTests(courseId)
             .then((res) => setTestList(res.data || []))
-            .catch(() => setTestList([]));
+            .catch(() => setTestList([]))
+            .finally(() => { isFetchingTestsRef.current = false; });
     }, [courseId]);
 
     const loadAttempts = async (testId: string) => {

@@ -42,6 +42,7 @@ interface ResourcesState {
     resources: Resource[];
     currentTopicId: string | null;
     isLoading: boolean;
+    _isFetchingResources: boolean;
     isUploading: boolean;
     uploadProgress: number;
     error: string | null;
@@ -68,6 +69,7 @@ export const useResourcesStore = create<ResourcesState>()((set, get) => ({
     resources: [],
     currentTopicId: null,
     isLoading: false,
+    _isFetchingResources: false,
     isUploading: false,
     uploadProgress: 0,
     error: null,
@@ -78,12 +80,16 @@ export const useResourcesStore = create<ResourcesState>()((set, get) => ({
     isLoadingFactChecks: {},
 
     fetchResources: async (topicId: string, page = 1) => {
-        set({ isLoading: true, error: null, currentTopicId: topicId });
+        // Dedup parallel/StrictMode double-invoke calls for the same topic+page
+        const state = get();
+        if (state._isFetchingResources && state.currentTopicId === topicId) return;
+
+        set({ isLoading: true, error: null, currentTopicId: topicId, _isFetchingResources: true });
 
         // Offline: serve from IndexedDB (only page 1; cached data isn't paginated)
         if (typeof navigator !== 'undefined' && !navigator.onLine) {
             const cached = await offlineDb.getResourcesByTopic(topicId);
-            set({ resources: cached as unknown as Resource[], total: cached.length, page: 1, isLoading: false });
+            set({ resources: cached as unknown as Resource[], total: cached.length, page: 1, isLoading: false, _isFetchingResources: false });
             return;
         }
 
@@ -95,19 +101,18 @@ export const useResourcesStore = create<ResourcesState>()((set, get) => ({
                 total: response.data.total || 0,
                 page: response.data.page || 1,
                 isLoading: false,
+                _isFetchingResources: false,
             });
-            // Write-through to IDB (only for page 1 — first page is what we cache)
             if (page === 1 && resources.length > 0) {
                 offlineDb.putResources(topicId, resources).catch(() => { });
             }
         } catch (error: any) {
-            // Network error — try IDB cache
             const cached = await offlineDb.getResourcesByTopic(topicId);
             if (cached.length > 0) {
-                set({ resources: cached as unknown as Resource[], total: cached.length, page: 1, isLoading: false });
+                set({ resources: cached as unknown as Resource[], total: cached.length, page: 1, isLoading: false, _isFetchingResources: false });
             } else {
                 const errorMessage = error.response?.data?.detail || 'Failed to fetch resources';
-                set({ isLoading: false, error: errorMessage });
+                set({ isLoading: false, error: errorMessage, _isFetchingResources: false });
             }
         }
     },

@@ -27,6 +27,7 @@ interface Conversation {
 interface AIChatState {
     conversations: Conversation[];
     currentConversationId: string | null;
+    _conversationsCourseId: string | null;
     messages: Message[];
     isLoading: boolean;
     isSending: boolean;
@@ -43,13 +44,17 @@ interface AIChatState {
 export const useAIChatStore = create<AIChatState>()((set, get) => ({
     conversations: [],
     currentConversationId: null,
+    _conversationsCourseId: null,
     messages: [],
     isLoading: false,
     isSending: false,
     error: null,
 
     fetchConversations: async (courseId: string) => {
-        set({ isLoading: true, error: null });
+        // Skip if we already fetched for this course
+        if (get()._conversationsCourseId === courseId && get().conversations.length > 0) return;
+
+        set({ isLoading: true, error: null, _conversationsCourseId: courseId });
 
         // Offline: serve from IndexedDB
         if (typeof navigator !== 'undefined' && !navigator.onLine) {
@@ -175,6 +180,7 @@ export const useAIChatStore = create<AIChatState>()((set, get) => ({
     clearCurrentConversation: () => set({
         currentConversationId: null,
         messages: [],
+        _conversationsCourseId: null,
     }),
 
     clearError: () => set({ error: null }),

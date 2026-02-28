@@ -20,7 +20,7 @@ export default function CoursePage() {
     const router = useRouter();
     const courseId = params.courseId as string;
 
-    const { currentCourse, isLoading, selectCourse, createTopic, updateTopic, deleteTopic } = useCourseStore();
+    const { currentCourse, isLoading, selectCourse, createTopic, updateTopic, deleteTopic, clearCurrentCourse } = useCourseStore();
     const { streak, fetchStreak } = useProgressStore();
     const [showAddTopic, setShowAddTopic] = useState(false);
     const [newTopicTitle, setNewTopicTitle] = useState('');
@@ -146,6 +146,8 @@ export default function CoursePage() {
         setIsBatchCreating(true);
         try {
             await api.topics.batchCreate(currentCourse.id, topicsPayload);
+            // Bust the selectCourse guard so the refreshed topic list is fetched
+            clearCurrentCourse();
             await selectCourse(currentCourse.id);
             setBatchTopicsText('');
         } catch (error) {

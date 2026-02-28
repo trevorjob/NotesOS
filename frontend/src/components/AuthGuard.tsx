@@ -5,7 +5,7 @@
 
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth';
 import { api } from '@/lib/api';
@@ -20,6 +20,7 @@ export function AuthGuard({ children }: AuthGuardProps) {
     const clearSession = useAuthStore((state) => state.clearSession);
     const setUser = useAuthStore((state) => state.setUser);
     const [isValidating, setIsValidating] = useState(true);
+    const isValidatingRef = useRef(false);
 
     useEffect(() => {
         if (!isAuthenticated) {
@@ -27,6 +28,9 @@ export function AuthGuard({ children }: AuthGuardProps) {
             setIsValidating(false);
             return;
         }
+
+        if (isValidatingRef.current) return;
+        isValidatingRef.current = true;
 
         let cancelled = false;
 
@@ -42,9 +46,11 @@ export function AuthGuard({ children }: AuthGuardProps) {
                     router.replace('/login');
                 }
             } finally {
-                if (!cancelled) {
-                    setIsValidating(false);
-                }
+                // Always resolve loading — even if this run was "cancelled" by
+                // StrictMode cleanup, the second run was blocked by the ref
+                // guard so *this* run is the only one that can clear loading.
+                setIsValidating(false);
+                isValidatingRef.current = false;
             }
         };
 
