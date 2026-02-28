@@ -326,11 +326,12 @@ cmd_deploy() {
     info "Deploying update..."
 
     # Pull latest if it's a git repo
-    if [ -d "${SCRIPT_DIR}/.git" ]; then
-        info "Pulling latest code..."
-        cd "$SCRIPT_DIR"
-        sudo -u "$APP_USER" git pull || info "Git pull failed — using local files"
-    fi
+    # if [ -d "${SCRIPT_DIR}/.git" ]; then
+    #     info "Pulling latest code..."
+    #     cd "$SCRIPT_DIR"
+    #     sudo -u "$APP_USER" git pull || info "Git pull failed — using local files"
+    # fi
+    git pull
 
     # Sync files
     info "Syncing files to ${APP_DIR}..."
