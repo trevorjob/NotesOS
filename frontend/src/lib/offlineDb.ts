@@ -262,7 +262,7 @@ export const offlineDb = {
 
     async putResource(resource: Omit<NotesOSDB['resources']['value'], 'cachedAt'>): Promise<void> {
         const db = await getDB();
-        await db.put('resources', { ...resource, cachedAt: Date.now() });
+        await db.put('resources', { ...resource, cachedAt: Date.now() } as NotesOSDB['resources']['value']);
     },
 
     async deleteResource(id: string): Promise<void> {
