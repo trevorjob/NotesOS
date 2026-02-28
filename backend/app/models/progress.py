@@ -38,8 +38,12 @@ class StudySession(Base):
     __tablename__ = "study_sessions"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    topic_id = Column(UUID(as_uuid=True), ForeignKey("topics.id"), nullable=False)
+    user_id = Column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
+    topic_id = Column(
+        UUID(as_uuid=True), ForeignKey("topics.id"), nullable=False, index=True
+    )
 
     session_type = Column(
         SQLEnum(SessionType), default=SessionType.READING, nullable=False
@@ -62,9 +66,15 @@ class UserProgress(Base):
     __tablename__ = "user_progress"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id"), nullable=False)
-    topic_id = Column(UUID(as_uuid=True), ForeignKey("topics.id"), nullable=False)
+    user_id = Column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
+    course_id = Column(
+        UUID(as_uuid=True), ForeignKey("courses.id"), nullable=False, index=True
+    )
+    topic_id = Column(
+        UUID(as_uuid=True), ForeignKey("topics.id"), nullable=False, index=True
+    )
 
     mastery_level = Column(Numeric(3, 2), default=0.00, nullable=False)  # 0.00 - 1.00
     total_study_time = Column(Integer, default=0, nullable=False)  # Seconds
@@ -88,9 +98,15 @@ class AIConversation(Base):
     __tablename__ = "ai_conversations"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id"), nullable=True)
-    topic_id = Column(UUID(as_uuid=True), ForeignKey("topics.id"), nullable=True)
+    user_id = Column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
+    course_id = Column(
+        UUID(as_uuid=True), ForeignKey("courses.id"), nullable=True, index=True
+    )
+    topic_id = Column(
+        UUID(as_uuid=True), ForeignKey("topics.id"), nullable=True, index=True
+    )
 
     title = Column(String(255), nullable=True)  # Auto-generated title
 
@@ -111,7 +127,10 @@ class AIMessage(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     conversation_id = Column(
-        UUID(as_uuid=True), ForeignKey("ai_conversations.id"), nullable=False
+        UUID(as_uuid=True),
+        ForeignKey("ai_conversations.id"),
+        nullable=False,
+        index=True,
     )
 
     role = Column(SQLEnum(MessageRole), nullable=False)

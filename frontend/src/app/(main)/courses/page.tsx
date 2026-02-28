@@ -15,16 +15,11 @@ import { GlassCard, PageHeader, Button, Skeleton, Badge } from '@/components/ui'
 
 export default function CoursesPage() {
     const router = useRouter();
-    const { courses, isLoading, fetchCourses, selectCourse } = useCourseStore();
+    const { courses, isLoading, fetchCourses } = useCourseStore();
 
     useEffect(() => {
         fetchCourses();
     }, [fetchCourses]);
-
-    const handleCourseClick = async (courseId: string) => {
-        await selectCourse(courseId);
-        router.push(`/courses/${courseId}`);
-    };
 
     return (
         <MainLayout>
@@ -72,7 +67,7 @@ export default function CoursesPage() {
                         {courses.map((course) => (
                             <button
                                 key={course.id}
-                                onClick={() => handleCourseClick(course.id)}
+                                onClick={() => router.push(`/courses/${course.id}`)}
                                 className="text-left w-full"
                             >
                                 <GlassCard hover className="cursor-pointer h-full">

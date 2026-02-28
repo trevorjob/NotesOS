@@ -16,7 +16,7 @@ import { api } from '@/lib/api';
 
 export default function CreateCoursePage() {
     const router = useRouter();
-    const { createCourse, error, clearError, fetchCourses } = useCourseStore();
+    const { createCourse, error, clearError } = useCourseStore();
 
     const [mode, setMode] = useState<'single' | 'batch'>('single');
     const [code, setCode] = useState('');
@@ -52,7 +52,7 @@ export default function CreateCoursePage() {
                 }
 
                 await api.courses.batchCreate(parsed);
-                await fetchCourses();
+                await useCourseStore.getState().fetchCourses(true);
                 router.push('/courses');
             } else {
                 const course = await createCourse({

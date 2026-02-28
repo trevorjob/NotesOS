@@ -6,9 +6,10 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { Send, Loader2, ExternalLink } from 'lucide-react';
+import { Send, Loader2, ExternalLink, WifiOff } from 'lucide-react';
 import { Button } from './ui';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { useNetworkStore } from '@/stores/network';
 
 interface Message {
     role: 'user' | 'assistant';
@@ -31,6 +32,7 @@ export function AIChat({ messages, onSendMessage, isLoading = false }: AIChatPro
     const [input, setInput] = useState('');
     const [isSending, setIsSending] = useState(false);
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const { isOnline } = useNetworkStore();
 
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -133,27 +135,36 @@ export function AIChat({ messages, onSendMessage, isLoading = false }: AIChatPro
             </div>
 
             {/* Input */}
-            <form onSubmit={handleSubmit} className="p-4 border-t border-[var(--glass-border)]">
-                <div className="flex gap-2">
-                    <input
-                        type="text"
-                        value={input}
-                        onChange={(e) => setInput(e.target.value)}
-                        placeholder="Ask a question..."
-                        disabled={isSending}
-                        className="flex-1 px-4 py-2 bg-[var(--bg-sunken)] border border-[var(--glass-border)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)] disabled:opacity-50"
-                    />
-                    <Button
-                        type="submit"
-                        variant="primary"
-                        size="md"
-                        disabled={!input.trim() || isSending}
-                        className="px-4"
-                    >
-                        <Send className="w-4 h-4" />
-                    </Button>
-                </div>
-            </form>
+            <div className="p-4 border-t border-[var(--glass-border)]">
+                {isOnline ? (
+                    <form onSubmit={handleSubmit}>
+                        <div className="flex gap-2">
+                            <input
+                                type="text"
+                                value={input}
+                                onChange={(e) => setInput(e.target.value)}
+                                placeholder="Ask a question..."
+                                disabled={isSending}
+                                className="flex-1 px-4 py-2 bg-[var(--bg-sunken)] border border-[var(--glass-border)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)] disabled:opacity-50"
+                            />
+                            <Button
+                                type="submit"
+                                variant="primary"
+                                size="md"
+                                disabled={!input.trim() || isSending}
+                                className="px-4"
+                            >
+                                <Send className="w-4 h-4" />
+                            </Button>
+                        </div>
+                    </form>
+                ) : (
+                    <div className="flex items-center gap-2.5 px-4 py-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-700">
+                        <WifiOff className="w-3.5 h-3.5 shrink-0" />
+                        AI chat requires an internet connection. You can read previous conversations while offline.
+                    </div>
+                )}
+            </div>
         </div>
     );
 }

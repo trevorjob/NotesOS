@@ -13,6 +13,13 @@ from sqlalchemy.orm import selectinload
 from app.database import get_db
 from app.models import Course, CourseEnrollment, Topic, User
 from app.api.auth import get_current_user
+from app.services.cache import (
+    cache,
+    courses_list_key,
+    course_key,
+    topics_list_key,
+)
+from app.config import settings
 
 router = APIRouter()
 
@@ -77,34 +84,50 @@ async def list_courses(
     current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
     """List all courses the user is enrolled in."""
+    user_id = str(current_user.id)
+    cache_key = courses_list_key(user_id)
+
+    cached = await cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    # Single query — join enrollment counts in one go
     result = await db.execute(
         select(Course, CourseEnrollment.joined_at)
         .join(CourseEnrollment, CourseEnrollment.course_id == Course.id)
         .where(CourseEnrollment.user_id == current_user.id)
-        .where(Course.is_active == True)
+        .where(Course.is_active)
     )
+    rows = result.all()
 
-    courses = []
-    for course, joined_at in result.all():
-        # Get member count
-        member_count = await db.scalar(
-            select(func.count())
-            .select_from(CourseEnrollment)
-            .where(CourseEnrollment.course_id == course.id)
+    # Batch-fetch member counts for all returned courses in one query
+    course_ids = [course.id for course, _ in rows]
+    if course_ids:
+        counts_result = await db.execute(
+            select(CourseEnrollment.course_id, func.count().label("cnt"))
+            .where(CourseEnrollment.course_id.in_(course_ids))
+            .group_by(CourseEnrollment.course_id)
         )
-        courses.append(
-            {
-                "id": str(course.id),
-                "code": course.code,
-                "name": course.name,
-                "semester": course.semester,
-                "member_count": member_count,
-                "created_by": str(course.created_by),
-                "joined_at": joined_at.isoformat(),
-            }
-        )
+        member_counts = {str(row.course_id): row.cnt for row in counts_result}
+    else:
+        member_counts = {}
 
-    return {"courses": courses}
+    courses = [
+        {
+            "id": str(course.id),
+            "code": course.code,
+            "name": course.name,
+            "semester": course.semester,
+            "member_count": member_counts.get(str(course.id), 1),
+            "created_by": str(course.created_by),
+            "joined_at": joined_at.isoformat(),
+        }
+        for course, joined_at in rows
+    ]
+
+    payload = {"courses": courses}
+    await cache.set(cache_key, payload, settings.CACHE_TTL_COURSES)
+    return payload
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -114,7 +137,6 @@ async def create_course(
     db: AsyncSession = Depends(get_db),
 ):
     """Create a new course."""
-    # Generate invite code if private
     invite_code = None if request.is_public else generate_invite_code()
 
     course = Course(
@@ -134,6 +156,9 @@ async def create_course(
     db.add(enrollment)
     await db.commit()
     await db.refresh(course)
+
+    # Invalidate user's course list cache
+    await cache.delete(courses_list_key(str(current_user.id)))
 
     return {
         "course": {
@@ -158,26 +183,21 @@ async def join_course(
     course = None
 
     if request.invite_code:
-        # Join by invite code
         result = await db.execute(
             select(Course).where(Course.invite_code == request.invite_code)
         )
         course = result.scalar_one_or_none()
 
     elif request.course_id:
-        # Join by ID (for public courses)
         result = await db.execute(
-            select(Course)
-            .where(Course.id == request.course_id)
-            .where(Course.is_public == True)
+            select(Course).where(Course.id == request.course_id).where(Course.is_public)
         )
         course = result.scalar_one_or_none()
 
     elif request.search:
-        # Search by code or name
         result = await db.execute(
             select(Course)
-            .where(Course.is_public == True)
+            .where(Course.is_public)
             .where(
                 Course.code.ilike(f"%{request.search}%")
                 | Course.name.ilike(f"%{request.search}%")
@@ -203,17 +223,19 @@ async def join_course(
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Already enrolled in this course")
 
-    # Enroll
     enrollment = CourseEnrollment(user_id=current_user.id, course_id=course.id)
     db.add(enrollment)
     await db.commit()
 
-    # Get classmate count
     member_count = await db.scalar(
         select(func.count())
         .select_from(CourseEnrollment)
         .where(CourseEnrollment.course_id == course.id)
     )
+
+    # Invalidate caches
+    await cache.delete(courses_list_key(str(current_user.id)))
+    await cache.delete(course_key(str(course.id)))
 
     return {
         "message": f"Welcome to {course.name}! 👋",
@@ -229,6 +251,19 @@ async def get_course(
     db: AsyncSession = Depends(get_db),
 ):
     """Get course details with topics."""
+    cache_key = course_key(course_id)
+    cached = await cache.get(cache_key)
+    if cached is not None:
+        # Still verify enrollment — enrollment check is not cached
+        enrollment = await db.execute(
+            select(CourseEnrollment)
+            .where(CourseEnrollment.user_id == current_user.id)
+            .where(CourseEnrollment.course_id == course_id)
+        )
+        if not enrollment.scalar_one_or_none():
+            raise HTTPException(status_code=403, detail="Not enrolled in this course")
+        return cached
+
     # Verify enrollment
     enrollment = await db.execute(
         select(CourseEnrollment)
@@ -249,7 +284,7 @@ async def get_course(
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
 
-    return {
+    payload = {
         "course": {
             "id": str(course.id),
             "code": course.code,
@@ -269,6 +304,9 @@ async def get_course(
         ],
     }
 
+    await cache.set(cache_key, payload, settings.CACHE_TTL_COURSES)
+    return payload
+
 
 @router.post("/{course_id}/topics", status_code=status.HTTP_201_CREATED)
 async def create_topic(
@@ -278,7 +316,6 @@ async def create_topic(
     db: AsyncSession = Depends(get_db),
 ):
     """Create a new topic in a course."""
-    # Verify enrollment
     enrollment = await db.execute(
         select(CourseEnrollment)
         .where(CourseEnrollment.user_id == current_user.id)
@@ -296,6 +333,10 @@ async def create_topic(
     db.add(topic)
     await db.commit()
     await db.refresh(topic)
+
+    # Invalidate course + topic list caches
+    await cache.delete(course_key(course_id))
+    await cache.delete(topics_list_key(course_id))
 
     return {
         "topic": {
@@ -319,7 +360,6 @@ async def batch_create_courses(
 ):
     """
     Create multiple courses at once.
-
     Max 10 courses per request. All succeed or all fail.
     """
     if len(request.courses) > 10:
@@ -344,7 +384,6 @@ async def batch_create_courses(
         db.add(course)
         await db.flush()
 
-        # Auto-enroll creator
         enrollment = CourseEnrollment(user_id=current_user.id, course_id=course.id)
         db.add(enrollment)
 
@@ -358,6 +397,9 @@ async def batch_create_courses(
         )
 
     await db.commit()
+
+    # Invalidate user's course list cache
+    await cache.delete(courses_list_key(str(current_user.id)))
 
     return {
         "message": f"Created {len(created_courses)} courses",
@@ -374,7 +416,6 @@ async def batch_create_topics(
 ):
     """
     Create multiple topics at once.
-
     Max 20 topics per request. All succeed or all fail.
     """
     if len(request.topics) > 20:
@@ -382,7 +423,6 @@ async def batch_create_topics(
             status_code=400, detail="Maximum 20 topics per batch request"
         )
 
-    # Verify enrollment
     enrollment = await db.execute(
         select(CourseEnrollment)
         .where(CourseEnrollment.user_id == current_user.id)
@@ -412,6 +452,10 @@ async def batch_create_topics(
         )
 
     await db.commit()
+
+    # Invalidate course detail + topic list caches
+    await cache.delete(course_key(course_id))
+    await cache.delete(topics_list_key(course_id))
 
     return {
         "message": f"Created {len(created_topics)} topics",

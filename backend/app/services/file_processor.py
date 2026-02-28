@@ -65,29 +65,13 @@ class FileProcessor:
             }
 
         elif file_format.lower() in [".jpg", ".jpeg", ".png", ".tiff", ".bmp"]:
-            # Use hybrid OCR for images (with confidence scoring + fallback)
-            from app.services.hybrid_ocr import hybrid_ocr
-
-            ocr_result = await hybrid_ocr.process_handwritten_note(
-                file_bytes,
-                is_premium_user=False,  # TODO: get from user context
+            # Images are now processed via GPT-4o Vision, which requires a URL.
+            # Call vision_transcribe.transcribe_images([url]) directly from the
+            # upload handler (after Cloudinary upload provides the URL).
+            raise NotImplementedError(
+                "Image transcription requires a URL — use "
+                "vision_transcribe.transcribe_images([url]) instead."
             )
-
-            if is_handwritten is None:
-                is_handwritten = True
-
-            source_type = "handwritten" if is_handwritten else "printed"
-
-            return {
-                "text": ocr_result["text"],
-                "source_type": source_type,
-                "needs_cleaning": is_handwritten,
-                "ocr_confidence": ocr_result["confidence"],
-                "ocr_provider": ocr_result["provider"],
-                "needs_aggressive_cleanup": ocr_result.get(
-                    "needs_aggressive_cleanup", False
-                ),
-            }
 
         else:
             raise ValueError(f"Unsupported file format: {file_format}")

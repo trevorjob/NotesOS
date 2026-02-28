@@ -39,8 +39,12 @@ class Test(Base):
     __tablename__ = "tests"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id"), nullable=False)
-    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    course_id = Column(
+        UUID(as_uuid=True), ForeignKey("courses.id"), nullable=False, index=True
+    )
+    created_by = Column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
 
     title = Column(String(255), nullable=False)
     test_type = Column(SQLEnum(TestType), default=TestType.PRACTICE, nullable=False)
@@ -48,7 +52,6 @@ class Test(Base):
     question_count = Column(Integer, nullable=False, default=0)
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-
 
     # Relationships
     course = relationship("Course", back_populates="tests")
@@ -66,7 +69,9 @@ class TestQuestion(Base):
     __tablename__ = "test_questions"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    test_id = Column(UUID(as_uuid=True), ForeignKey("tests.id"), nullable=False)
+    test_id = Column(
+        UUID(as_uuid=True), ForeignKey("tests.id"), nullable=False, index=True
+    )
 
     question_text = Column(Text, nullable=False)
     question_type = Column(
@@ -90,8 +95,12 @@ class TestAttempt(Base):
     __tablename__ = "test_attempts"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    test_id = Column(UUID(as_uuid=True), ForeignKey("tests.id"), nullable=False)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    test_id = Column(
+        UUID(as_uuid=True), ForeignKey("tests.id"), nullable=False, index=True
+    )
+    user_id = Column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
 
     started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     completed_at = Column(DateTime, nullable=True)
@@ -113,10 +122,10 @@ class TestAnswer(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     attempt_id = Column(
-        UUID(as_uuid=True), ForeignKey("test_attempts.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("test_attempts.id"), nullable=False, index=True
     )
     question_id = Column(
-        UUID(as_uuid=True), ForeignKey("test_questions.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("test_questions.id"), nullable=False, index=True
     )
 
     # Answer content

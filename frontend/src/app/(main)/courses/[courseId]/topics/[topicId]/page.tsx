@@ -7,12 +7,13 @@
 
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, BookOpen, FileText, Sparkles, Loader2, ChevronDown, ChevronUp, ExternalLink } from 'lucide-react';
+import { ArrowLeft, BookOpen, FileText, Sparkles, Loader2, ChevronDown, ChevronUp, ExternalLink, WifiOff } from 'lucide-react';
 import { useCourseStore } from '@/stores/courses';
 import { useResourcesStore } from '@/stores/resources';
 import { useAIChatStore } from '@/stores/aiChat';
 import { useProgressStore } from '@/stores/progress';
 import { useAuthStore } from '@/stores/auth';
+import { useNetworkStore } from '@/stores/network';
 import { GlassCard, Button } from '@/components/ui';
 import { ResourceCard } from '@/components/ResourceCard';
 import { FileUpload } from '@/components/FileUpload';
@@ -43,7 +44,7 @@ export default function TopicPage() {
         factChecks,
         isLoadingFactChecks,
         updateResource,
-        reprocessResourceOCR,
+        retranscribeResource,
     } = useResourcesStore();
 
     const {
@@ -55,8 +56,14 @@ export default function TopicPage() {
     } = useAIChatStore();
 
     const { startSession, endSession } = useProgressStore();
+    const { isOnline } = useNetworkStore();
     const sessionIdRef = useRef<string | null>(null);
     const wsClientRef = useRef<WebSocketClient | null>(null);
+    // In-flight guards — prevent StrictMode double-invoke from creating duplicate
+    // DB records (startSession) or firing redundant network requests.
+    const isFetchingTopicRef = useRef(false);
+    const isFetchingResearchRef = useRef(false);
+    const isStartingSessionRef = useRef(false);
 
     const [topic, setTopic] = useState<any>(null);
     const [research, setResearch] = useState<any>(null);
@@ -70,15 +77,12 @@ export default function TopicPage() {
 
     // Load topic data
     useEffect(() => {
-        const loadTopic = async () => {
-            try {
-                const response = await api.topics.getById(topicId);
-                setTopic(response.data);
-            } catch (error) {
-                console.error('Failed to load topic:', error);
-            }
-        };
-        loadTopic();
+        if (isFetchingTopicRef.current) return;
+        isFetchingTopicRef.current = true;
+        api.topics.getById(topicId)
+            .then((response) => setTopic(response.data))
+            .catch((error) => console.error('Failed to load topic:', error))
+            .finally(() => { isFetchingTopicRef.current = false; });
     }, [topicId]);
 
     // Load resources
@@ -88,19 +92,13 @@ export default function TopicPage() {
 
     // Load research
     useEffect(() => {
-        const loadResearch = async () => {
-            setResearchLoading(true);
-            try {
-                const response = await api.ai.getResearch(topicId);
-                setResearch(response.data);
-            } catch (error) {
-                // Research doesn't exist yet
-                setResearch(null);
-            } finally {
-                setResearchLoading(false);
-            }
-        };
-        loadResearch();
+        if (isFetchingResearchRef.current) return;
+        isFetchingResearchRef.current = true;
+        setResearchLoading(true);
+        api.ai.getResearch(topicId)
+            .then((response) => setResearch(response.data))
+            .catch(() => setResearch(null))
+            .finally(() => { setResearchLoading(false); isFetchingResearchRef.current = false; });
     }, [topicId]);
 
     // Load conversations
@@ -111,8 +109,11 @@ export default function TopicPage() {
         return () => clearCurrentConversation();
     }, [courseId, fetchConversations, clearCurrentConversation]);
 
-    // Track reading session for progress
+    // Track reading session for progress — guarded to avoid creating duplicate
+    // session records from React StrictMode's double effect invocation.
     useEffect(() => {
+        if (isStartingSessionRef.current) return;
+        isStartingSessionRef.current = true;
         startSession(topicId, 'reading').then((id) => {
             sessionIdRef.current = id;
         });
@@ -120,6 +121,7 @@ export default function TopicPage() {
             const sid = sessionIdRef.current;
             if (sid) endSession(sid);
             sessionIdRef.current = null;
+            isStartingSessionRef.current = false;
         };
     }, [topicId, startSession, endSession]);
 
@@ -132,9 +134,9 @@ export default function TopicPage() {
             onMessage: (message: WebSocketMessage) => {
                 if (message.type === 'processing_status') {
                     updateResourceProcessingStatus(message.resource_id, message.status);
-                } else if (message.type === 'fact_check_complete') {
-                    if (message.resource_id) {
-                        fetchFactChecks(message.resource_id);
+                } else if (message.type === 'fact_check:complete') {
+                    if (message.data?.resource_id) {
+                        fetchFactChecks(message.data.resource_id);
                     }
                 } else if (message.type === 'resource_created' || message.type === 'resource_updated') {
                     fetchResources(topicId);
@@ -211,11 +213,11 @@ export default function TopicPage() {
         }
     };
 
-    const handleReprocessOCR = async (resourceId: string) => {
+    const handleRetranscribe = async (resourceId: string) => {
         try {
-            await reprocessResourceOCR(resourceId);
+            await retranscribeResource(resourceId);
         } catch (error) {
-            console.error('Failed to reprocess OCR:', error);
+            console.error('Failed to re-transcribe resource:', error);
         }
     };
 
@@ -258,7 +260,7 @@ export default function TopicPage() {
     return (
         <div className="min-h-screen bg-[var(--bg-base)] pt-16">
             {/* Header */}
-            <div className="border-b border-[var(--glass-border)] bg-[var(--bg-base)]/80 backdrop-blur-md sticky top-16 z-30">
+            <div className="border-b border-[var(--glass-border)] bg-[var(--bg-base)]/80 backdrop-blur-md z-30">
                 <div className="max-w-5xl mx-auto px-6 md:px-12 py-4">
                     <button
                         onClick={() => router.push(`/courses/${courseId}`)}
@@ -368,10 +370,16 @@ export default function TopicPage() {
                                         <Button
                                             onClick={handleGenerateResearch}
                                             variant="primary"
-                                            disabled={generatingResearch}
+                                            disabled={generatingResearch || !isOnline}
+                                            title={!isOnline ? 'AI requires internet' : undefined}
                                         >
                                             {generatingResearch ? 'Generating...' : 'Generate Research'}
                                         </Button>
+                                        {!isOnline && (
+                                            <p className="text-xs text-[var(--text-tertiary)] mt-2">
+                                                AI features require an internet connection
+                                            </p>
+                                        )}
                                     </div>
                                 )}
                             </div>
@@ -395,62 +403,71 @@ export default function TopicPage() {
                         </div>
                     </div>
 
-                    {/* Upload Mode Tabs */}
-                    <div className="flex gap-2 mb-4">
-                        <button
-                            onClick={() => setUploadMode('files')}
-                            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${uploadMode === 'files'
-                                ? 'bg-[var(--accent-primary)] text-white'
-                                : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)]'
-                                }`}
-                        >
-                            Upload Files
-                        </button>
-                        <button
-                            onClick={() => setUploadMode('text')}
-                            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${uploadMode === 'text'
-                                ? 'bg-[var(--accent-primary)] text-white'
-                                : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)]'
-                                }`}
-                        >
-                            Write Notes
-                        </button>
-                    </div>
+                    {/* Upload Mode Tabs — hidden when offline */}
+                    {isOnline && (
+                        <div className="flex gap-2 mb-4">
+                            <button
+                                onClick={() => setUploadMode('files')}
+                                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${uploadMode === 'files'
+                                    ? 'bg-[var(--accent-primary)] text-white'
+                                    : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)]'
+                                    }`}
+                            >
+                                Upload Files
+                            </button>
+                            <button
+                                onClick={() => setUploadMode('text')}
+                                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${uploadMode === 'text'
+                                    ? 'bg-[var(--accent-primary)] text-white'
+                                    : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)]'
+                                    }`}
+                            >
+                                Write Notes
+                            </button>
+                        </div>
+                    )}
 
-                    {/* Upload/Create Form */}
-                    <div className="mb-6">
-                        {uploadMode === 'files' ? (
-                            <FileUpload
-                                onUpload={handleUpload}
-                                isUploading={isUploading}
-                                uploadProgress={uploadProgress}
-                            />
-                        ) : (
-                            <div className="space-y-3">
-                                <input
-                                    type="text"
-                                    placeholder="Title (optional)"
-                                    value={textResourceTitle}
-                                    onChange={(e) => setTextResourceTitle(e.target.value)}
-                                    className="w-full px-4 py-2 bg-[var(--bg-sunken)] border border-[var(--glass-border)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]"
+                    {/* Upload/Create Form — hidden when offline */}
+                    {isOnline ? (
+                        <div className="mb-6">
+                            {uploadMode === 'files' ? (
+                                <FileUpload
+                                    onUpload={handleUpload}
+                                    isUploading={isUploading}
+                                    uploadProgress={uploadProgress}
                                 />
-                                <textarea
-                                    placeholder="Write your notes here... (supports Markdown)"
-                                    value={textResourceContent}
-                                    onChange={(e) => setTextResourceContent(e.target.value)}
-                                    rows={8}
-                                    className="w-full px-4 py-3 bg-[var(--bg-sunken)] border border-[var(--glass-border)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)] font-mono"
-                                />
-                                <button
-                                    onClick={handleCreateTextResource}
-                                    disabled={!textResourceContent.trim() || isCreatingText}
-                                    className="w-full px-4 py-2 bg-[var(--accent-primary)] hover:bg-[var(--accent-hover)] text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                                >
-                                    {isCreatingText ? 'Saving...' : 'Save Notes'}
-                                </button>
-                            </div>
-                        )}
-                    </div>
+                            ) : (
+                                <div className="space-y-3">
+                                    <input
+                                        type="text"
+                                        placeholder="Title (optional)"
+                                        value={textResourceTitle}
+                                        onChange={(e) => setTextResourceTitle(e.target.value)}
+                                        className="w-full px-4 py-2 bg-[var(--bg-sunken)] border border-[var(--glass-border)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]"
+                                    />
+                                    <textarea
+                                        placeholder="Write your notes here... (supports Markdown)"
+                                        value={textResourceContent}
+                                        onChange={(e) => setTextResourceContent(e.target.value)}
+                                        rows={8}
+                                        className="w-full px-4 py-3 bg-[var(--bg-sunken)] border border-[var(--glass-border)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)] font-mono"
+                                    />
+                                    <button
+                                        onClick={handleCreateTextResource}
+                                        disabled={!textResourceContent.trim() || isCreatingText}
+                                        className="w-full px-4 py-2 bg-[var(--accent-primary)] hover:bg-[var(--accent-hover)] text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        {isCreatingText ? 'Saving...' : 'Save Notes'}
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    ) : (
+                        <div className="mb-6 px-4 py-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-700 flex items-center gap-2">
+                            <WifiOff className="w-3.5 h-3.5 shrink-0" />
+                            Uploading and writing notes requires an internet connection.
+                        </div>
+                    )}
 
                     {/* Resource list */}
                     {resourcesLoading ? (
@@ -478,7 +495,7 @@ export default function TopicPage() {
                                     onDelete={handleDeleteResource}
                                     onFactCheck={handleFactCheck}
                                     onUpdate={handleUpdateResource}
-                                    onReprocess={handleReprocessOCR}
+                                    onReprocess={handleRetranscribe}
                                     factChecks={factChecks[resource.id] || []}
                                     isLoadingFactChecks={isLoadingFactChecks[resource.id] || false}
                                 />

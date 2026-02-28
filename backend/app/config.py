@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     VOYAGE_AI_API_KEY: str = ""
     SERPER_API_KEY: str = ""
+    VISION_MODEL: str = "gpt-4o"  # Model used for image transcription
 
     # Cost-Optimized AI Provider
     PRIMARY_AI_PROVIDER: str = "deepseek"  # or "claude" for upgrade
@@ -67,6 +68,12 @@ class Settings(BaseSettings):
     ENABLE_PRE_CLASS_RESEARCH: bool = True
     ENABLE_VOICE_GRADING: bool = True
 
+    # Cache (Redis read-through for GET endpoints)
+    CACHE_ENABLED: bool = True
+    CACHE_TTL_COURSES: int = 90  # seconds
+    CACHE_TTL_TOPICS: int = 60
+    CACHE_TTL_RESOURCES: int = 60
+
     # CORS — comma-separated in .env, e.g. https://example.com,https://other.com
     CORS_ORIGINS: str = "http://localhost:3000"
 
@@ -76,6 +83,7 @@ class Settings(BaseSettings):
         raw = self.CORS_ORIGINS.strip()
         if raw.startswith("["):
             import json
+
             return json.loads(raw)
         return [o.strip() for o in raw.split(",") if o.strip()]
 

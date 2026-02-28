@@ -5,6 +5,7 @@
 
 import { create } from 'zustand';
 import { api } from '@/lib/api';
+import { offlineDb } from '@/lib/offlineDb';
 
 interface Message {
     role: 'user' | 'assistant';
@@ -26,6 +27,7 @@ interface Conversation {
 interface AIChatState {
     conversations: Conversation[];
     currentConversationId: string | null;
+    _conversationsCourseId: string | null;
     messages: Message[];
     isLoading: boolean;
     isSending: boolean;
@@ -42,20 +44,36 @@ interface AIChatState {
 export const useAIChatStore = create<AIChatState>()((set, get) => ({
     conversations: [],
     currentConversationId: null,
+    _conversationsCourseId: null,
     messages: [],
     isLoading: false,
     isSending: false,
     error: null,
 
     fetchConversations: async (courseId: string) => {
-        set({ isLoading: true, error: null });
+        // Skip if we already fetched for this course
+        if (get()._conversationsCourseId === courseId && get().conversations.length > 0) return;
+
+        set({ isLoading: true, error: null, _conversationsCourseId: courseId });
+
+        // Offline: serve from IndexedDB
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+            const cached = await offlineDb.getConversationsByCourse(courseId);
+            set({ conversations: cached as Conversation[], isLoading: false });
+            if (cached.length > 0 && !get().currentConversationId) {
+                await get().loadConversation(cached[0].id);
+            }
+            return;
+        }
+
         try {
             const response = await api.ai.getConversations(courseId);
             const conversations = response.data || [];
-            set({
-                conversations,
-                isLoading: false,
-            });
+            set({ conversations, isLoading: false });
+            // Write-through to IDB
+            if (conversations.length > 0) {
+                offlineDb.putConversations(courseId, conversations).catch(() => { });
+            }
 
             // Auto-load most recent conversation if exists and no current conversation
             const { currentConversationId } = get();
@@ -63,28 +81,56 @@ export const useAIChatStore = create<AIChatState>()((set, get) => ({
                 await get().loadConversation(conversations[0].id);
             }
         } catch (error: any) {
-            const errorMessage =
-                error.response?.data?.detail || 'Failed to fetch conversations';
-            set({ isLoading: false, error: errorMessage });
+            // Network error — try IDB cache
+            const cached = await offlineDb.getConversationsByCourse(courseId);
+            if (cached.length > 0) {
+                set({ conversations: cached as Conversation[], isLoading: false });
+                if (!get().currentConversationId) {
+                    await get().loadConversation(cached[0].id);
+                }
+            } else {
+                const errorMessage = error.response?.data?.detail || 'Failed to fetch conversations';
+                set({ isLoading: false, error: errorMessage });
+            }
         }
     },
 
     loadConversation: async (conversationId: string) => {
         set({ isLoading: true, error: null, currentConversationId: conversationId });
+
+        // Offline: serve from IndexedDB
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+            const cached = await offlineDb.getMessages(conversationId);
+            set({ messages: cached as Message[], isLoading: false });
+            return;
+        }
+
         try {
             const response = await api.ai.getConversation(conversationId);
-            set({
-                messages: response.data || [],
-                isLoading: false,
-            });
+            const messages = response.data || [];
+            set({ messages, isLoading: false });
+            // Write-through to IDB
+            if (messages.length > 0) {
+                offlineDb.putMessages(conversationId, messages).catch(() => { });
+            }
         } catch (error: any) {
-            const errorMessage =
-                error.response?.data?.detail || 'Failed to load conversation';
-            set({ isLoading: false, error: errorMessage });
+            // Network error — try IDB cache
+            const cached = await offlineDb.getMessages(conversationId);
+            if (cached.length > 0) {
+                set({ messages: cached as Message[], isLoading: false });
+            } else {
+                const errorMessage = error.response?.data?.detail || 'Failed to load conversation';
+                set({ isLoading: false, error: errorMessage });
+            }
         }
     },
 
     askQuestion: async (courseId: string, question: string, topicId?: string) => {
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+            set({ error: 'AI chat requires an internet connection.' });
+            return;
+        }
+
         set({ isSending: true, error: null });
 
         // Optimistically add user message
@@ -134,6 +180,7 @@ export const useAIChatStore = create<AIChatState>()((set, get) => ({
     clearCurrentConversation: () => set({
         currentConversationId: null,
         messages: [],
+        _conversationsCourseId: null,
     }),
 
     clearError: () => set({ error: null }),

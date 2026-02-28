@@ -5,6 +5,7 @@
 
 import { create } from 'zustand';
 import { api } from '@/lib/api';
+import { WebSocketClient } from '@/lib/websocket';
 
 export interface TestQuestion {
     id: string;
@@ -48,9 +49,19 @@ interface TestsState {
 
     generateTest: (courseId: string, topicIds: string[], questionCount: number, difficulty?: string, questionTypes?: string[]) => Promise<Test>;
     getTest: (testId: string) => Promise<Test>;
-    submitAnswers: (testId: string, answers: Array<{ question_id: string; answer_text: string }>) => Promise<string>;
-    submitVoiceAnswer: (testId: string, questionId: string, audioFile: File, attemptId?: string) => Promise<string>;
+    /** Single-request submission for text AND voice answers. */
+    submitFull: (
+        testId: string,
+        answers: Array<{ question_id: string; answer_text: string; is_voice?: boolean }>,
+        voiceFiles?: Record<string, File>,
+    ) => Promise<string>;
     getTestResults: (attemptId: string) => Promise<TestResults>;
+    /**
+     * Open a WebSocket for a course and wait for grading:complete with a matching attemptId.
+     * Fetches results and calls onComplete once grading finishes.
+     * Cleans up automatically on completion or after a 5-minute timeout.
+     */
+    listenForGrading: (attemptId: string, courseId: string, onComplete: (results: TestResults) => void) => () => void;
     clearTest: () => void;
     clearError: () => void;
 }
@@ -92,37 +103,17 @@ export const useTestsStore = create<TestsState>()((set, get) => ({
         return test;
     },
 
-    submitAnswers: async (testId, answers) => {
+    submitFull: async (testId, answers, voiceFiles) => {
         set({ isSubmitting: true, error: null });
         try {
-            const response = await api.ai.submitAnswers(testId, answers.map((a) => ({
-                question_id: a.question_id,
-                answer_text: a.answer_text,
-            })));
-            const attemptId = response.data.answer_id;
+            const response = await api.ai.submitFull(testId, answers, voiceFiles);
+            const attemptId: string = response.data.attempt_id;
             set({ lastAttemptId: attemptId, isSubmitting: false });
             return attemptId;
         } catch (err: unknown) {
             const message = err && typeof err === 'object' && 'response' in err
                 ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
-                : 'Failed to submit';
-            set({ isSubmitting: false, error: String(message) });
-            throw new Error(String(message));
-        }
-    },
-
-    submitVoiceAnswer: async (testId, questionId, audioFile, attemptId) => {
-        set({ isSubmitting: true, error: null });
-        try {
-            const response = await api.ai.submitVoiceAnswer(testId, questionId, audioFile, attemptId);
-            const data = response.data as { answer_id: string; attempt_id?: string };
-            const newAttemptId = data.attempt_id ?? data.answer_id;
-            set((s) => ({ lastAttemptId: newAttemptId || s.lastAttemptId, isSubmitting: false }));
-            return newAttemptId;
-        } catch (err: unknown) {
-            const message = err && typeof err === 'object' && 'response' in err
-                ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
-                : 'Failed to submit voice answer';
+                : 'Failed to submit answers';
             set({ isSubmitting: false, error: String(message) });
             throw new Error(String(message));
         }
@@ -133,6 +124,37 @@ export const useTestsStore = create<TestsState>()((set, get) => ({
         const results = response.data;
         set({ results });
         return results;
+    },
+
+    listenForGrading: (attemptId, courseId, onComplete) => {
+        const ws = new WebSocketClient(courseId, {
+            onMessage: async (message) => {
+                if (message.type === 'grading:complete' && message.attempt_id === attemptId) {
+                    clearTimeout(timeout);
+                    ws.disconnect();
+                    try {
+                        const response = await api.ai.getTestResults(attemptId);
+                        const results: TestResults = response.data;
+                        set({ results });
+                        onComplete(results);
+                    } catch {
+                        // Best-effort — page will show what's available
+                    }
+                }
+            },
+        });
+        ws.connect();
+
+        // Safety timeout: disconnect after 5 minutes if grading never completes
+        const timeout = setTimeout(() => {
+            ws.disconnect();
+        }, 5 * 60 * 1000);
+
+        // Return cleanup function for useEffect
+        return () => {
+            clearTimeout(timeout);
+            ws.disconnect();
+        };
     },
 
     clearTest: () => set({ currentTest: null, lastAttemptId: null, results: null }),

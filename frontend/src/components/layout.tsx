@@ -20,21 +20,22 @@ interface GlassNavProps {
         code: string;
         name: string;
     };
-    onCourseSwitch?: () => void;
     onProfileClick?: () => void;
     streak?: number;
 }
 
-export function GlassNav({ currentCourse, onCourseSwitch, onProfileClick, streak }: GlassNavProps) {
+export function GlassNav({ currentCourse, onProfileClick, streak }: GlassNavProps) {
     const [showCourseDropdown, setShowCourseDropdown] = useState(false);
     const { courses, fetchCourses } = useCourseStore();
     const router = useRouter();
     const dropdownRef = useRef<HTMLDivElement>(null);
 
-    // Load courses for dropdown
+    // Only fetch if the list is empty (first visit or store was cleared).
+    // fetchCourses() also guards internally against in-flight duplication,
+    // so page-level fetches and the nav never fire simultaneously.
     useEffect(() => {
-        fetchCourses();
-    }, [fetchCourses]);
+        if (courses.length === 0) fetchCourses();
+    }, [courses.length, fetchCourses]);
 
     // Close dropdown on outside click
     useEffect(() => {

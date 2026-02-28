@@ -5,6 +5,7 @@
 
 import { create } from 'zustand';
 import { api } from '@/lib/api';
+import { offlineDb } from '@/lib/offlineDb';
 
 interface ResourceFile {
     id: string;
@@ -41,6 +42,7 @@ interface ResourcesState {
     resources: Resource[];
     currentTopicId: string | null;
     isLoading: boolean;
+    _isFetchingResources: boolean;
     isUploading: boolean;
     uploadProgress: number;
     error: string | null;
@@ -59,7 +61,7 @@ interface ResourcesState {
     fetchFactChecks: (resourceId: string) => Promise<void>;
     updateResourceProcessingStatus: (resourceId: string, status: 'processing' | 'completed' | 'failed') => void;
     updateResource: (resourceId: string, data: Partial<{ title: string; description: string }>) => Promise<void>;
-    reprocessResourceOCR: (resourceId: string) => Promise<void>;
+    retranscribeResource: (resourceId: string) => Promise<void>;
     clearError: () => void;
 }
 
@@ -67,6 +69,7 @@ export const useResourcesStore = create<ResourcesState>()((set, get) => ({
     resources: [],
     currentTopicId: null,
     isLoading: false,
+    _isFetchingResources: false,
     isUploading: false,
     uploadProgress: 0,
     error: null,
@@ -77,19 +80,40 @@ export const useResourcesStore = create<ResourcesState>()((set, get) => ({
     isLoadingFactChecks: {},
 
     fetchResources: async (topicId: string, page = 1) => {
-        set({ isLoading: true, error: null, currentTopicId: topicId });
+        // Dedup parallel/StrictMode double-invoke calls for the same topic+page
+        const state = get();
+        if (state._isFetchingResources && state.currentTopicId === topicId) return;
+
+        set({ isLoading: true, error: null, currentTopicId: topicId, _isFetchingResources: true });
+
+        // Offline: serve from IndexedDB (only page 1; cached data isn't paginated)
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+            const cached = await offlineDb.getResourcesByTopic(topicId);
+            set({ resources: cached as unknown as Resource[], total: cached.length, page: 1, isLoading: false, _isFetchingResources: false });
+            return;
+        }
+
         try {
             const response = await api.resources.getByTopic(topicId, page, get().pageSize);
+            const resources = response.data.resources || [];
             set({
-                resources: response.data.resources || [],
+                resources,
                 total: response.data.total || 0,
                 page: response.data.page || 1,
                 isLoading: false,
+                _isFetchingResources: false,
             });
+            if (page === 1 && resources.length > 0) {
+                offlineDb.putResources(topicId, resources).catch(() => { });
+            }
         } catch (error: any) {
-            const errorMessage =
-                error.response?.data?.detail || 'Failed to fetch resources';
-            set({ isLoading: false, error: errorMessage });
+            const cached = await offlineDb.getResourcesByTopic(topicId);
+            if (cached.length > 0) {
+                set({ resources: cached as unknown as Resource[], total: cached.length, page: 1, isLoading: false, _isFetchingResources: false });
+            } else {
+                const errorMessage = error.response?.data?.detail || 'Failed to fetch resources';
+                set({ isLoading: false, error: errorMessage, _isFetchingResources: false });
+            }
         }
     },
 
@@ -138,6 +162,9 @@ export const useResourcesStore = create<ResourcesState>()((set, get) => ({
         try {
             await api.resources.delete(resourceId);
 
+            // Evict from IDB cache
+            offlineDb.deleteResource(resourceId).catch(() => { });
+
             // Refresh current topic's resources
             const { currentTopicId } = get();
             if (currentTopicId) {
@@ -170,17 +197,35 @@ export const useResourcesStore = create<ResourcesState>()((set, get) => ({
             isLoadingFactChecks: { ...state.isLoadingFactChecks, [resourceId]: true },
             error: null,
         }));
+
+        // Offline: serve from IndexedDB
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+            const cached = await offlineDb.getFactChecks(resourceId);
+            set((state) => ({
+                factChecks: { ...state.factChecks, [resourceId]: cached as any[] },
+                isLoadingFactChecks: { ...state.isLoadingFactChecks, [resourceId]: false },
+            }));
+            return;
+        }
+
         try {
             const response = await api.ai.getFactChecks(resourceId);
+            const checks = response.data || [];
             set((state) => ({
-                factChecks: { ...state.factChecks, [resourceId]: response.data },
+                factChecks: { ...state.factChecks, [resourceId]: checks },
                 isLoadingFactChecks: { ...state.isLoadingFactChecks, [resourceId]: false },
             }));
+            // Write-through to IDB
+            if (checks.length > 0) {
+                offlineDb.putFactChecks(resourceId, checks).catch(() => { });
+            }
         } catch (error: any) {
+            // Network error — try IDB cache
+            const cached = await offlineDb.getFactChecks(resourceId);
             set((state) => ({
+                factChecks: { ...state.factChecks, [resourceId]: cached as any[] },
                 isLoadingFactChecks: { ...state.isLoadingFactChecks, [resourceId]: false },
             }));
-            // Silently fail - fact checks may not exist yet
         }
     },
 
@@ -214,10 +259,10 @@ export const useResourcesStore = create<ResourcesState>()((set, get) => ({
         }
     },
 
-    reprocessResourceOCR: async (resourceId: string) => {
+    retranscribeResource: async (resourceId: string) => {
         set({ error: null });
         try {
-            await api.resources.reprocessOCR(resourceId);
+            await api.resources.retranscribe(resourceId);
             // Optimistically mark as processing
             set((state) => ({
                 resources: state.resources.map((r) =>
@@ -228,7 +273,7 @@ export const useResourcesStore = create<ResourcesState>()((set, get) => ({
             }));
         } catch (error: any) {
             const errorMessage =
-                error.response?.data?.detail || 'Failed to reprocess OCR';
+                error.response?.data?.detail || 'Failed to re-transcribe resource';
             set({ error: errorMessage });
             throw new Error(errorMessage);
         }

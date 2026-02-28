@@ -33,6 +33,11 @@ export interface Recommendation {
 
 interface ProgressState {
     streak: number;
+    _streakCourseId: string | null;
+    _isFetchingStreak: boolean;
+    _isFetchingCourseProgress: boolean;
+    _isFetchingTopicsProgress: boolean;
+    _isFetchingRecommendations: boolean;
     courseProgress: CourseProgress | null;
     topicsProgress: TopicProgress[];
     recommendations: Recommendation[];
@@ -52,6 +57,11 @@ interface ProgressState {
 
 export const useProgressStore = create<ProgressState>()((set, get) => ({
     streak: 0,
+    _streakCourseId: null,
+    _isFetchingStreak: false,
+    _isFetchingCourseProgress: false,
+    _isFetchingTopicsProgress: false,
+    _isFetchingRecommendations: false,
     courseProgress: null,
     topicsProgress: [],
     recommendations: [],
@@ -60,42 +70,51 @@ export const useProgressStore = create<ProgressState>()((set, get) => ({
     error: null,
 
     fetchStreak: async (courseId: string) => {
+        const s = get();
+        // Skip if already fetched for this course, or if a request is already in-flight
+        if (s._streakCourseId === courseId || s._isFetchingStreak) return;
+        set({ _isFetchingStreak: true });
         try {
             const response = await api.progress.getStreak(courseId);
-            set({ streak: response.data.current_streak ?? 0 });
+            set({ streak: response.data.current_streak ?? 0, _streakCourseId: courseId, _isFetchingStreak: false });
         } catch {
-            set({ streak: 0 });
+            set({ streak: 0, _streakCourseId: courseId, _isFetchingStreak: false });
         }
     },
 
     fetchCourseProgress: async (courseId: string) => {
-        set({ isLoading: true, error: null });
+        if (get()._isFetchingCourseProgress) return;
+        set({ isLoading: true, error: null, _isFetchingCourseProgress: true });
         try {
             const response = await api.progress.getCourseProgress(courseId);
-            set({ courseProgress: response.data, isLoading: false });
+            set({ courseProgress: response.data, isLoading: false, _isFetchingCourseProgress: false });
         } catch (err: unknown) {
             const message = err && typeof err === 'object' && 'response' in err
                 ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
                 : 'Failed to load progress';
-            set({ isLoading: false, error: String(message) });
+            set({ isLoading: false, error: String(message), _isFetchingCourseProgress: false });
         }
     },
 
     fetchTopicsProgress: async (courseId: string) => {
+        if (get()._isFetchingTopicsProgress) return;
+        set({ _isFetchingTopicsProgress: true });
         try {
             const response = await api.progress.getTopicsProgress(courseId);
-            set({ topicsProgress: response.data ?? [] });
+            set({ topicsProgress: response.data ?? [], _isFetchingTopicsProgress: false });
         } catch {
-            set({ topicsProgress: [] });
+            set({ topicsProgress: [], _isFetchingTopicsProgress: false });
         }
     },
 
     fetchRecommendations: async (courseId: string) => {
+        if (get()._isFetchingRecommendations) return;
+        set({ _isFetchingRecommendations: true });
         try {
             const response = await api.progress.getRecommendations(courseId);
-            set({ recommendations: response.data ?? [] });
+            set({ recommendations: response.data ?? [], _isFetchingRecommendations: false });
         } catch {
-            set({ recommendations: [] });
+            set({ recommendations: [], _isFetchingRecommendations: false });
         }
     },
 
@@ -116,6 +135,11 @@ export const useProgressStore = create<ProgressState>()((set, get) => ({
         topicsProgress: [],
         recommendations: [],
         streak: 0,
+        _streakCourseId: null,
+        _isFetchingStreak: false,
+        _isFetchingCourseProgress: false,
+        _isFetchingTopicsProgress: false,
+        _isFetchingRecommendations: false,
     }),
 
     clearError: () => set({ error: null }),

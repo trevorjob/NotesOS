@@ -6,6 +6,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { api } from '@/lib/api';
+import { offlineDb } from '@/lib/offlineDb';
 
 interface Topic {
     id: string;
@@ -33,9 +34,11 @@ interface CourseState {
     currentCourse: Course | null;
     isLoading: boolean;
     error: string | null;
+    _isFetchingCourses: boolean;
+    _isSelectingCourse: boolean;
 
     // Actions
-    fetchCourses: () => Promise<void>;
+    fetchCourses: (force?: boolean) => Promise<void>;
     createCourse: (data: {
         code: string;
         name: string;
@@ -70,16 +73,38 @@ export const useCourseStore = create<CourseState>()(
             currentCourse: null,
             isLoading: false,
             error: null,
+            _isFetchingCourses: false,
+            _isSelectingCourse: false,
 
-            fetchCourses: async () => {
-                set({ isLoading: true, error: null });
+            fetchCourses: async (force = false) => {
+                // Skip if already in-flight (dedup parallel calls e.g. GlassNav + page mounting together)
+                if (get()._isFetchingCourses) return;
+                // Skip if we already have data and caller hasn't forced a refresh
+                if (!force && get().courses.length > 0) return;
+
+                set({ _isFetchingCourses: true, isLoading: true, error: null });
+
+                // Offline: serve from IndexedDB
+                if (typeof navigator !== 'undefined' && !navigator.onLine) {
+                    const cached = await offlineDb.getCourses();
+                    set({ courses: cached as Course[], isLoading: false, _isFetchingCourses: false });
+                    return;
+                }
+
                 try {
                     const response = await api.courses.getAll();
-                    set({ courses: response.data.courses || [], isLoading: false });
+                    const courses = response.data.courses || [];
+                    set({ courses, isLoading: false, _isFetchingCourses: false });
+                    offlineDb.putCourses(courses).catch(() => { });
                 } catch (error: any) {
-                    const errorMessage =
-                        error.response?.data?.detail || 'Failed to fetch courses';
-                    set({ isLoading: false, error: errorMessage });
+                    const cached = await offlineDb.getCourses();
+                    if (cached.length > 0) {
+                        set({ courses: cached as Course[], isLoading: false, _isFetchingCourses: false });
+                    } else {
+                        const errorMessage =
+                            error.response?.data?.detail || 'Failed to fetch courses';
+                        set({ isLoading: false, error: errorMessage, _isFetchingCourses: false });
+                    }
                 }
             },
 
@@ -89,8 +114,7 @@ export const useCourseStore = create<CourseState>()(
                     const response = await api.courses.create(data);
                     const newCourse = response.data.course;
 
-                    // Refresh courses list
-                    await get().fetchCourses();
+                    await get().fetchCourses(true);
 
                     return newCourse;
                 } catch (error: any) {
@@ -104,16 +128,12 @@ export const useCourseStore = create<CourseState>()(
             joinCourse: async (identifier: string) => {
                 set({ error: null });
                 try {
-                    // Try as invite code first, then as search term
                     await api.courses.join({ invite_code: identifier });
-
-                    // Refresh courses list
-                    await get().fetchCourses();
+                    await get().fetchCourses(true);
                 } catch (error: any) {
-                    // If invite code fails, try as search term
                     try {
                         await api.courses.join({ search: identifier });
-                        await get().fetchCourses();
+                        await get().fetchCourses(true);
                     } catch (searchError: any) {
                         const errorMessage =
                             searchError.response?.data?.detail || 'Failed to join course';
@@ -124,24 +144,48 @@ export const useCourseStore = create<CourseState>()(
             },
 
             selectCourse: async (courseId: string) => {
-                set({ isLoading: true, error: null });
+                // Already loaded this course with topics — skip the network round-trip
+                const { currentCourse, _isSelectingCourse } = get();
+                if (
+                    currentCourse?.id === courseId &&
+                    Array.isArray(currentCourse?.topics)
+                ) return;
+
+                // Dedup parallel calls (e.g. page useEffect + sub-component)
+                if (_isSelectingCourse) return;
+
+                set({ _isSelectingCourse: true, isLoading: true, error: null });
+
+                // Offline: serve from IndexedDB
+                if (typeof navigator !== 'undefined' && !navigator.onLine) {
+                    const courses = await offlineDb.getCourses();
+                    const course = courses.find(c => c.id === courseId);
+                    const topics = await offlineDb.getTopicsByCourse(courseId);
+                    if (course) {
+                        set({ currentCourse: { ...course, topics } as Course, isLoading: false, _isSelectingCourse: false });
+                    } else {
+                        set({ isLoading: false, error: 'Course not available offline', _isSelectingCourse: false });
+                    }
+                    return;
+                }
+
                 try {
                     const [courseResponse, topicsResponse] = await Promise.all([
                         api.courses.getById(courseId),
                         api.topics.getByCourse(courseId),
                     ]);
 
-                    set({
-                        currentCourse: {
-                            ...courseResponse.data.course,
-                            topics: topicsResponse.data || [], // Array directly
-                        },
-                        isLoading: false,
-                    });
+                    const topics = topicsResponse.data || [];
+                    const course = { ...courseResponse.data.course, topics };
+
+                    set({ currentCourse: course, isLoading: false, _isSelectingCourse: false });
+
+                    offlineDb.putCourses([courseResponse.data.course]).catch(() => { });
+                    offlineDb.putTopics(courseId, topics).catch(() => { });
                 } catch (error: any) {
                     const errorMessage =
                         error.response?.data?.detail || 'Failed to load course';
-                    set({ isLoading: false, error: errorMessage });
+                    set({ isLoading: false, error: errorMessage, _isSelectingCourse: false });
                 }
             },
 
@@ -149,9 +193,10 @@ export const useCourseStore = create<CourseState>()(
                 set({ error: null });
                 try {
                     const response = await api.topics.create(courseId, data);
-                    const newTopic = response.data; // TopicResponse directly
+                    const newTopic = response.data;
 
-                    // Refresh current course
+                    // Bust the selectCourse guard so the refreshed course is fetched
+                    set({ currentCourse: null });
                     await get().selectCourse(courseId);
 
                     return newTopic;
@@ -169,7 +214,7 @@ export const useCourseStore = create<CourseState>()(
                     const response = await api.topics.update(topicId, data);
                     const updatedTopic = response.data as Topic;
 
-                    // Refresh current course to reflect updated topic list/details
+                    set({ currentCourse: null });
                     await get().selectCourse(courseId);
 
                     return updatedTopic;
@@ -186,7 +231,7 @@ export const useCourseStore = create<CourseState>()(
                 try {
                     await api.topics.delete(topicId);
 
-                    // Refresh current course after deletion
+                    set({ currentCourse: null });
                     await get().selectCourse(courseId);
                 } catch (error: any) {
                     const errorMessage =
@@ -204,6 +249,7 @@ export const useCourseStore = create<CourseState>()(
             name: 'notesos-courses',
             partialize: (state) => ({
                 currentCourse: state.currentCourse,
+                courses: state.courses,
             }),
         }
     )

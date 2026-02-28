@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 import asyncio
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from jose import jwt, JWTError
 
 from app.config import settings
@@ -44,6 +45,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Compress JSON / text responses ≥ 1 KB
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
 @app.get("/")
