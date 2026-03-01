@@ -75,18 +75,6 @@
   --color-error: var(--error);
 }
 
-/* Dark mode (later) */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg-base: #1E1A17;
-    --bg-elevated: #2A2420;
-    --bg-sunken: #161311;
-    --text-primary: #F5F0EB;
-    --text-secondary: #C4BAB0;
-    --text-tertiary: #8C7E72;
-  }
-}
-
 /* ═══════════════════════════════════════════════════════════════════════
    Base Styles
    ═══════════════════════════════════════════════════════════════════════ */
