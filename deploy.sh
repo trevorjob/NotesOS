@@ -25,6 +25,7 @@ SERVICES=(
     notesos-worker-chunking
     notesos-worker-grading
     notesos-worker-factcheck
+    notesos-worker-transcription
 )
 
 # ── Helpers ──────────────────────────────────────────────

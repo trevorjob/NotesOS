@@ -25,7 +25,6 @@ from app.models.course import Topic
 from app.api.auth import get_current_user, verify_course_enrollment
 from app.models.user import User
 from app.services.storage import storage_service
-from app.services.file_processor import file_processor
 from app.services.vision_transcribe import vision_transcribe
 from app.services.redis_client import redis_client
 from app.services.cache import cache, resources_list_key, resource_key
@@ -327,8 +326,9 @@ async def upload_resources(
     created_resources = []
 
     # ── Process images → 1 Resource with multiple ResourceFiles ──
+    image_urls_for_job: list[str] = []
     if image_files:
-        image_resource = await _create_image_resource(
+        image_resource, image_urls_for_job = await _create_image_resource(
             db=db,
             topic=topic,
             user=current_user,
@@ -339,8 +339,9 @@ async def upload_resources(
         created_resources.append(image_resource)
 
     # ── Process documents → 1 Resource per file ──
+    doc_meta: list[tuple] = []  # (resource, file_url, file_ext)
     for file in doc_files:
-        doc_resource = await _create_document_resource(
+        doc_resource, file_url, file_ext = await _create_document_resource(
             db=db,
             topic=topic,
             user=current_user,
@@ -348,13 +349,13 @@ async def upload_resources(
             file=file,
         )
         created_resources.append(doc_resource)
+        doc_meta.append((doc_resource, file_url, file_ext))
 
     await db.commit()
 
-    # Refresh and enqueue RAG for each resource
+    # Refresh all resources and build responses
     responses = []
     for resource in created_resources:
-        # Eagerly load the files relationship to avoid lazy loading issues
         resource_query = (
             select(Resource)
             .options(selectinload(Resource.files))
@@ -362,17 +363,34 @@ async def upload_resources(
         )
         result = await db.execute(resource_query)
         refreshed_resource = result.scalar_one()
+        responses.append(
+            build_resource_response(refreshed_resource, current_user.full_name)
+        )
 
+    # ── Enqueue transcription jobs (non-blocking AI work) ────────────────────
+    course_id_str = str(topic.course_id)
+
+    if image_files and image_urls_for_job:
         await redis_client.enqueue_job(
-            "chunking",
+            "transcription",
             {
-                "resource_id": str(refreshed_resource.id),
-                "text": refreshed_resource.content,
+                "type": "image",
+                "resource_id": str(image_resource.id),
+                "image_urls": image_urls_for_job,
+                "course_id": course_id_str,
             },
         )
 
-        responses.append(
-            build_resource_response(refreshed_resource, current_user.full_name)
+    for doc_resource, file_url, file_ext in doc_meta:
+        await redis_client.enqueue_job(
+            "transcription",
+            {
+                "type": "document",
+                "resource_id": str(doc_resource.id),
+                "file_url": file_url,
+                "file_ext": file_ext,
+                "course_id": course_id_str,
+            },
         )
 
     # Invalidate resource list cache for this topic (uploads change the list)
@@ -388,15 +406,17 @@ async def _create_image_resource(
     title: Optional[str],
     is_handwritten: Optional[bool],
     image_files: List[UploadFile],
-) -> Resource:
+) -> tuple:
     """
     Create a single image Resource with multiple ResourceFile pages.
 
     Flow:
     1. Upload all images to Cloudinary concurrently.
     2. Create ResourceFile records.
-    3. Call GPT-4o Vision with all image URLs in one request → clean transcript.
-    4. Store transcript as resource.content.
+    3. Return resource + image_urls (AI transcription is enqueued separately).
+
+    Returns:
+        (Resource, list[image_url])
     """
     # Auto-generate title
     if not title:
@@ -407,15 +427,16 @@ async def _create_image_resource(
         topic_id=topic.id,
         uploaded_by=user.id,
         title=title,
-        content="",  # Filled after transcription
+        content="",  # Filled by transcription worker
         resource_type=ResourceKind.IMAGE,
         source_type=SourceType.PRINTED,
         is_processed=False,
+        ocr_provider="gpt-vision",
     )
     db.add(resource)
     await db.flush()  # Get resource.id
 
-    # ── Step 1: Upload all images concurrently ──────────────────────────────
+    # ── Upload all images to Cloudinary concurrently ────────────────────────
     file_contents: list[bytes] = []
     for file in image_files:
         file_contents.append(await file.read())
@@ -430,7 +451,7 @@ async def _create_image_resource(
     upload_results = await asyncio.gather(*upload_tasks)
     image_urls = [r["url"] for r in upload_results]
 
-    # ── Step 2: Create ResourceFile records ─────────────────────────────────
+    # ── Create ResourceFile records ──────────────────────────────────────────
     for idx, (file, file_url) in enumerate(zip(image_files, image_urls)):
         resource_file = ResourceFile(
             resource_id=resource.id,
@@ -443,16 +464,8 @@ async def _create_image_resource(
         )
         db.add(resource_file)
 
-    # ── Step 3: Transcribe all images in one Vision API call ─────────────────
-    transcript = await vision_transcribe.transcribe_images(image_urls)
-
-    # ── Step 4: Persist transcript ───────────────────────────────────────────
-    resource.content = transcript
-    resource.ocr_cleaned = False  # Vision output is already clean
-    resource.ocr_confidence = None
-    resource.ocr_provider = "gpt-vision"
-
-    return resource
+    # Transcription is enqueued by the caller after db.commit()
+    return resource, image_urls
 
 
 async def _create_document_resource(
@@ -461,31 +474,32 @@ async def _create_document_resource(
     user: User,
     title: Optional[str],
     file: UploadFile,
-) -> Resource:
-    """Create a single Resource for a PDF or DOCX file."""
+) -> tuple:
+    """
+    Create a single Resource for a PDF or DOCX file.
+
+    Uploads the file to Cloudinary and saves the record immediately.
+    Text extraction is enqueued to the transcription worker by the caller.
+
+    Returns:
+        (Resource, file_url, file_ext)
+    """
     file_content = await file.read()
     ext = os.path.splitext(file.filename or "")[1].lower()
 
-    # Upload to Cloudinary AND extract text concurrently
-    upload_task = storage_service.upload_file(
+    # Upload to Cloudinary only — extraction happens in background worker
+    upload_result = await storage_service.upload_file(
         file=file_content,
         folder=f"notesos/{topic.course_id}/{topic.id}",
     )
-    ocr_task = file_processor.process_from_bytes(
-        file_bytes=file_content, file_format=ext, is_handwritten=False
-    )
-    upload_result, processing_result = await asyncio.gather(upload_task, ocr_task)
     file_url = upload_result["url"]
 
-    extracted_text = processing_result["text"]
-    source_type_str = processing_result["source_type"]
-
-    # Determine resource type
+    # Determine resource type and default source_type
     resource_type = ResourceKind.PDF if ext == ".pdf" else ResourceKind.DOCX
+    source_type = SourceType.PDF if ext == ".pdf" else SourceType.DOCX
 
-    # Auto-generate title
+    # Auto-generate title from filename if not provided
     if not title:
-        # Use filename without extension
         base_name = os.path.splitext(file.filename or "document")[0]
         title = base_name
 
@@ -493,16 +507,16 @@ async def _create_document_resource(
         topic_id=topic.id,
         uploaded_by=user.id,
         title=title,
-        content=extracted_text,
+        content="",  # Filled by transcription worker
         resource_type=resource_type,
         file_url=file_url,
         file_name=file.filename,
-        source_type=SourceType[source_type_str.upper()],
+        source_type=source_type,
         is_processed=False,
     )
     db.add(resource)
 
-    return resource
+    return resource, file_url, ext
 
 
 @router.get("/resources/{resource_id}", response_model=ResourceResponse)

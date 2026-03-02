@@ -1,0 +1,160 @@
+"""
+NotesOS - Transcription Worker
+Background worker that handles AI text extraction for uploaded files.
+
+Offloads GPT-4o Vision (images) and Tesseract/mammoth (PDFs/DOCX) from the
+HTTP request cycle so uploads return immediately with 201.
+
+Job shape:
+  Image:    {"type": "image",    "resource_id": str, "image_urls": [str], "course_id": str}
+  Document: {"type": "document", "resource_id": str, "file_url": str,     "file_ext": str, "course_id": str}
+"""
+
+import asyncio
+import uuid
+from sqlalchemy import select
+
+from app.database import worker_session
+from app.models.resource import Resource
+from app.services.redis_client import redis_client
+from app.services.vision_transcribe import vision_transcribe
+from app.services.file_processor import file_processor
+
+
+async def _broadcast(course_id: str, resource_id: str, status: str) -> None:
+    """Publish a processing_status event via Redis pub-sub → WebSocket."""
+    await redis_client.publish(
+        channel="course_updates",
+        message={
+            "course_id": course_id,
+            "message": {
+                "type": "processing_status",
+                "resource_id": resource_id,
+                "status": status,
+            },
+        },
+    )
+
+
+async def process_transcription_job(job_data: dict) -> None:
+    """
+    Run transcription for one job and persist the result.
+
+    On success: sets resource.content, resource.is_processed=False (chunking handles True),
+                broadcasts 'transcription_completed', then re-enqueues chunking.
+    On failure: broadcasts 'failed' and logs the error.
+    """
+    job_type = job_data.get("type")
+    resource_id = job_data.get("resource_id")
+    course_id = job_data.get("course_id", "")
+
+    if not resource_id or job_type not in ("image", "document"):
+        print(f"[TRANSCRIPTION WORKER] Invalid job data: {job_data}")
+        return
+
+    print(
+        f"[TRANSCRIPTION WORKER] Starting {job_type} transcription for resource {resource_id}"
+    )
+
+    if course_id:
+        await _broadcast(course_id, resource_id, "processing")
+
+    async with worker_session() as db:
+        try:
+            resource_query = select(Resource).where(
+                Resource.id == uuid.UUID(resource_id)
+            )
+            result = await db.execute(resource_query)
+            resource = result.scalar_one_or_none()
+
+            if not resource:
+                print(
+                    f"[TRANSCRIPTION WORKER] Resource {resource_id} not found — skipping"
+                )
+                return
+
+            # ── Transcribe ─────────────────────────────────────────────────────
+            if job_type == "image":
+                image_urls = job_data.get("image_urls", [])
+                if not image_urls:
+                    print(
+                        f"[TRANSCRIPTION WORKER] No image_urls for resource {resource_id}"
+                    )
+                    return
+                transcript = await vision_transcribe.transcribe_images(image_urls)
+                resource.content = transcript
+                resource.ocr_provider = "gpt-vision"
+                resource.ocr_cleaned = False
+
+            else:  # document
+                file_url = job_data.get("file_url", "")
+                file_ext = job_data.get("file_ext", "")
+                if not file_url or not file_ext:
+                    print(
+                        f"[TRANSCRIPTION WORKER] Missing file_url/file_ext for resource {resource_id}"
+                    )
+                    return
+                processing_result = await file_processor.process_uploaded_file(
+                    file_url=file_url,
+                    file_format=file_ext,
+                    is_handwritten=False,
+                )
+                resource.content = processing_result["text"]
+
+            await db.commit()
+            print(
+                f"[TRANSCRIPTION WORKER] ✅ Transcription done for resource {resource_id}"
+            )
+
+            # ── Hand off to chunking worker ────────────────────────────────────
+            await redis_client.enqueue_job(
+                "chunking",
+                {"resource_id": resource_id, "text": resource.content},
+            )
+
+        except Exception as exc:
+            print(f"[TRANSCRIPTION WORKER] ❌ Error for resource {resource_id}: {exc}")
+            await db.rollback()
+            if course_id:
+                await _broadcast(course_id, resource_id, "failed")
+
+
+async def transcription_worker() -> None:
+    """Main loop: drain queue:transcription using blocking BRPOP."""
+    print("[TRANSCRIPTION WORKER] 🚀 Starting worker")
+    client = await redis_client.get_client()
+
+    while True:
+        try:
+            result = await client.brpop("queue:transcription", timeout=5)
+
+            if result:
+                import json
+
+                _, job_json = result
+                job = json.loads(job_json)
+
+                job_id = job["id"]
+                job_data = job["data"]
+
+                print(f"[TRANSCRIPTION WORKER] 📝 Processing job {job_id}")
+                await redis_client.update_job_status(job_id, "processing")
+
+                await process_transcription_job(job_data)
+
+                await redis_client.update_job_status(
+                    job_id,
+                    "completed",
+                    result={"resource_id": job_data.get("resource_id")},
+                )
+
+        except asyncio.CancelledError:
+            print("[TRANSCRIPTION WORKER] Shutting down")
+            break
+        except Exception as exc:
+            print(f"[TRANSCRIPTION WORKER] Worker error: {exc}")
+            await asyncio.sleep(1)
+
+
+if __name__ == "__main__":
+    asyncio.run(transcription_worker())
