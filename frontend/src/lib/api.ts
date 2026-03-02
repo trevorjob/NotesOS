@@ -269,15 +269,29 @@ export const api = {
                 ...data,
             }),
 
-        upload: (topicId: string, courseId: string, files: File[], title?: string, isHandwritten?: boolean) => {
-            const formData = new FormData();
-            formData.append('topic_id', topicId);
-            formData.append('course_id', courseId);
-            if (title) formData.append('title', title);
-            if (isHandwritten !== undefined) formData.append('is_handwritten', String(isHandwritten));
-            files.forEach(file => formData.append('files', file));
-            return apiClient.post('/api/resources/upload', formData, {
-                headers: { 'Content-Type': 'multipart/form-data' },
+        upload: async (
+            topicId: string,
+            courseId: string,
+            files: File[],
+            title?: string,
+            isHandwritten?: boolean,
+            onProgress?: (percent: number) => void
+        ) => {
+            const { uploadFilesToCloudinary } = await import('./cloudinaryUpload');
+            const folder = `notesos/${courseId}/${topicId}`;
+            const uploaded = await uploadFilesToCloudinary(files, folder, onProgress);
+
+            // Send only URLs to backend — no file bytes cross the VPS
+            return apiClient.post('/api/resources/upload-urls', {
+                topic_id: topicId,
+                title: title ?? null,
+                is_handwritten: isHandwritten ?? null,
+                files: uploaded.map(r => ({
+                    url: r.url,
+                    public_id: r.public_id,
+                    filename: r.filename,
+                    file_order: r.file_order,
+                })),
             });
         },
 

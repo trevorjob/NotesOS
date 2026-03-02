@@ -268,6 +268,176 @@ async def create_text_resource(
     return build_resource_response(resource, current_user.full_name)
 
 
+# ── Pydantic schema for direct-upload endpoint ────────────────────────────────
+
+
+class UploadedFileItem(BaseModel):
+    url: str
+    public_id: Optional[str] = None
+    filename: Optional[str] = None
+    file_order: int = 0
+
+
+class UploadUrlsRequest(BaseModel):
+    topic_id: str
+    title: Optional[str] = None
+    is_handwritten: Optional[bool] = None
+    files: List[UploadedFileItem]
+
+
+@router.post(
+    "/resources/upload-urls",
+    response_model=List[ResourceResponse],
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_resources_from_urls(
+    body: UploadUrlsRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Create resources from files already uploaded directly to Cloudinary.
+
+    The frontend uploads files directly to Cloudinary (bypassing the VPS),
+    then sends the resulting URLs here. This endpoint only creates DB records
+    and enqueues transcription — no file bytes cross the VPS.
+
+    Image files are grouped into one Resource (multi-page); docs are separate.
+    file_order from the client is preserved as the ResourceFile page order.
+    """
+    # Validate topic
+    topic_query = select(Topic).where(Topic.id == uuid.UUID(body.topic_id))
+    topic_result = await db.execute(topic_query)
+    topic = topic_result.scalar_one_or_none()
+
+    if not topic:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Topic not found"
+        )
+
+    await verify_course_enrollment(db, current_user.id, topic.course_id)
+
+    IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".tiff", ".bmp"}
+    DOC_EXTS = {".pdf", ".doc", ".docx"}
+
+    image_files = []
+    doc_files = []
+
+    for item in body.files:
+        ext = os.path.splitext(item.filename or item.url.split("?")[0])[1].lower()
+        if ext in IMAGE_EXTS:
+            image_files.append(item)
+        elif ext in DOC_EXTS:
+            doc_files.append(item)
+        else:
+            # Unknown ext — treat as image (Cloudinary accepted it)
+            image_files.append(item)
+
+    created_resources = []
+    image_urls_for_job: list[str] = []
+
+    # ── Images → 1 Resource, multiple ResourceFiles ────────────────────────────
+    if image_files:
+        title = body.title
+        if not title:
+            from datetime import datetime as _dt
+
+            title = f"{topic.title} - {_dt.now().strftime('%Y-%m-%d %H:%M')}"
+
+        image_resource = Resource(
+            topic_id=topic.id,
+            uploaded_by=current_user.id,
+            title=title,
+            content="",  # Filled by transcription worker
+            resource_type=ResourceKind.IMAGE,
+            source_type=SourceType.PRINTED,
+            is_processed=False,
+            ocr_provider="gpt-vision",
+        )
+        db.add(image_resource)
+        await db.flush()
+
+        # Sort by provided file_order to guarantee page sequence
+        for item in sorted(image_files, key=lambda x: x.file_order):
+            rf = ResourceFile(
+                resource_id=image_resource.id,
+                file_url=item.url,
+                file_name=item.filename,
+                file_order=item.file_order,
+                ocr_provider="gpt-vision",
+            )
+            db.add(rf)
+            image_urls_for_job.append(item.url)
+
+        created_resources.append(image_resource)
+
+    # ── Documents → 1 Resource each ────────────────────────────────────────────
+    doc_meta: list[tuple] = []
+    for item in doc_files:
+        ext = os.path.splitext(item.filename or "")[1].lower()
+        resource_type = ResourceKind.PDF if ext == ".pdf" else ResourceKind.DOCX
+        source_type = SourceType.PDF if ext == ".pdf" else SourceType.DOCX
+
+        doc_title = body.title or os.path.splitext(item.filename or "document")[0]
+        doc_resource = Resource(
+            topic_id=topic.id,
+            uploaded_by=current_user.id,
+            title=doc_title,
+            content="",  # Filled by transcription worker
+            resource_type=resource_type,
+            file_url=item.url,
+            file_name=item.filename,
+            source_type=source_type,
+            is_processed=False,
+        )
+        db.add(doc_resource)
+        created_resources.append(doc_resource)
+        doc_meta.append((doc_resource, item.url, ext))
+
+    await db.commit()
+
+    # Build responses
+    responses = []
+    for resource in created_resources:
+        rq = (
+            select(Resource)
+            .options(selectinload(Resource.files))
+            .where(Resource.id == resource.id)
+        )
+        result = await db.execute(rq)
+        refreshed = result.scalar_one()
+        responses.append(build_resource_response(refreshed, current_user.full_name))
+
+    # ── Enqueue transcription jobs ──────────────────────────────────────────────
+    course_id_str = str(topic.course_id)
+
+    if image_files and image_urls_for_job:
+        await redis_client.enqueue_job(
+            "transcription",
+            {
+                "type": "image",
+                "resource_id": str(image_resource.id),
+                "image_urls": image_urls_for_job,
+                "course_id": course_id_str,
+            },
+        )
+
+    for doc_resource, file_url, file_ext in doc_meta:
+        await redis_client.enqueue_job(
+            "transcription",
+            {
+                "type": "document",
+                "resource_id": str(doc_resource.id),
+                "file_url": file_url,
+                "file_ext": file_ext,
+                "course_id": course_id_str,
+            },
+        )
+
+    await cache.delete_pattern(f"notesos:v1:resources:topic:{body.topic_id}:")
+    return responses
+
+
 @router.post(
     "/resources/upload",
     response_model=List[ResourceResponse],
