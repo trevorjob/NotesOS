@@ -86,8 +86,8 @@ function PillToggle({
                         type="button"
                         onClick={() => onToggle(id)}
                         className={`px-3 py-1.5 rounded-full text-sm font-medium border transition-colors ${active
-                                ? 'bg-[var(--text-primary)] text-[var(--bg-elevated)] border-[var(--text-primary)]'
-                                : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)] border-[#D6D3D1] hover:border-[var(--text-secondary)]'
+                            ? 'bg-[var(--text-primary)] text-[var(--bg-elevated)] border-[var(--text-primary)]'
+                            : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)] border-[#D6D3D1] hover:border-[var(--text-secondary)]'
                             }`}
                     >
                         {label}
@@ -115,8 +115,8 @@ function SegmentedControl({
                     type="button"
                     onClick={() => onChange(id)}
                     className={`px-4 py-2 text-sm font-medium transition-colors ${value === id
-                            ? 'bg-[var(--text-primary)] text-[var(--bg-elevated)]'
-                            : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:bg-[var(--bg-sunken)]'
+                        ? 'bg-[var(--text-primary)] text-[var(--bg-elevated)]'
+                        : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:bg-[var(--bg-sunken)]'
                         }`}
                 >
                     {label}
@@ -423,7 +423,7 @@ export default function TestsPage() {
                         {/* Question count */}
                         <div className="flex items-center justify-between">
                             <span className="text-sm text-[var(--text-secondary)]">Number of questions</span>
-                            <NumberStepper value={questionCount} min={1} max={30} onChange={setQuestionCount} />
+                            <NumberStepper value={questionCount} min={0} max={30} onChange={setQuestionCount} />
                         </div>
 
                         {/* Difficulty */}
