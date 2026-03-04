@@ -135,23 +135,22 @@ export const useResourcesStore = create<ResourcesState>()((set, get) => ({
     uploadFiles: async (topicId: string, courseId: string, files: File[], title?: string, isHandwritten?: boolean) => {
         set({ isUploading: true, uploadProgress: 0, error: null });
         try {
-            // Simulated progress (real progress would need onUploadProgress)
-            const progressInterval = setInterval(() => {
-                set(state => ({
-                    uploadProgress: Math.min(state.uploadProgress + 10, 90),
-                }));
-            }, 200);
+            await api.resources.upload(
+                topicId,
+                courseId,
+                files,
+                title,
+                isHandwritten,
+                (percent: number) => set({ uploadProgress: percent }),
+            );
 
-            await api.resources.upload(topicId, courseId, files, title, isHandwritten);
-
-            clearInterval(progressInterval);
             set({ uploadProgress: 100, isUploading: false });
 
             // Refresh resources list
             await get().fetchResources(topicId);
         } catch (error: any) {
             const errorMessage =
-                error.response?.data?.detail || 'Failed to upload files';
+                error.response?.data?.detail || error.message || 'Failed to upload files';
             set({ isUploading: false, uploadProgress: 0, error: errorMessage });
             throw new Error(errorMessage);
         }

@@ -91,17 +91,6 @@ export default function LoginPage() {
                         </Button>
                     </form>
 
-                    <div className="mt-6 text-center">
-                        <p className="text-sm text-[var(--text-tertiary)]">
-                            Don't have an account?{' '}
-                            <Link
-                                href="/register"
-                                className="text-[var(--accent-primary)] hover:text-[var(--accent-hover)] font-medium transition-colors"
-                            >
-                                Sign up
-                            </Link>
-                        </p>
-                    </div>
                 </GlassCard>
 
                 {/* Footer */}
