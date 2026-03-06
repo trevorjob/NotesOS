@@ -3,7 +3,8 @@ NotesOS API - AI Features Router
 Fact Checker, Pre-class Research, Study Agent, and Test Generator endpoints.
 """
 
-from typing import List
+from typing import List, Optional
+from datetime import datetime, date, timedelta
 from fastapi import (
     APIRouter,
     Depends,
@@ -13,7 +14,7 @@ from fastapi import (
     Request,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from pydantic import BaseModel
 import uuid
 import json
@@ -534,6 +535,66 @@ async def list_tests(
     ]
 
 
+# ── Test Stats Endpoint ───────────────────────────────────────────────────────
+# IMPORTANT: Must be defined BEFORE /tests/{test_id} to avoid route shadowing.
+
+
+@router.get("/tests/stats")
+async def get_test_stats(
+    course_id: str = Query(..., description="Course ID"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Get aggregate test statistics for the current user in a course.
+    Returns average score, tests completed, and study streak (consecutive days with tests).
+    """
+    await verify_course_enrollment(db, current_user.id, uuid.UUID(course_id))
+
+    attempts_result = await db.execute(
+        select(TestAttempt)
+        .join(Test, Test.id == TestAttempt.test_id)
+        .where(
+            TestAttempt.user_id == current_user.id,
+            Test.course_id == uuid.UUID(course_id),
+            TestAttempt.completed_at.isnot(None),
+        )
+        .order_by(TestAttempt.completed_at.desc())
+    )
+    attempts = attempts_result.scalars().all()
+
+    tests_completed = len(attempts)
+    average_score = 0.0
+    if tests_completed > 0:
+        total = sum(
+            float(a.total_score or 0) / max(a.max_score, 1) * 100
+            for a in attempts
+        )
+        average_score = round(total / tests_completed, 1)
+
+    # Study streak: consecutive days (most recent first) with at least one attempt
+    streak = 0
+    if attempts:
+        today = datetime.utcnow().date()
+        distinct_days = sorted(
+            {a.completed_at.date() for a in attempts if a.completed_at},
+            reverse=True,
+        )
+        expected = today
+        for d in distinct_days:
+            if d == expected or d == expected - timedelta(days=1):
+                streak += 1
+                expected = d - timedelta(days=1)
+            elif d < expected - timedelta(days=1):
+                break
+
+    return {
+        "average_score": average_score,
+        "tests_completed": tests_completed,
+        "study_streak": streak,
+    }
+
+
 @router.get("/tests/{test_id}", response_model=TestResponse)
 async def get_test(
     test_id: str,
@@ -776,14 +837,14 @@ async def get_test_results(
     # Build response
     graded_answers = []
     for ans in answers:
-        if ans.score is not None:  # Only include graded answers
+        if ans.score is not None:
             graded_answers.append(
                 GradedAnswerResponse(
                     score=float(ans.score),
                     feedback=ans.ai_feedback or "",
                     encouragement=ans.encouragement or "",
-                    key_points_covered=[],  # Not stored separately
-                    key_points_missed=[],
+                    key_points_covered=ans.key_points_covered or [],
+                    key_points_missed=ans.key_points_missed or [],
                 )
             )
 
@@ -794,3 +855,95 @@ async def get_test_results(
         completed_at=attempt.completed_at.isoformat() if attempt.completed_at else None,
         answers=graded_answers,
     )
+
+
+# ── Save Draft Endpoint ───────────────────────────────────────────────────────
+
+
+class DraftAnswer(BaseModel):
+    question_id: str
+    answer_text: Optional[str] = None
+    answer_audio_url: Optional[str] = None
+    selected_option: Optional[str] = None
+
+
+class SaveDraftRequest(BaseModel):
+    answers: List[DraftAnswer]
+
+
+@router.post("/tests/{test_id}/draft")
+async def save_test_draft(
+    test_id: str,
+    request: SaveDraftRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Save draft answers for a test without submitting or triggering grading.
+    Creates a new attempt (or reuses the latest unfinished one) and upserts answers.
+    """
+    test_query = select(Test).where(Test.id == uuid.UUID(test_id))
+    test_result = await db.execute(test_query)
+    test = test_result.scalar_one_or_none()
+    if not test:
+        raise HTTPException(status_code=404, detail="Test not found.")
+
+    await verify_course_enrollment(db, current_user.id, test.course_id)
+
+    # Find or create an unfinished attempt
+    attempt_result = await db.execute(
+        select(TestAttempt)
+        .where(
+            TestAttempt.test_id == test.id,
+            TestAttempt.user_id == current_user.id,
+            TestAttempt.completed_at.is_(None),
+        )
+        .order_by(TestAttempt.started_at.desc())
+        .limit(1)
+    )
+    attempt = attempt_result.scalar_one_or_none()
+    if not attempt:
+        attempt = TestAttempt(
+            test_id=test.id,
+            user_id=current_user.id,
+            max_score=test.question_count * 10,
+        )
+        db.add(attempt)
+        await db.flush()
+
+    # Validate all question IDs belong to this test
+    question_ids = [uuid.UUID(a.question_id) for a in request.answers]
+    valid_q_result = await db.execute(
+        select(TestQuestion.id).where(
+            TestQuestion.test_id == test.id,
+            TestQuestion.id.in_(question_ids),
+        )
+    )
+    valid_ids = {row[0] for row in valid_q_result}
+
+    # Fetch existing answers for this attempt
+    existing_result = await db.execute(
+        select(TestAnswer).where(TestAnswer.attempt_id == attempt.id)
+    )
+    existing_answers = {ans.question_id: ans for ans in existing_result.scalars().all()}
+
+    for draft in request.answers:
+        q_uuid = uuid.UUID(draft.question_id)
+        if q_uuid not in valid_ids:
+            continue
+
+        if q_uuid in existing_answers:
+            ans = existing_answers[q_uuid]
+        else:
+            ans = TestAnswer(attempt_id=attempt.id, question_id=q_uuid)
+            db.add(ans)
+
+        if draft.answer_text is not None:
+            ans.answer_text = draft.answer_text
+        if draft.answer_audio_url is not None:
+            ans.answer_audio_url = draft.answer_audio_url
+
+    saved_at = datetime.utcnow()
+    await db.commit()
+
+    return {"saved_at": saved_at.isoformat()}

@@ -19,11 +19,10 @@ async def lifespan(app: FastAPI):
     # Startup
     await init_db()
 
-    # Start Redis listener for worker updates
-    # Import here to ensure connection_manager is initialized
+    # Start Redis listeners for course updates and user notifications
     from app.services.websocket import connection_manager
 
-    asyncio.create_task(connection_manager.start_redis_listener())
+    await connection_manager.start_redis_listener()
 
     yield
     # Shutdown
@@ -73,6 +72,8 @@ from app.api.resources import router as resources_router
 from app.api.invites import router as invites_router
 from app.api.ai_features import router as ai_features_router
 from app.api.progress import router as progress_router
+from app.api.semesters import router as semesters_router
+from app.api.notifications import router as notifications_router
 from app.services.websocket import connection_manager
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
@@ -82,6 +83,8 @@ app.include_router(resources_router, prefix="/api", tags=["resources"])
 app.include_router(invites_router, prefix="/api/invites", tags=["invites"])
 app.include_router(ai_features_router, prefix="", tags=["AI Features"])
 app.include_router(progress_router, prefix="", tags=["Progress"])
+app.include_router(semesters_router, prefix="/api/semesters", tags=["semesters"])
+app.include_router(notifications_router, prefix="/api/notifications", tags=["notifications"])
 
 
 # WebSocket endpoint for real-time updates

@@ -12,10 +12,21 @@ from sqlalchemy import select
 
 from app.database import get_db
 from app.models.course import Topic, CourseEnrollment
+from app.models.progress import UserProgress
 from app.api.auth import get_current_user
 from app.models.user import User
 from app.services.cache import cache, topics_list_key, topic_key, course_key
 from app.config import settings
+
+
+def _derive_topic_status(mastery_level: float) -> str:
+    """Derive topic status string from mastery level (0.0–1.0)."""
+    completion = mastery_level * 100
+    if completion >= 85:
+        return "COMPLETED"
+    elif completion > 0:
+        return "IN_PROGRESS"
+    return "NOT_STARTED"
 
 router = APIRouter()
 
@@ -142,20 +153,13 @@ async def create_topic(
     return _topic_to_dict(topic)
 
 
-@router.get("/topics/{topic_id}", response_model=TopicResponse)
+@router.get("/topics/{topic_id}")
 async def get_topic(
     topic_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Get single topic details."""
-    cache_key = topic_key(topic_id)
-    cached = await cache.get(cache_key)
-    if cached is not None:
-        # Enrollment check against the cached course_id
-        await _assert_enrolled(db, current_user.id, cached["course_id"])
-        return cached
-
+    """Get single topic details including completion percentage and status."""
     query = select(Topic).where(Topic.id == uuid.UUID(topic_id))
     result = await db.execute(query)
     topic = result.scalar_one_or_none()
@@ -167,8 +171,22 @@ async def get_topic(
 
     await _assert_enrolled(db, current_user.id, str(topic.course_id))
 
-    payload = _topic_to_dict(topic)
-    await cache.set(cache_key, payload, settings.CACHE_TTL_TOPICS)
+    # Fetch user progress for mastery level
+    progress_result = await db.execute(
+        select(UserProgress).where(
+            UserProgress.user_id == current_user.id,
+            UserProgress.topic_id == topic.id,
+        )
+    )
+    progress = progress_result.scalar_one_or_none()
+    mastery = float(progress.mastery_level) if progress else 0.0
+    completion_percentage = round(mastery * 100, 1)
+
+    payload = {
+        **_topic_to_dict(topic),
+        "completion_percentage": completion_percentage,
+        "status": _derive_topic_status(mastery),
+    }
     return payload
 
 

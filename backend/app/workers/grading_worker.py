@@ -10,7 +10,7 @@ from sqlalchemy.orm import selectinload
 from datetime import datetime
 
 from app.database import worker_session
-from app.models.test import TestAnswer, TestAttempt
+from app.models.test import TestAnswer, TestAttempt, AnswerStatus
 from app.services.redis_client import redis_client
 from app.services.transcription import transcription_service
 from app.services.grader import grader
@@ -77,6 +77,18 @@ async def process_grading_job(job_data: dict):
             answer.score = grading_result["score"]
             answer.ai_feedback = grading_result["feedback"]
             answer.encouragement = grading_result["encouragement"]
+            answer.key_points_covered = grading_result.get("key_points_covered") or []
+            answer.key_points_missed = grading_result.get("key_points_missed") or []
+
+            # Derive answer status from normalized score (score is 0–10)
+            normalized = float(grading_result["score"]) / 10.0
+            if normalized >= 0.85:
+                answer.status = AnswerStatus.CORRECT
+            elif normalized >= 0.5:
+                answer.status = AnswerStatus.PARTIAL
+            else:
+                answer.status = AnswerStatus.NEEDS_REVIEW
+
             await db.commit()
 
             print(f"[GRADING WORKER] Score: {grading_result['score']}/100")
@@ -86,10 +98,9 @@ async def process_grading_job(job_data: dict):
             if answer.attempt:
                 await _update_attempt_score(db, answer.attempt_id)
 
-            # 5. Send WebSocket notification via Redis
+            # 5. Send WebSocket notification via Redis + create Notification record
             if answer.attempt:
                 attempt = answer.attempt
-                # Get course_id from test
                 course_id = None
                 if hasattr(attempt, "test") and attempt.test:
                     course_id = str(attempt.test.course_id)
@@ -110,6 +121,25 @@ async def process_grading_job(job_data: dict):
                             },
                         },
                     )
+
+                # Create TEST_GRADED notification for this user
+                try:
+                    from app.services.notifications import create_and_push_notification
+                    from app.models.notification import NotificationType
+                    score_pct = round(float(grading_result["score"]) / 10.0 * 100)
+                    await create_and_push_notification(
+                        db=db,
+                        user_id=attempt.user_id,
+                        notif_type=NotificationType.TEST_GRADED,
+                        title="Your test has been graded",
+                        body=f"You scored {score_pct}% on your test.",
+                        metadata={
+                            "attempt_id": str(answer.attempt_id),
+                            "course_id": course_id,
+                        },
+                    )
+                except Exception as notif_err:
+                    print(f"[GRADING WORKER] Notification error: {notif_err}")
 
         except Exception as e:
             print(f"[GRADING WORKER] Error processing job: {e}")

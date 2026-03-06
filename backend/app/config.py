@@ -74,6 +74,16 @@ class Settings(BaseSettings):
     CACHE_TTL_TOPICS: int = 60
     CACHE_TTL_RESOURCES: int = 60
 
+    # Email (Resend)
+    RESEND_API_KEY: str = ""
+    EMAIL_FROM: str = "noreply@notesos.com"
+    PASSWORD_RESET_URL: str = "http://localhost:3000/reset-password"
+
+    # Google OAuth
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/auth/google/callback"
+
     # CORS — comma-separated in .env, e.g. https://example.com,https://other.com
     CORS_ORIGINS: str = "http://localhost:3000"
 

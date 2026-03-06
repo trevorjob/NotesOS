@@ -3,20 +3,27 @@ NotesOS API - Authentication Endpoints
 """
 
 import hashlib
+import secrets
 from datetime import datetime, timedelta
 from typing import Optional
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from jose import jwt, JWTError
 from passlib.context import CryptContext
+import httpx
 
 from app.config import settings
 from app.database import get_db
 from app.models import User, RefreshToken
+
+GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 
 router = APIRouter()
 security = HTTPBearer()
@@ -67,6 +74,20 @@ class PersonalityUpdate(BaseModel):
 
 class LogoutRequest(BaseModel):
     refresh_token: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+
+class PreferencesUpdate(BaseModel):
+    preferences: Optional[dict] = None
+    personality_tags: Optional[list] = None
 
 
 # =============================================================================
@@ -337,7 +358,6 @@ async def update_personality(
     db: AsyncSession = Depends(get_db),
 ):
     """Update user's study personality preferences."""
-    # Update personality
     current_personality = current_user.study_personality or {}
     if prefs.tone:
         current_personality["tone"] = prefs.tone
@@ -350,3 +370,216 @@ async def update_personality(
     await db.commit()
 
     return {"study_personality": current_personality}
+
+
+@router.post("/forgot-password", status_code=status.HTTP_200_OK)
+async def forgot_password(
+    request: ForgotPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Initiate password reset flow.
+    Always returns 200 to prevent email enumeration.
+    """
+    from app.services.email import send_password_reset_email
+
+    result = await db.execute(select(User).where(User.email == request.email))
+    user = result.scalar_one_or_none()
+
+    if user:
+        raw_token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+        user.password_reset_token = token_hash
+        user.password_reset_expires = datetime.utcnow() + timedelta(hours=1)
+        await db.commit()
+
+        reset_url = f"{settings.PASSWORD_RESET_URL}?token={raw_token}"
+        try:
+            await send_password_reset_email(user.email, reset_url)
+        except Exception:
+            pass
+
+    return {"message": "If that email exists, a reset link has been sent."}
+
+
+@router.post("/reset-password", status_code=status.HTTP_200_OK)
+async def reset_password(
+    request: ResetPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Reset user password using a valid reset token."""
+    token_hash = hashlib.sha256(request.token.encode()).hexdigest()
+
+    result = await db.execute(
+        select(User).where(User.password_reset_token == token_hash)
+    )
+    user = result.scalar_one_or_none()
+
+    if not user or not user.password_reset_expires:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token.",
+        )
+
+    if datetime.utcnow() > user.password_reset_expires:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token.",
+        )
+
+    user.password_hash = hash_password(request.new_password)
+    user.password_reset_token = None
+    user.password_reset_expires = None
+    await db.commit()
+
+    return {"message": "Password updated successfully."}
+
+
+@router.get("/google")
+async def google_login():
+    """Redirect user to Google OAuth consent screen."""
+    if not settings.GOOGLE_CLIENT_ID:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Google OAuth is not configured.",
+        )
+
+    params = {
+        "client_id": settings.GOOGLE_CLIENT_ID,
+        "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "access_type": "offline",
+        "prompt": "select_account",
+    }
+    from urllib.parse import urlencode
+    url = f"{GOOGLE_AUTH_URL}?{urlencode(params)}"
+    return RedirectResponse(url=url)
+
+
+@router.get("/google/callback")
+async def google_callback(
+    code: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Handle Google OAuth callback. Returns JWT tokens."""
+    if not settings.GOOGLE_CLIENT_ID:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Google OAuth is not configured.",
+        )
+
+    async with httpx.AsyncClient() as client:
+        # Exchange code for tokens
+        token_response = await client.post(
+            GOOGLE_TOKEN_URL,
+            data={
+                "code": code,
+                "client_id": settings.GOOGLE_CLIENT_ID,
+                "client_secret": settings.GOOGLE_CLIENT_SECRET,
+                "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+                "grant_type": "authorization_code",
+            },
+        )
+        if token_response.status_code != 200:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Failed to exchange authorization code.",
+            )
+        token_data = token_response.json()
+        google_access_token = token_data.get("access_token")
+
+        # Fetch user info from Google
+        userinfo_response = await client.get(
+            GOOGLE_USERINFO_URL,
+            headers={"Authorization": f"Bearer {google_access_token}"},
+        )
+        if userinfo_response.status_code != 200:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Failed to fetch Google user info.",
+            )
+        userinfo = userinfo_response.json()
+
+    google_id: str = userinfo.get("sub")
+    email: str = userinfo.get("email", "")
+    full_name: str = userinfo.get("name", email)
+    avatar_url: Optional[str] = userinfo.get("picture")
+
+    if not google_id or not email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Google account missing required fields.",
+        )
+
+    # Find or create user
+    user: Optional[User] = None
+
+    # Try by google_id first
+    result = await db.execute(select(User).where(User.google_id == google_id))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        # Try by email (link existing account)
+        result = await db.execute(select(User).where(User.email == email))
+        user = result.scalar_one_or_none()
+        if user:
+            user.google_id = google_id
+            if avatar_url and not user.avatar_url:
+                user.avatar_url = avatar_url
+        else:
+            user = User(
+                email=email,
+                full_name=full_name,
+                google_id=google_id,
+                avatar_url=avatar_url,
+                password_hash=None,
+            )
+            db.add(user)
+            await db.flush()
+
+    user.last_login = datetime.utcnow()
+    await db.commit()
+    await db.refresh(user)
+
+    access_token = create_access_token(data={"sub": str(user.id)})
+    refresh_token = await create_refresh_token(user.id, db)
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+        "user": {
+            "id": str(user.id),
+            "email": user.email,
+            "full_name": user.full_name,
+            "avatar_url": user.avatar_url,
+            "study_personality": user.study_personality,
+        },
+    }
+
+
+@router.patch("/me/preferences")
+async def update_preferences(
+    request: PreferencesUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update user preferences and/or personality tags."""
+    if request.preferences is not None:
+        current_user.preferences = request.preferences
+    if request.personality_tags is not None:
+        current_user.personality_tags = request.personality_tags
+
+    await db.commit()
+    await db.refresh(current_user)
+
+    return {
+        "id": str(current_user.id),
+        "email": current_user.email,
+        "full_name": current_user.full_name,
+        "avatar_url": current_user.avatar_url,
+        "study_personality": current_user.study_personality,
+        "preferences": current_user.preferences,
+        "personality_tags": current_user.personality_tags,
+    }
