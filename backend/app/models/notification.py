@@ -5,7 +5,15 @@ NotesOS Models - Notification Model
 import uuid
 from datetime import datetime
 from enum import Enum
-from sqlalchemy import Column, String, Boolean, DateTime, Text, ForeignKey, Enum as SQLEnum
+from sqlalchemy import (
+    Column,
+    String,
+    Boolean,
+    DateTime,
+    Text,
+    ForeignKey,
+    Enum as SQLEnum,
+)
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 
 from app.database import Base
@@ -34,6 +42,6 @@ class Notification(Base):
     is_read = Column(Boolean, default=False, nullable=False)
 
     # Optional structured data (e.g. {"test_id": "...", "course_id": "..."})
-    metadata = Column(JSONB, nullable=True)
+    meta_data = Column(JSONB, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

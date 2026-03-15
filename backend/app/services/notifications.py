@@ -17,7 +17,7 @@ async def create_and_push_notification(
     notif_type: NotificationType,
     title: str,
     body: str,
-    metadata: Optional[dict] = None,
+    meta_data: Optional[dict] = None,
 ) -> Notification:
     """
     Create a Notification record in the DB and push it to the user's
@@ -29,7 +29,7 @@ async def create_and_push_notification(
         notif_type: NotificationType enum value
         title: Short notification title
         body: Notification body text
-        metadata: Optional JSONB payload (e.g. test_id, course_id)
+        meta_data: Optional JSONB payload (e.g. test_id, course_id)
 
     Returns:
         The created Notification instance
@@ -39,7 +39,7 @@ async def create_and_push_notification(
         type=notif_type,
         title=title,
         body=body,
-        metadata=metadata,
+        meta_data=meta_data,
     )
     db.add(notification)
     await db.commit()
@@ -57,7 +57,7 @@ async def create_and_push_notification(
                     "title": notification.title,
                     "body": notification.body,
                     "is_read": notification.is_read,
-                    "metadata": notification.metadata,
+                    "meta_data": notification.meta_data,
                     "created_at": notification.created_at.isoformat(),
                 },
             },

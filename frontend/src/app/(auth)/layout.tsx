@@ -1,14 +1,14 @@
-/**
- * NotesOS - Auth Layout
- * Wraps login/register: redirects to /courses if already authenticated.
- */
-
 import { AuthRedirect } from '@/components/AuthRedirect';
+import { AuthLayout } from '@/components/layouts/AuthLayout';
 
-export default function AuthLayout({
-    children,
+export default function AuthGroupLayout({
+  children,
 }: {
-    children: React.ReactNode;
+  children: React.ReactNode;
 }) {
-    return <AuthRedirect>{children}</AuthRedirect>;
+  return (
+    <AuthRedirect>
+      <AuthLayout>{children}</AuthLayout>
+    </AuthRedirect>
+  );
 }

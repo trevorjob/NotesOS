@@ -1,20 +1,14 @@
-/**
- * NotesOS - Main Layout
- * Wraps all authenticated routes (courses, etc.) with auth guard and session validation.
- */
-
 import { AuthGuard } from '@/components/AuthGuard';
-import { OfflineBanner } from '@/components/OfflineBanner';
+import { AppLayout } from '@/components/layouts/AppLayout';
 
-export default function MainLayout({
-    children,
+export default function MainGroupLayout({
+  children,
 }: {
-    children: React.ReactNode;
+  children: React.ReactNode;
 }) {
-    return (
-        <AuthGuard>
-            <OfflineBanner />
-            {children}
-        </AuthGuard>
-    );
+  return (
+    <AuthGuard>
+      <AppLayout>{children}</AppLayout>
+    </AuthGuard>
+  );
 }

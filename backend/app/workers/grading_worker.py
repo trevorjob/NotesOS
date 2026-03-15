@@ -126,6 +126,7 @@ async def process_grading_job(job_data: dict):
                 try:
                     from app.services.notifications import create_and_push_notification
                     from app.models.notification import NotificationType
+
                     score_pct = round(float(grading_result["score"]) / 10.0 * 100)
                     await create_and_push_notification(
                         db=db,
@@ -133,7 +134,7 @@ async def process_grading_job(job_data: dict):
                         notif_type=NotificationType.TEST_GRADED,
                         title="Your test has been graded",
                         body=f"You scored {score_pct}% on your test.",
-                        metadata={
+                        meta_data={
                             "attempt_id": str(answer.attempt_id),
                             "course_id": course_id,
                         },

@@ -384,6 +384,47 @@ export const api = {
 
         getTestResults: (attemptId: string) =>
             apiClient.get(`/api/tests/attempts/${attemptId}/results`),
+
+        getTestStats: (courseId?: string) =>
+            apiClient.get('/api/tests/stats', { params: courseId ? { course_id: courseId } : {} }),
+
+        saveDraft: (testId: string, answers: Array<{ question_id: string; answer_text: string }>) =>
+            apiClient.post(`/api/tests/${testId}/draft`, { answers }),
+    },
+
+    // Semesters
+    semesters: {
+        getAll: () => apiClient.get('/api/semesters'),
+
+        getById: (id: string) => apiClient.get(`/api/semesters/${id}`),
+
+        create: (data: { name: string; start_date?: string; end_date?: string }) =>
+            apiClient.post('/api/semesters', data),
+
+        update: (id: string, data: Partial<{ name: string; start_date?: string; end_date?: string }>) =>
+            apiClient.patch(`/api/semesters/${id}`, data),
+
+        delete: (id: string) => apiClient.delete(`/api/semesters/${id}`),
+
+        join: (invite_code: string, preview = false) =>
+            apiClient.post('/api/semesters/join', { invite_code, preview }),
+
+        getMembers: (id: string) => apiClient.get(`/api/semesters/${id}/members`),
+
+        addCourse: (semesterId: string, courseId: string) =>
+            apiClient.post(`/api/semesters/${semesterId}/courses/${courseId}`),
+
+        removeCourse: (semesterId: string, courseId: string) =>
+            apiClient.delete(`/api/semesters/${semesterId}/courses/${courseId}`),
+    },
+
+    // Notifications
+    notifications: {
+        getAll: () => apiClient.get('/api/notifications'),
+
+        markRead: (id: string) => apiClient.patch(`/api/notifications/${id}/read`),
+
+        markAllRead: () => apiClient.patch('/api/notifications/read-all'),
     },
 
     // Progress

@@ -1,91 +1,176 @@
 @import "tailwindcss";
+@import "material-symbols";
 
 /* ═══════════════════════════════════════════════════════════════════════
-   NotesOS Design System — Warm & Minimal
-   No pure black or white. Deep, cozy tones.
+   NotesOS Design System — Full Token Set
+   Primary: Muted indigo-slate #5C6BC0
+   Fonts: Inter (UI) + Playfair Display (headings)
    ═══════════════════════════════════════════════════════════════════════ */
 
 :root {
-  /* Backgrounds (warm creams, never white) */
-  --bg-base: #F5F0EB;
-  --bg-elevated: #FAF7F4;
-  --bg-sunken: #EDE8E1;
+  /* ── Brand / Primary ─────────────────────────────────────────────── */
+  --color-primary:        #5C6BC0;
+  --color-primary-hover:  #4F5CB3;
+  --color-primary-muted:  #5C6BC020;   /* 12% opacity tint */
+  --color-primary-soft:   #5C6BC010;
 
-  /* Text (espresso/clay, never black) */
-  --text-primary: #2D2420;
-  --text-secondary: #4A3F35;
-  --text-tertiary: #8C7E72;
+  /* ── Backgrounds (warm neutral, never pure white/black) ──────────── */
+  --bg-base:       #F9F8F6;   /* page background light */
+  --bg-elevated:   #FFFFFF;   /* cards, surfaces light */
+  --bg-sunken:     #F2F0ED;   /* input backgrounds, subtle wells */
+  --bg-base-dark:  #1C1C1E;   /* page background dark */
+  --bg-elevated-dark: #2C2C2E; /* cards dark */
+  --bg-sunken-dark:   #3A3A3C; /* inputs dark */
 
-  /* Accent (ONE dark color for CTAs) */
-  --accent-primary: #3D2E28;
-  --accent-hover: #2D2420;
+  /* ── Text ───────────────────────────────────────────────────────── */
+  --text-primary:    #1A1A1A;
+  --text-secondary:  #6B7280;
+  --text-tertiary:   #9CA3AF;
+  --text-primary-dark:   #EDEDED;
+  --text-secondary-dark: #9CA3AF;
+  --text-tertiary-dark:  #6B7280;
 
-  /* Semantic (minimal) */
-  --success: #6B8F71;
-  --error: #C75C5C;
+  /* ── Borders ─────────────────────────────────────────────────────── */
+  --border-base:  #E5E5E5;
+  --border-dark:  #3A3A3C;
 
-  /* Glass Morphism */
-  --glass-bg: rgba(250, 247, 244, 0.7);
-  --glass-border: rgba(237, 232, 225, 0.5);
-  --glass-shadow: 0 8px 32px 0 rgba(45, 36, 32, 0.06);
+  /* ── Semantic ────────────────────────────────────────────────────── */
+  --color-success:  #22C55E;
+  --color-warning:  #F59E0B;
+  --color-error:    #EF4444;
+  --color-info:     #3B82F6;
+  --color-purple:   #7C3AED;   /* AI accent */
 
-  /* Spacing (8px grid) */
-  --space-1: 0.25rem;
-  /* 4px */
-  --space-2: 0.5rem;
-  /* 8px */
-  --space-3: 0.75rem;
-  /* 12px */
-  --space-4: 1rem;
-  /* 16px */
-  --space-5: 1.25rem;
-  /* 20px */
-  --space-6: 1.5rem;
-  /* 24px */
-  --space-8: 2rem;
-  /* 32px */
-  --space-10: 2.5rem;
-  /* 40px */
-  --space-12: 3rem;
-  /* 48px */
-  --space-16: 4rem;
-  /* 64px */
-  --space-20: 5rem;
-  /* 80px */
+  /* ── Semantic bg/text pairings ───────────────────────────────────── */
+  --success-bg:    #F0FDF4;
+  --success-text:  #15803D;
+  --warning-bg:    #FFFBEB;
+  --warning-text:  #B45309;
+  --error-bg:      #FEF2F2;
+  --error-text:    #B91C1C;
+  --info-bg:       #EFF6FF;
+  --info-text:     #1D4ED8;
+  --neutral-bg:    #F3F4F6;
+  --neutral-text:  #374151;
 
-  /* Border Radius */
-  --radius-sm: 0.5rem;
-  /* 8px */
-  --radius-md: 0.75rem;
-  /* 12px */
-  --radius-lg: 1rem;
-  /* 16px */
+  /* ── Shadows ─────────────────────────────────────────────────────── */
+  --shadow-soft:    0 4px 20px -2px rgba(0,0,0,0.05);
+  --shadow-md:      0 4px 6px rgba(0,0,0,0.07);
+  --shadow-primary: 0 4px 14px -2px rgba(92,107,192,0.25);
 
-  /* Transitions */
-  --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
-  --transition-base: 200ms cubic-bezier(0.4, 0, 0.2, 1);
+  /* ── Border Radius ───────────────────────────────────────────────── */
+  --radius-sm:   4px;
+  --radius-md:   8px;
+  --radius-lg:   12px;
+  --radius-xl:   16px;
+  --radius-2xl:  24px;
+  --radius-full: 9999px;
+
+  /* ── Spacing (8px grid) ──────────────────────────────────────────── */
+  --space-1:  0.25rem;   /* 4px  */
+  --space-2:  0.5rem;    /* 8px  */
+  --space-3:  0.75rem;   /* 12px */
+  --space-4:  1rem;      /* 16px */
+  --space-5:  1.25rem;   /* 20px */
+  --space-6:  1.5rem;    /* 24px */
+  --space-8:  2rem;      /* 32px */
+  --space-10: 2.5rem;    /* 40px */
+  --space-12: 3rem;      /* 48px */
+  --space-16: 4rem;      /* 64px */
+
+  /* ── Glass Morphism ──────────────────────────────────────────────── */
+  --glass-bg:     rgba(255,255,255,0.80);
+  --glass-border: rgba(229,229,229,0.60);
+  --glass-shadow: 0 8px 32px 0 rgba(0,0,0,0.06);
+
+  /* ── Transitions ─────────────────────────────────────────────────── */
+  --transition-fast: 150ms cubic-bezier(0.4,0,0.2,1);
+  --transition-base: 200ms cubic-bezier(0.4,0,0.2,1);
+
+  /* ── Layout ──────────────────────────────────────────────────────── */
+  --sidebar-width: 64px;
+  --topbar-height: 60px;
+  --bottomnav-height: 64px;
 }
 
+/* ── Dark Mode Overrides ─────────────────────────────────────────────── */
+.dark {
+  --bg-base:      #1C1C1E;
+  --bg-elevated:  #2C2C2E;
+  --bg-sunken:    #3A3A3C;
+
+  --text-primary:   #EDEDED;
+  --text-secondary: #9CA3AF;
+  --text-tertiary:  #6B7280;
+
+  --border-base: #3A3A3C;
+
+  --glass-bg:     rgba(44,44,46,0.85);
+  --glass-border: rgba(58,58,60,0.60);
+
+  --success-bg:   rgba(34,197,94,0.12);
+  --success-text: #86EFAC;
+  --warning-bg:   rgba(245,158,11,0.12);
+  --warning-text: #FCD34D;
+  --error-bg:     rgba(239,68,68,0.12);
+  --error-text:   #FCA5A5;
+  --info-bg:      rgba(59,130,246,0.12);
+  --info-text:    #93C5FD;
+  --neutral-bg:   rgba(55,65,81,0.40);
+  --neutral-text: #D1D5DB;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Tailwind v4 Theme Mapping
+   ═══════════════════════════════════════════════════════════════════════ */
+
 @theme inline {
-  /* Map to Tailwind */
+  /* Colors */
+  --color-primary:   var(--color-primary);
+  --color-primary-hover: var(--color-primary-hover);
   --color-background: var(--bg-base);
+  --color-surface:    var(--bg-elevated);
+  --color-sunken:     var(--bg-sunken);
   --color-foreground: var(--text-primary);
-  --color-primary: var(--accent-primary);
-  --color-success: var(--success);
-  --color-error: var(--error);
+  --color-muted:      var(--text-secondary);
+  --color-subtle:     var(--text-tertiary);
+  --color-border:     var(--border-base);
+  --color-success:    var(--color-success);
+  --color-warning:    var(--color-warning);
+  --color-error:      var(--color-error);
+  --color-info:       var(--color-info);
+  --color-purple:     var(--color-purple);
+
+  /* Border radius */
+  --radius-sm:   var(--radius-sm);
+  --radius-md:   var(--radius-md);
+  --radius-lg:   var(--radius-lg);
+  --radius-xl:   var(--radius-xl);
+  --radius-2xl:  var(--radius-2xl);
+  --radius-full: var(--radius-full);
+
+  /* Fonts */
+  --font-sans:    var(--font-inter), -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-display: var(--font-playfair), Georgia, 'Times New Roman', serif;
+  --font-mono:    var(--font-jetbrains), 'JetBrains Mono', 'Fira Code', monospace;
+
+  /* Shadows */
+  --shadow-soft:    var(--shadow-soft);
+  --shadow-primary: var(--shadow-primary);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
    Base Styles
    ═══════════════════════════════════════════════════════════════════════ */
 
-* {
+*, *::before, *::after {
   box-sizing: border-box;
 }
 
 html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  height: 100%;
 }
 
 body {
@@ -93,57 +178,91 @@ body {
   padding: 0;
   background: var(--bg-base);
   color: var(--text-primary);
-  font-family: var(--font-sans), -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: var(--font-sans);
   line-height: 1.6;
+  min-height: 100%;
+}
+
+/* Material Symbols — use outlined style, no fill by default */
+.material-symbols-outlined {
+  font-variation-settings:
+    'FILL' 0,
+    'wght' 400,
+    'GRAD' 0,
+    'opsz' 24;
+  user-select: none;
+  line-height: 1;
+}
+.material-symbols-filled {
+  font-variation-settings:
+    'FILL' 1,
+    'wght' 400,
+    'GRAD' 0,
+    'opsz' 24;
+  user-select: none;
+  line-height: 1;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
-   Utility Classes — Glass Effects
+   Glass Morphism Utilities
    ═══════════════════════════════════════════════════════════════════════ */
 
-/* Clear Glass — Light blur for content cards */
 .glass-card {
-  background: rgba(250, 247, 244, 0.6);
+  background: var(--glass-bg);
   backdrop-filter: blur(12px) saturate(150%);
   -webkit-backdrop-filter: blur(12px) saturate(150%);
-  border: 1px solid rgba(237, 232, 225, 0.4);
-  box-shadow: 0 4px 16px 0 rgba(45, 36, 32, 0.04);
-  border-radius: var(--radius-md);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  border-radius: var(--radius-xl);
 }
 
-/* Frosted Glass — Heavy blur for nav/modals */
 .glass-nav {
-  background: rgba(250, 247, 244, 0.8);
+  background: var(--glass-bg);
   backdrop-filter: blur(40px) saturate(180%);
   -webkit-backdrop-filter: blur(40px) saturate(180%);
-  border-bottom: 1px solid rgba(237, 232, 225, 0.6);
+  border-bottom: 1px solid var(--glass-border);
   box-shadow:
-    0 1px 3px 0 rgba(45, 36, 32, 0.05),
-    0 8px 24px -4px rgba(45, 36, 32, 0.08);
+    0 1px 3px 0 rgba(0,0,0,0.04),
+    0 8px 24px -4px rgba(0,0,0,0.06);
   isolation: isolate;
 }
 
-/* Frosted Panel — For slide-outs, modals */
 .glass-panel {
-  background: rgba(250, 247, 244, 0.85);
+  background: var(--glass-bg);
   backdrop-filter: blur(32px) saturate(180%);
   -webkit-backdrop-filter: blur(32px) saturate(180%);
-  border: 1px solid rgba(237, 232, 225, 0.6);
-  box-shadow:
-    0 10px 40px -8px rgba(45, 36, 32, 0.12),
-    0 4px 16px -2px rgba(45, 36, 32, 0.08);
+  border: 1px solid var(--glass-border);
+  box-shadow: 0 10px 40px -8px rgba(0,0,0,0.12), 0 4px 16px -2px rgba(0,0,0,0.08);
 }
 
-.text-primary {
-  color: var(--text-primary);
+/* ═══════════════════════════════════════════════════════════════════════
+   Typography Utilities
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.font-display {
+  font-family: var(--font-display);
+}
+.font-ui {
+  font-family: var(--font-sans);
 }
 
-.text-secondary {
-  color: var(--text-secondary);
-}
+/* ═══════════════════════════════════════════════════════════════════════
+   Scrollbar
+   ═══════════════════════════════════════════════════════════════════════ */
 
-.text-tertiary {
-  color: var(--text-tertiary);
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-base);
+  border-radius: var(--radius-full);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -151,33 +270,63 @@ body {
    ═══════════════════════════════════════════════════════════════════════ */
 
 @keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes slideUp {
-  from {
-    opacity: 0;
-    transform: translateY(1rem);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
-.animate-fade-in {
-  animation: fadeIn var(--transition-base) ease-out;
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
-.animate-slide-up {
-  animation: slideUp 300ms cubic-bezier(0.4, 0, 0.2, 1);
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@keyframes ping-slow {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50%       { transform: scale(1.15); opacity: 0.6; }
+}
+
+.animate-fade-in   { animation: fadeIn   var(--transition-base) ease-out both; }
+.animate-slide-up  { animation: slideUp  300ms cubic-bezier(0.4,0,0.2,1) both; }
+.animate-slide-down { animation: slideDown 200ms cubic-bezier(0.4,0,0.2,1) both; }
+.animate-scale-in  { animation: scaleIn  150ms cubic-bezier(0.4,0,0.2,1) both; }
+.animate-ping-slow { animation: ping-slow 2s ease-in-out infinite; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Focus Ring Utility
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.focus-ring:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Prose / Reading Typography
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.prose-reading {
+  font-family: var(--font-display);
+  font-size: 1.0625rem;
+  line-height: 1.75;
+  color: var(--text-primary);
+  max-width: 68ch;
+}
+.prose-reading h1, .prose-reading h2, .prose-reading h3 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  line-height: 1.3;
+  margin-top: 1.75em;
+  margin-bottom: 0.5em;
+}
+.prose-reading p {
+  margin-bottom: 1.25em;
 }

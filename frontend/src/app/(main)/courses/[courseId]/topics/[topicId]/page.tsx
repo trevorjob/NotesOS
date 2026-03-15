@@ -1,517 +1,249 @@
-/**
- * Topic Study View - REDESIGNED
- * Single-column layout: Collapsible Research + Resources (main content) + Floating AI Chat
- */
-
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, BookOpen, FileText, Sparkles, Loader2, ChevronDown, ChevronUp, ExternalLink, WifiOff } from 'lucide-react';
 import { useCourseStore } from '@/stores/courses';
 import { useResourcesStore } from '@/stores/resources';
-import { useAIChatStore } from '@/stores/aiChat';
 import { useProgressStore } from '@/stores/progress';
-import { useAuthStore } from '@/stores/auth';
 import { useNetworkStore } from '@/stores/network';
-import { GlassCard, Button } from '@/components/ui';
-import { ResourceCard } from '@/components/ResourceCard';
+import { AIPreClassResearchCard } from '@/components/ai/AIPreClassResearchCard';
+import { ResourceCard } from '@/components/cards/ResourceCard';
+import { EmptyState } from '@/components/feedback/EmptyState';
+import { Skeleton } from '@/components/feedback/Skeleton';
+import { FAB } from '@/components/ui/FAB';
+import { TabBar } from '@/components/ui/TabBar';
+import { Icon } from '@/components/ui/Icon';
+import { LinearProgressBar } from '@/components/data-display/LinearProgressBar';
+import { useToast } from '@/components/feedback/ToastProvider';
 import { FileUpload } from '@/components/FileUpload';
 import { AIChatOverlay } from '@/components/AIChatOverlay';
 import { MarkdownRenderer } from '@/components/MarkdownRenderer';
-import { api } from '@/lib/api';
+import { useAIChatStore } from '@/stores/aiChat';
 import { connectWebSocket, WebSocketClient, WebSocketMessage } from '@/lib/websocket';
+import { api } from '@/lib/api';
 
-export default function TopicPage() {
-    const params = useParams();
-    const router = useRouter();
-    const courseId = params.courseId as string;
-    const topicId = params.topicId as string;
+const UPLOAD_TABS = [{ id: 'files', label: 'Upload Files' }, { id: 'text', label: 'Write Notes' }];
 
-    const { currentCourse } = useCourseStore();
-    const { user } = useAuthStore();
-    const {
-        resources,
-        isLoading: resourcesLoading,
-        isUploading,
-        uploadProgress,
-        fetchResources,
-        createTextResource,
-        uploadFiles,
-        deleteResource,
-        factCheckResource,
-        fetchFactChecks,
-        factChecks,
-        isLoadingFactChecks,
-        updateResource,
-        retranscribeResource,
-    } = useResourcesStore();
+export default function TopicDetailPage() {
+  const { courseId, topicId } = useParams<{ courseId: string; topicId: string }>();
+  const router = useRouter();
+  const toast = useToast();
 
-    const {
-        messages,
-        isSending,
-        fetchConversations,
-        askQuestion,
-        clearCurrentConversation,
-    } = useAIChatStore();
+  const { currentCourse } = useCourseStore();
+  const { isOnline } = useNetworkStore();
+  const { resources, isLoading: resLoading, isUploading, uploadProgress, fetchResources, createTextResource, uploadFiles, deleteResource } = useResourcesStore();
+  const { messages, isSending, fetchConversations, askQuestion, clearCurrentConversation } = useAIChatStore();
+  const { startSession, endSession } = useProgressStore();
 
-    const { startSession, endSession } = useProgressStore();
-    const { isOnline } = useNetworkStore();
-    const sessionIdRef = useRef<string | null>(null);
-    const wsClientRef = useRef<WebSocketClient | null>(null);
-    // In-flight guards — prevent StrictMode double-invoke from creating duplicate
-    // DB records (startSession) or firing redundant network requests.
-    const isFetchingTopicRef = useRef(false);
-    const isFetchingResearchRef = useRef(false);
-    const isStartingSessionRef = useRef(false);
+  const [topic, setTopic]                 = useState<any>(null);
+  const [research, setResearch]           = useState<any>(null);
+  const [researchLoading, setResLoading]  = useState(false);
+  const [generating, setGenerating]       = useState(false);
+  const [uploadTab, setUploadTab]         = useState('files');
+  const [textTitle, setTextTitle]         = useState('');
+  const [textContent, setTextContent]     = useState('');
+  const [savingText, setSavingText]       = useState(false);
 
-    const [topic, setTopic] = useState<any>(null);
-    const [research, setResearch] = useState<any>(null);
-    const [isResearchExpanded, setIsResearchExpanded] = useState(false);
-    const [researchLoading, setResearchLoading] = useState(false);
-    const [generatingResearch, setGeneratingResearch] = useState(false);
-    const [uploadMode, setUploadMode] = useState<'files' | 'text'>('files');
-    const [textResourceTitle, setTextResourceTitle] = useState('');
-    const [textResourceContent, setTextResourceContent] = useState('');
-    const [isCreatingText, setIsCreatingText] = useState(false);
+  const sessionRef = useRef<string | null>(null);
+  const wsRef = useRef<WebSocketClient | null>(null);
+  const fetchedRef = useRef(false);
 
-    // Load topic data
-    useEffect(() => {
-        if (isFetchingTopicRef.current) return;
-        isFetchingTopicRef.current = true;
-        api.topics.getById(topicId)
-            .then((response) => setTopic(response.data))
-            .catch((error) => console.error('Failed to load topic:', error))
-            .finally(() => { isFetchingTopicRef.current = false; });
-    }, [topicId]);
+  useEffect(() => {
+    if (fetchedRef.current) return;
+    fetchedRef.current = true;
+    api.topics.getById(topicId).then((r) => setTopic(r.data)).catch(() => {});
+  }, [topicId]);
 
-    // Load resources
-    useEffect(() => {
-        fetchResources(topicId);
-    }, [topicId, fetchResources]);
+  useEffect(() => { fetchResources(topicId); }, [topicId, fetchResources]);
 
-    // Load research
-    useEffect(() => {
-        if (isFetchingResearchRef.current) return;
-        isFetchingResearchRef.current = true;
-        setResearchLoading(true);
-        api.ai.getResearch(topicId)
-            .then((response) => setResearch(response.data))
-            .catch(() => setResearch(null))
-            .finally(() => { setResearchLoading(false); isFetchingResearchRef.current = false; });
-    }, [topicId]);
+  useEffect(() => {
+    if (!courseId) return;
+    fetchConversations(courseId);
+    return () => clearCurrentConversation();
+  }, [courseId, fetchConversations, clearCurrentConversation]);
 
-    // Load conversations
-    useEffect(() => {
-        if (courseId) {
-            fetchConversations(courseId);
-        }
-        return () => clearCurrentConversation();
-    }, [courseId, fetchConversations, clearCurrentConversation]);
+  useEffect(() => {
+    setResLoading(true);
+    api.ai.getResearch(topicId).then((r) => setResearch(r.data)).catch(() => {}).finally(() => setResLoading(false));
+  }, [topicId]);
 
-    // Track reading session for progress — guarded to avoid creating duplicate
-    // session records from React StrictMode's double effect invocation.
-    useEffect(() => {
-        if (isStartingSessionRef.current) return;
-        isStartingSessionRef.current = true;
-        startSession(topicId, 'reading').then((id) => {
-            sessionIdRef.current = id;
-        });
-        return () => {
-            const sid = sessionIdRef.current;
-            if (sid) endSession(sid);
-            sessionIdRef.current = null;
-            isStartingSessionRef.current = false;
-        };
-    }, [topicId, startSession, endSession]);
-
-    // WebSocket connection for real-time updates
-    useEffect(() => {
-        if (!courseId) return;
-
-        const { updateResourceProcessingStatus } = useResourcesStore.getState();
-        const client = connectWebSocket(courseId, {
-            onMessage: (message: WebSocketMessage) => {
-                if (message.type === 'processing_status') {
-                    updateResourceProcessingStatus(message.resource_id, message.status);
-                } else if (message.type === 'fact_check:complete') {
-                    if (message.data?.resource_id) {
-                        fetchFactChecks(message.data.resource_id);
-                    }
-                } else if (message.type === 'resource_created' || message.type === 'resource_updated') {
-                    fetchResources(topicId);
-                } else if (message.type === 'resource_deleted') {
-                    fetchResources(topicId);
-                }
-            },
-            onOpen: () => {
-                console.log('[TopicPage] WebSocket connected');
-            },
-            onClose: () => {
-                console.log('[TopicPage] WebSocket disconnected');
-            },
-            onError: (error) => {
-                console.error('[TopicPage] WebSocket error:', error);
-            },
-        });
-
-        wsClientRef.current = client;
-
-        return () => {
-            client.disconnect();
-            wsClientRef.current = null;
-        };
-    }, [courseId, topicId, fetchResources, fetchFactChecks]);
-
-    const handleGenerateResearch = async () => {
-        setGeneratingResearch(true);
-        try {
-            const response = await api.ai.generateResearch(topicId);
-            setResearch(response.data);
-            setIsResearchExpanded(true); // Auto-expand after generation
-        } catch (error) {
-            console.error('Failed to generate research:', error);
-        } finally {
-            setGeneratingResearch(false);
-        }
+  useEffect(() => {
+    startSession(topicId, 'reading').then((id) => { sessionRef.current = id; });
+    return () => {
+      if (sessionRef.current) endSession(sessionRef.current);
+      sessionRef.current = null;
     };
+  }, [topicId, startSession, endSession]);
 
-    // Fetch fact checks for verified resources
-    useEffect(() => {
-        if (resources.length > 0) {
-            resources.forEach(resource => {
-                if (resource.is_verified && !factChecks[resource.id] && !isLoadingFactChecks[resource.id]) {
-                    fetchFactChecks(resource.id);
-                }
-            });
-        }
-    }, [resources, factChecks, isLoadingFactChecks, fetchFactChecks]);
+  useEffect(() => {
+    if (!courseId) return;
+    const { updateResourceProcessingStatus } = useResourcesStore.getState();
+    const client = connectWebSocket(courseId, {
+      onMessage: (msg: WebSocketMessage) => {
+        if (msg.type === 'processing_status') updateResourceProcessingStatus(msg.resource_id, msg.status);
+        if (msg.type === 'resource_created' || msg.type === 'resource_updated' || msg.type === 'resource_deleted') fetchResources(topicId);
+      },
+      onOpen: () => {},
+      onClose: () => {},
+      onError: () => {},
+    });
+    wsRef.current = client;
+    return () => { client.disconnect(); wsRef.current = null; };
+  }, [courseId, topicId, fetchResources]);
 
-    const handleUpload = async (files: File[], title?: string, isHandwritten?: boolean) => {
-        await uploadFiles(topicId, courseId, files, title, isHandwritten);
-    };
-
-    const handleAskQuestion = async (question: string) => {
-        await askQuestion(courseId, question, topicId);
-    };
-
-    const handleDeleteResource = async (resourceId: string) => {
-        if (confirm('Delete this resource?')) {
-            try {
-                await deleteResource(resourceId);
-            } catch (error) {
-                console.error('Failed to delete resource:', error);
-            }
-        }
-    };
-
-    const handleUpdateResource = async (resourceId: string, data: Partial<{ title: string; description: string }>) => {
-        try {
-            await updateResource(resourceId, data);
-        } catch (error) {
-            console.error('Failed to update resource:', error);
-        }
-    };
-
-    const handleRetranscribe = async (resourceId: string) => {
-        try {
-            await retranscribeResource(resourceId);
-        } catch (error) {
-            console.error('Failed to re-transcribe resource:', error);
-        }
-    };
-
-    const handleFactCheck = async (resourceId: string) => {
-        try {
-            await factCheckResource(resourceId);
-        } catch (error) {
-            console.error('Failed to start fact check:', error);
-        }
-    };
-
-    const handleCreateTextResource = async () => {
-        if (!textResourceContent.trim()) return;
-
-        setIsCreatingText(true);
-        try {
-            await createTextResource(topicId, {
-                title: textResourceTitle || undefined,
-                content: textResourceContent,
-            });
-            // Reset form
-            setTextResourceTitle('');
-            setTextResourceContent('');
-            setUploadMode('files'); // Switch back to files tab
-        } catch (error) {
-            console.error('Failed to create text resource:', error);
-        } finally {
-            setIsCreatingText(false);
-        }
-    };
-
-    if (!topic) {
-        return (
-            <div className="flex items-center justify-center min-h-screen">
-                <p className="text-[var(--text-tertiary)]">Loading topic...</p>
-            </div>
-        );
+  const handleGenerateResearch = async () => {
+    setGenerating(true);
+    try {
+      const r = await api.ai.generateResearch(topicId);
+      setResearch(r.data);
+      toast.success('Research generated!');
+    } catch {
+      toast.error('Failed to generate research.');
+    } finally {
+      setGenerating(false);
     }
+  };
 
+  const handleUpload = async (files: File[], title?: string, isHandwritten?: boolean) => {
+    await uploadFiles(topicId, courseId, files, title, isHandwritten);
+  };
+
+  const handleSaveText = async () => {
+    if (!textContent.trim()) return;
+    setSavingText(true);
+    try {
+      await createTextResource(topicId, { title: textTitle || undefined, content: textContent });
+      setTextTitle(''); setTextContent(''); setUploadTab('files');
+      toast.success('Notes saved!');
+    } catch {
+      toast.error('Failed to save notes.');
+    } finally {
+      setSavingText(false);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      await deleteResource(id);
+      toast.success('Resource deleted.');
+    } catch {
+      toast.error('Failed to delete.');
+    }
+  };
+
+  const completionPct = topic?.completion_percentage ?? 0;
+
+  if (!topic) {
     return (
-        <div className="min-h-screen bg-[var(--bg-base)] pt-16">
-            {/* Header */}
-            <div className="border-b border-[var(--glass-border)] bg-[var(--bg-base)]/80 backdrop-blur-md z-30">
-                <div className="max-w-5xl mx-auto px-6 md:px-12 py-4">
-                    <button
-                        onClick={() => router.push(`/courses/${courseId}`)}
-                        className="flex items-center gap-2 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] mb-3 transition-colors"
-                    >
-                        <ArrowLeft className="w-4 h-4" />
-                        Back to {currentCourse?.code || 'Course'}
-                    </button>
-                    <div>
-                        <h1 className="text-2xl md:text-3xl font-semibold text-[var(--text-primary)]">
-                            {topic.title}
-                        </h1>
-                        {topic.week_number && (
-                            <p className="text-sm text-[var(--text-tertiary)] mt-1">Week {topic.week_number}</p>
-                        )}
-                    </div>
-                </div>
-            </div>
-
-            {/* Main Content */}
-            <div className="max-w-5xl mx-auto px-6 md:px-12 py-8 space-y-6">
-                {/* Pre-class Research (Collapsible) */}
-                {research || researchLoading || !research ? (
-                    <GlassCard className="overflow-hidden">
-                        <button
-                            onClick={() => setIsResearchExpanded(!isResearchExpanded)}
-                            className="w-full flex items-center justify-between p-5 text-left hover:bg-[var(--bg-sunken)]/30 transition-colors"
-                        >
-                            <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-full bg-[var(--accent-primary)]/10 flex items-center justify-center">
-                                    <BookOpen className="w-5 h-5 text-[var(--accent-primary)]" />
-                                </div>
-                                <div>
-                                    <h2 className="text-lg font-medium text-[var(--text-primary)]">
-                                        Pre-class Research
-                                    </h2>
-                                    <p className="text-xs text-[var(--text-tertiary)] mt-0.5">
-                                        {research ? 'AI-generated overview and key concepts' : 'Generate AI research for this topic'}
-                                    </p>
-                                </div>
-                            </div>
-                            {research && (
-                                isResearchExpanded ? <ChevronUp className="w-5 h-5 text-[var(--text-secondary)]" /> : <ChevronDown className="w-5 h-5 text-[var(--text-secondary)]" />
-                            )}
-                        </button>
-
-                        {isResearchExpanded && (
-                            <div className="px-5 pb-5 space-y-4 border-t border-[var(--glass-border)] pt-5">
-                                {researchLoading ? (
-                                    <div className="text-center py-8">
-                                        <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-[var(--text-tertiary)]" />
-                                        <p className="text-sm text-[var(--text-tertiary)]">Loading...</p>
-                                    </div>
-                                ) : research ? (
-                                    <>
-                                        {/* Research content */}
-                                        <MarkdownRenderer content={research.research_content} />
-
-                                        {/* Key concepts */}
-                                        {research.key_concepts?.concepts && research.key_concepts.concepts.length > 0 && (
-                                            <div>
-                                                <h3 className="text-sm font-medium text-[var(--text-primary)] mb-3">
-                                                    Key Concepts
-                                                </h3>
-                                                <div className="flex flex-wrap gap-2">
-                                                    {research.key_concepts.concepts.map((concept: string, idx: number) => (
-                                                        <span
-                                                            key={idx}
-                                                            className="px-3 py-1.5 rounded-full bg-[var(--accent-primary)]/10 text-[var(--accent-primary)] text-sm font-medium"
-                                                        >
-                                                            {concept}
-                                                        </span>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )}
-
-                                        {/* Sources */}
-                                        {research.sources && research.sources.length > 0 && (
-                                            <div>
-                                                <h3 className="text-sm font-medium text-[var(--text-primary)] mb-3">
-                                                    Sources
-                                                </h3>
-                                                <div className="space-y-2">
-                                                    {research.sources.map((source: any, idx: number) => (
-                                                        <a
-                                                            key={idx}
-                                                            href={source.url}
-                                                            target="_blank"
-                                                            rel="noopener noreferrer"
-                                                            className="flex items-center gap-2 text-sm text-[var(--accent-primary)] hover:underline"
-                                                        >
-                                                            <ExternalLink className="w-3 h-3" />
-                                                            {source.title || source.url}
-                                                        </a>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )}
-                                    </>
-                                ) : (
-                                    <div className="text-center py-8">
-                                        <Sparkles className="w-12 h-12 mx-auto mb-4 text-[var(--text-tertiary)]" />
-                                        <p className="text-sm text-[var(--text-secondary)] mb-4">
-                                            No pre-class research yet
-                                        </p>
-                                        <Button
-                                            onClick={handleGenerateResearch}
-                                            variant="primary"
-                                            disabled={generatingResearch || !isOnline}
-                                            title={!isOnline ? 'AI requires internet' : undefined}
-                                        >
-                                            {generatingResearch ? 'Generating...' : 'Generate Research'}
-                                        </Button>
-                                        {!isOnline && (
-                                            <p className="text-xs text-[var(--text-tertiary)] mt-2">
-                                                AI features require an internet connection
-                                            </p>
-                                        )}
-                                    </div>
-                                )}
-                            </div>
-                        )}
-                    </GlassCard>
-                ) : null}
-
-                {/* Resources Section (Main Content) */}
-                <div>
-                    <div className="flex items-center gap-3 mb-4">
-                        <div className="w-10 h-10 rounded-full bg-[var(--accent-primary)]/10 flex items-center justify-center">
-                            <FileText className="w-5 h-5 text-[var(--accent-primary)]" />
-                        </div>
-                        <div>
-                            <h2 className="text-lg font-medium text-[var(--text-primary)]">
-                                Study Resources
-                            </h2>
-                            <p className="text-xs text-[var(--text-tertiary)] mt-0.5">
-                                Upload files or write your notes
-                            </p>
-                        </div>
-                    </div>
-
-                    {/* Upload Mode Tabs — hidden when offline */}
-                    {isOnline && (
-                        <div className="flex gap-2 mb-4">
-                            <button
-                                onClick={() => setUploadMode('files')}
-                                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${uploadMode === 'files'
-                                    ? 'bg-[var(--accent-primary)] text-white'
-                                    : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)]'
-                                    }`}
-                            >
-                                Upload Files
-                            </button>
-                            <button
-                                onClick={() => setUploadMode('text')}
-                                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${uploadMode === 'text'
-                                    ? 'bg-[var(--accent-primary)] text-white'
-                                    : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)]'
-                                    }`}
-                            >
-                                Write Notes
-                            </button>
-                        </div>
-                    )}
-
-                    {/* Upload/Create Form — hidden when offline */}
-                    {isOnline ? (
-                        <div className="mb-6">
-                            {uploadMode === 'files' ? (
-                                <FileUpload
-                                    onUpload={handleUpload}
-                                    isUploading={isUploading}
-                                    uploadProgress={uploadProgress}
-                                />
-                            ) : (
-                                <div className="space-y-3">
-                                    <input
-                                        type="text"
-                                        placeholder="Title (optional)"
-                                        value={textResourceTitle}
-                                        onChange={(e) => setTextResourceTitle(e.target.value)}
-                                        className="w-full px-4 py-2 bg-[var(--bg-sunken)] border border-[var(--glass-border)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]"
-                                    />
-                                    <textarea
-                                        placeholder="Write your notes here... (supports Markdown)"
-                                        value={textResourceContent}
-                                        onChange={(e) => setTextResourceContent(e.target.value)}
-                                        rows={8}
-                                        className="w-full px-4 py-3 bg-[var(--bg-sunken)] border border-[var(--glass-border)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)] font-mono"
-                                    />
-                                    <button
-                                        onClick={handleCreateTextResource}
-                                        disabled={!textResourceContent.trim() || isCreatingText}
-                                        className="w-full px-4 py-2 bg-[var(--accent-primary)] hover:bg-[var(--accent-hover)] text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                                    >
-                                        {isCreatingText ? 'Saving...' : 'Save Notes'}
-                                    </button>
-                                </div>
-                            )}
-                        </div>
-                    ) : (
-                        <div className="mb-6 px-4 py-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-700 flex items-center gap-2">
-                            <WifiOff className="w-3.5 h-3.5 shrink-0" />
-                            Uploading and writing notes requires an internet connection.
-                        </div>
-                    )}
-
-                    {/* Resource list */}
-                    {resourcesLoading ? (
-                        <GlassCard className="p-8 text-center">
-                            <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-[var(--text-tertiary)]" />
-                            <p className="text-sm text-[var(--text-tertiary)]">Loading resources...</p>
-                        </GlassCard>
-                    ) : resources.length === 0 ? (
-                        <GlassCard className="p-12 text-center">
-                            <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-[var(--bg-sunken)] flex items-center justify-center">
-                                <FileText className="w-8 h-8 text-[var(--text-tertiary)]" />
-                            </div>
-                            <p className="text-sm text-[var(--text-secondary)] mb-1">No resources yet</p>
-                            <p className="text-xs text-[var(--text-tertiary)]">
-                                Upload your notes, PDFs, or images to get started
-                            </p>
-                        </GlassCard>
-                    ) : (
-                        <div className="space-y-3">
-                            {resources.map((resource) => (
-                                <ResourceCard
-                                    key={resource.id}
-                                    resource={resource}
-                                    currentUserId={user?.id}
-                                    onDelete={handleDeleteResource}
-                                    onFactCheck={handleFactCheck}
-                                    onUpdate={handleUpdateResource}
-                                    onReprocess={handleRetranscribe}
-                                    factChecks={factChecks[resource.id] || []}
-                                    isLoadingFactChecks={isLoadingFactChecks[resource.id] || false}
-                                />
-                            ))}
-                        </div>
-                    )}
-                </div>
-            </div>
-
-            {/* Floating AI Chat Overlay */}
-            <AIChatOverlay
-                messages={messages}
-                onSendMessage={handleAskQuestion}
-                isLoading={isSending}
-                courseId={courseId}
-            />
-        </div>
+      <div className="px-4 md:px-8 py-6 max-w-3xl mx-auto">
+        <Skeleton className="h-7 w-48 mb-2" variant="text" />
+        <Skeleton className="h-4 w-64 mb-6" variant="text" />
+        <Skeleton className="h-40 mb-4" />
+        <Skeleton className="h-32 mb-4" />
+      </div>
     );
+  }
+
+  return (
+    <div className="px-4 md:px-8 py-6 max-w-3xl mx-auto">
+      {/* Breadcrumb */}
+      <button
+        onClick={() => router.push(`/courses/${courseId}`)}
+        className="flex items-center gap-1.5 text-xs uppercase tracking-wider font-bold text-[var(--color-primary)] hover:underline mb-4"
+      >
+        <Icon name="arrow_back" size="xs" /> {currentCourse?.code ?? 'Course'}
+      </button>
+
+      {/* Topic header */}
+      <h1 className="font-display font-bold text-2xl text-[var(--text-primary)] mb-1">
+        {topic.title}
+      </h1>
+      {topic.week_number && (
+        <p className="text-xs uppercase tracking-wider text-[var(--text-tertiary)] mb-3">
+          Week {topic.week_number}
+        </p>
+      )}
+      <LinearProgressBar value={completionPct} showLabel className="max-w-xs mb-8" />
+
+      {/* AI Pre-Class Research */}
+      <AIPreClassResearchCard
+        summary={research?.research_content ? research.research_content.slice(0, 300) + (research.research_content.length > 300 ? '…' : '') : null}
+        loading={researchLoading}
+        onGenerate={handleGenerateResearch}
+        generating={generating}
+        className="mb-8"
+      />
+
+      {/* Resources */}
+      <section>
+        <h2 className="text-sm font-bold uppercase tracking-widest text-[var(--text-tertiary)] mb-4">
+          Study Resources
+        </h2>
+
+        {/* Upload area (online only) */}
+        {isOnline && (
+          <div className="mb-6">
+            <TabBar tabs={UPLOAD_TABS} active={uploadTab} onChange={setUploadTab} variant="pill" className="mb-4" />
+            {uploadTab === 'files' ? (
+              <FileUpload onUpload={handleUpload} isUploading={isUploading} uploadProgress={uploadProgress} />
+            ) : (
+              <div className="flex flex-col gap-3">
+                <input
+                  type="text"
+                  placeholder="Title (optional)"
+                  value={textTitle}
+                  onChange={(e) => setTextTitle(e.target.value)}
+                  className="w-full h-10 px-4 rounded-xl border border-[var(--border-base)] bg-[var(--bg-sunken)] text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:border-[var(--color-primary)]"
+                />
+                <textarea
+                  placeholder="Write your notes here… (supports Markdown)"
+                  value={textContent}
+                  onChange={(e) => setTextContent(e.target.value)}
+                  rows={6}
+                  className="w-full p-4 rounded-xl border border-[var(--border-base)] bg-[var(--bg-sunken)] text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:border-[var(--color-primary)] font-mono resize-none"
+                />
+                <button
+                  onClick={handleSaveText}
+                  disabled={!textContent.trim() || savingText}
+                  className="self-end h-10 px-5 rounded-xl bg-[var(--color-primary)] text-white text-sm font-semibold disabled:opacity-50"
+                >
+                  {savingText ? 'Saving…' : 'Save Notes'}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {resLoading ? (
+          <div className="flex flex-col gap-3">
+            {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-16" />)}
+          </div>
+        ) : resources.length === 0 ? (
+          <EmptyState icon="description" title="No resources yet" body="Upload your notes, PDFs, or images to get started." />
+        ) : (
+          <div className="flex flex-col gap-3">
+            {resources.map((r: any) => (
+              <ResourceCard
+                key={r.id}
+                id={r.id}
+                topicId={topicId}
+                courseId={courseId}
+                title={r.title ?? 'Untitled'}
+                type={r.resource_type ?? 'other'}
+                isVerified={r.is_verified}
+              />
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* AI Chat overlay */}
+      <AIChatOverlay
+        messages={messages}
+        onSendMessage={(q) => askQuestion(courseId, q, topicId)}
+        isLoading={isSending}
+        courseId={courseId}
+      />
+    </div>
+  );
 }

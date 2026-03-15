@@ -1,198 +1,636 @@
-# NotesOS — Codebase Summary
+Below is a **complete product specification document** for the new direction of **NotesOS**.
+You can use this as your **foundation for planning, architecture, and development**.
 
-**Purpose:** Clear list of what exists (backend + frontend) and what is still missing so you can plan frontend work.
-
----
-
-## 1. Product vision (from README)
-
-- **Shared Knowledge Pool** — Collaborative note sharing
-- **AI Study Partner** — Personalized AI with adjustable personality
-- **Voice-First Studying** — Record answers, get AI grading
-- **Fact Checker** — Automatic verification of note claims
-- **Pre-Class Research** — AI-generated topic primers
-- **Progress Tracking** — Mastery levels and study streaks
-
-**Stack:** Next.js 14, React, Zustand, Tailwind, shadcn-style UI · FastAPI, LangGraph/LangChain · PostgreSQL + pgvector, Redis · Cloudflare R2.
+I structured it like a real **product spec / system design document** so it’s easier to build from.
 
 ---
 
-## 2. Backend — What You Have (Implemented)
+# NotesOS — Product Specification (v3)
 
-### 2.1 API surface (all under `/api/*` or `/api/auth`, etc.)
+## 1. Product Overview
 
-| Area | Prefix / Path | Endpoints |
-|------|----------------|-----------|
-| **Auth** | `/api/auth` | `POST /register`, `POST /login`, `POST /refresh`, `GET /me`, `PATCH /me/personality` |
-| **Courses** | `/api/courses` | `GET /`, `POST /`, `POST /join`, `GET /{id}`, `POST /{id}/topics`, `POST /batch`, `POST /{id}/topics/batch` |
-| **Topics** | `/api` | `GET /courses/{course_id}/topics`, `POST /courses/{course_id}/topics`, `GET /topics/{id}`, `PUT /topics/{id}`, `DELETE /topics/{id}` |
-| **Resources** | `/api` | `GET /topics/{topic_id}/resources`, `POST /topics/{topic_id}/resources/text`, `POST /resources/upload`, `GET /resources/{id}`, `PUT /resources/{id}`, `DELETE /resources/{id}`, `POST /resources/{id}/reprocess-ocr` |
-| **Invites (global class)** | `/api/invites` | `POST /global`, `GET /global`, `GET /global/{class_id}/classmates`, `POST /global/join`, `DELETE /global/{class_id}`, `PATCH /global/{class_id}/deactivate` |
-| **AI features** | `/api` | Fact check: `POST /resources/{id}/fact-check`, `GET /resources/{id}/fact-checks` · Research: `POST /topics/{id}/research`, `GET /topics/{id}/research` · Study: `POST /study/ask`, `GET /study/conversations`, `GET /study/conversations/{id}` · Tests: `POST /tests/generate`, `GET /tests/{id}`, `POST /tests/{id}/submit`, `POST /tests/{id}/voice-answer`, `GET /tests/attempts/{attempt_id}/results` |
-| **Progress** | `/api/progress` | `POST /sessions/start`, `POST /sessions/{id}/end`, `GET /{course_id}`, `GET /{course_id}/topics`, `GET /{course_id}/streak`, `GET /{course_id}/recommendations` |
-| **WebSocket** | `/ws/{course_id}?token=...` | Real-time course updates (e.g. processing status, active users) |
+NotesOS is an **AI-powered collaborative learning system** that transforms messy class materials into **structured knowledge and study experiences**.
 
-**Note:** Backend has **no** `POST /api/auth/logout`; frontend calls it and then clears tokens locally, so logout “works” but the request 404s.
+Instead of being a note-taking tool, NotesOS acts as:
 
-### 2.2 Backend structure (high level)
+* a **shared knowledge hub for students**
+* an **AI learning engine**
+* a **memory reinforcement system**
 
-- **`app/main.py`** — FastAPI app, CORS, lifespan (DB init, Redis listener), all routers, WebSocket.
-- **`app/config.py`** — Settings (DB, Redis, JWT, R2, feature flags like `ENABLE_FACT_CHECK`, etc.).
-- **`app/database.py`** — Async engine/session, `init_db`, `get_db`.
-- **`app/models/`** — User, RefreshToken, Course, CourseEnrollment, Topic, CourseOutline, Resource, ResourceFile, FactCheck, PreClassResearch, Test, TestQuestion, TestAttempt, TestAnswer, StudySession, UserProgress, AIConversation, AIMessage, Class, Classmate.
-- **`app/api/`** — auth, courses, topics, resources, invites, ai_features, progress.
-- **`app/services/`** — fact_checker, storage, file_processor, ocr_cleaner, hybrid_ocr, chunking, embeddings, vector_store, rag, study_agent, research_generator, question_generator, transcription, grader, progress, redis_client, websocket.
-- **`app/workers/`** — chunking_worker, grading_worker, fact_check_worker (Redis-based async jobs).
+### Core Idea
 
-So: auth, courses, topics, resources, invites, AI (fact-check, research, study agent, tests), progress, and WebSocket are all implemented on the backend.
+Students upload materials from class:
 
----
+* notes
+* lecture recordings
+* slides
+* PDFs
+* whiteboard photos
 
-## 3. Frontend — What You Have (Implemented)
+The system processes them using AI and generates:
 
-### 3.1 Routing and pages
+* structured knowledge
+* explanations
+* quizzes
+* audio learning
+* active recall prompts
 
-| Route | Page | What it does |
-|-------|------|----------------|
-| `/login` | Login | Email/password, redirect to `/` on success. |
-| `/register` | Register | Full name, email, password, redirect to `/`. |
-| **No root `/` page** | — | Login/register redirect to `/`; there is no `app/page.tsx`, so `/` will 404. |
-| `/courses` | Courses list | List enrolled courses, “Join Course” and “Create Course” links. |
-| `/courses/new` | Create course | Form: code, name; redirect to new course. |
-| `/courses/join` | Join course | Single field (invite code or search); joins then redirect to `/courses`. |
-| `/courses/[courseId]` | Course home | Topic list with mastery bars, “Add topic” form. |
-| `/courses/[courseId]/topics/[topicId]` | Topic study | Pre-class research (collapsible), resources (upload files / write notes), resource cards with fact-check, floating AI chat overlay. |
-
-There is **no** route group layout under `(main)` or `(auth)` that enforces auth or redirects; protection is effectively “if you hit an API without a token, you get 401 and the client redirects to `/login`” (in `api.ts`).
-
-### 3.2 API client and stores
-
-- **`src/lib/api.ts`** — Axios instance, JWT + refresh in interceptors, and a full `api` object matching the backend:
-  - **auth:** register, login, logout, refresh, getMe, updatePersonality
-  - **courses:** getAll, getById, create, join
-  - **topics:** getByCourse, create, getById, update, delete
-  - **resources:** getByTopic, createText, upload, getById, update, delete, reprocessOCR
-  - **ai:** verifyResource, getFactChecks, generateResearch, getResearch, askQuestion, getConversations, getConversation, generateTest, getTest, submitAnswers, submitVoiceAnswer, getTestResults
-  - **progress:** startSession, endSession, getCourseProgress, getTopicsProgress, getStreak, getRecommendations
-
-- **Stores (Zustand):**
-  - **auth** — user, login, register, logout, updatePersonality, persisted (user + isAuthenticated).
-  - **courses** — courses list, currentCourse, fetchCourses, createCourse, joinCourse, selectCourse, createTopic, persisted (currentCourse).
-  - **resources** — resources list, fetchResources, createTextResource, uploadFiles, deleteResource, factCheckResource, fetchFactChecks, pagination, factChecks per resource.
-  - **aiChat** — conversations, messages, fetchConversations, loadConversation, askQuestion, clearCurrentConversation.
-  - **index** — re-exports auth and courses (not resources or aiChat).
-
-### 3.3 UI and components
-
-- **Layout:** `GlassNav` (logo, course switcher dropdown, streak placeholder, profile button), `MainLayout` (nav + main content). Streak is passed as prop but **never loaded from API** on any page.
-- **UI primitives:** `GlassCard`, `PageHeader`, `Button`, `Input`, `Badge`, `Skeleton` (in `components/ui.tsx`).
-- **Feature components:** `ResourceCard` (markdown, files, fact-checks, delete, verify), `FileUpload` (drag-and-drop, progress), `MarkdownRenderer`, `AIChat`, `AIChatOverlay` (floating button + full-screen modal).
-
-So on the frontend you have: auth flows, course list/create/join, course detail with topics, topic detail with research + resources + fact-check + AI chat. The API client and stores are ready for progress, tests, and invites; the UI for those is missing.
+These materials are **shared across the class**, allowing one student’s upload to benefit everyone.
 
 ---
 
-## 4. What’s Still Missing (Frontend-Focused)
+# 2. Core Product Philosophy
 
-### 4.1 Critical / UX
+NotesOS follows four principles:
 
-1. **Root route `/`**  
-   - Login/register redirect to `/`. Add either `app/page.tsx` that redirects to `/courses` (or `/login` if not authenticated), or a middleware that sends `/` → `/courses` or `/login`.
+### 1. Topic First
 
-2. **Auth guard and session restore**  
-   - No layout or middleware that redirects unauthenticated users from `/courses/*` to `/login`.  
-   - On load, if the user has a persisted session (Zustand + tokens), consider validating with `GET /api/auth/me` and redirecting to login on 401.
+Users study **topics**, not files.
 
-3. **Logout endpoint (optional)**  
-   - Backend has no `POST /api/auth/logout`. Either add it (e.g. invalidate refresh token) or keep current behavior (frontend clears tokens and calls a non-existent logout; works but logs 404).
+Files are just raw inputs.
 
-### 4.2 Not implemented in UI (backend and API client ready)
+### 2. AI Does the Organization
 
-4. **Progress**
-   - **API:** start/end session, course progress, topic progress, streak, recommendations.
-   - **Missing:** No progress store usage in UI. No page or section for “today’s streak”, “study time”, “mastery by topic” (course page shows a mastery bar but data is not loaded from progress API). No “start session” / “end session” flows.
+Students should not manage:
 
-5. **Tests / quizzes / voice answers**
-   - **API:** generate test, get test, submit text answers, submit voice answer, get attempt results.
-   - **Missing:** No tests store. No UI to: pick topics → generate test → take quiz (text or voice) → see results. No test list or “retake” flow.
+* folders
+* file systems
+* links
 
-6. **Global invites (class invites)**
-   - **API:** create class invite, list my invites, list classmates, join by class code, delete/deactivate.
-   - **Missing:** No `api.invites` in the frontend (no client methods). No UI to create/share a “class link” or join via class code so that one join enrolls in all of the inviter’s courses.
+AI automatically organizes knowledge.
 
-7. **Course/topic batch create**
-   - **Backend:** `POST /api/courses/batch`, `POST /api/courses/{id}/topics/batch`.
-   - **Missing:** No UI to create multiple courses or topics at once.
+### 3. Learning > Storage
 
-### 4.3 Partially implemented or polish
+The system is optimized for:
 
-8. **Streak in nav**
-   - `GlassNav` accepts `streak` and shows it. No page passes it; no one calls `api.progress.getStreak(courseId)`. So either wire streak (e.g. from course context or a global “current course” streak) or remove the placeholder.
+```
+learning
+understanding
+memory
+exam preparation
+```
 
-9. **Profile / settings**
-   - **Backend:** `PATCH /api/auth/me/personality` (tone, emoji_usage, explanation_style).
-   - **Missing:** No profile or settings page. No way to change name, avatar, or study personality from the UI (only API exists).
+Not document storage.
 
-10. **WebSocket**
-    - Backend broadcasts processing status (e.g. chunking, fact-check) over `/ws/{course_id}`.
-    - **Missing:** Frontend does not open the WebSocket or show “Processing…” / “Done” for resources; fact-check refresh is done with a delayed `fetchFactChecks` (e.g. after 2–3 s).
+### 4. Shared Knowledge
 
-11. **Resource update**
-    - **API:** `PUT /api/resources/{id}` (e.g. title, description).
-    - **Missing:** No edit resource UI (only delete and fact-check on `ResourceCard`).
-
-12. **Topic update/delete**
-    - **API:** `PUT /api/topics/{id}`, `DELETE /api/topics/{id}`.
-    - **Missing:** Course page has no edit/delete topic; only create.
-
-13. **Topic description / week**
-    - Create topic form only sends title and order_index; description and week_number exist in API but are not in the form.
-
-14. **Reprocess OCR**
-    - **API:** `POST /api/resources/{id}/reprocess-ocr`.
-    - **Missing:** No button or flow in the UI to trigger reprocess.
-
-15. **Course switcher highlight**
-    - In `GlassNav`, the dropdown compares `course.id === currentCourse.code` (id vs code); it should compare `course.id === currentCourse?.id`. Fixed in layout; keep an eye on any similar comparisons.
-
-16. **shadcn/ui**
-    - README mentions shadcn/ui; current UI is custom (e.g. `GlassCard`, `Button` in `ui.tsx`). Either adopt shadcn for new components or treat the current set as the design system.
-
-### 4.4 Nice to have
-
-- **PWA:** `next-pwa` is in package.json; no check of manifest or service worker in this summary.
-- **Error boundaries / global error state** for API errors beyond per-page/store error.
-- **Accessibility:** No audit done; worth a pass for forms and keyboard/navigation.
+Courses act as **shared knowledge hubs** where students contribute materials.
 
 ---
 
-## 5. Quick reference: backend vs frontend
+# 3. Core User Types
 
-| Feature | Backend | Frontend API client | Frontend UI |
-|--------|---------|---------------------|------------|
-| Auth (register, login, refresh, me, personality) | ✅ | ✅ | ✅ Login, Register; ❌ profile/settings |
-| Courses (CRUD, join, batch) | ✅ | ✅ (no batch) | ✅ List, create, join; ❌ batch |
-| Topics (CRUD, batch) | ✅ | ✅ (no batch) | ✅ List, create; ❌ edit/delete, batch, description/week in form |
-| Resources (list, text, upload, get, update, delete, reprocess-ocr) | ✅ | ✅ | ✅ List, create text, upload, delete, fact-check; ❌ edit, reprocess OCR |
-| Fact check | ✅ | ✅ | ✅ Trigger + show fact checks |
-| Pre-class research | ✅ | ✅ | ✅ Generate + show (collapsible) |
-| Study agent (ask, conversations) | ✅ | ✅ | ✅ Overlay chat |
-| Tests (generate, submit, voice, results) | ✅ | ✅ | ❌ No UI |
-| Progress (sessions, course/topic, streak, recommendations) | ✅ | ✅ | ❌ No UI; streak slot in nav unused |
-| Global invites (class) | ✅ | ❌ No client | ❌ No UI |
-| WebSocket | ✅ | ❌ | ❌ No connection |
-| Logout | ❌ No endpoint | ✅ (calls then clear) | ✅ Button/flow exists |
+### Students
+
+Primary users.
+
+Capabilities:
+
+* join courses
+* upload materials
+* study topics
+* take quizzes
+* record spoken answers
 
 ---
 
-## 6. Suggested order to tackle (frontend)
+### Course Creators
 
-1. **Root + auth guard** — Add `/` (redirect) and protect `/courses/*` so unauthenticated users go to `/login`; optionally restore session with `getMe`.
-2. **Progress** — Use progress API and store (or minimal state) to show streak in nav and a simple “progress” or “today” section (e.g. on course or dashboard).
-3. **Tests / quizzes** — Add a tests store and flows: choose course/topics → generate → take test (text + voice) → results.
-4. **Global invites** — Add `api.invites` and a small “Invite classmates” / “Join with class code” UI.
-5. **Profile/settings** — One page for name + study personality (and optionally avatar) using `PATCH /me` and `PATCH /me/personality`.
-6. **WebSocket** — Connect to `/ws/{course_id}` and drive “Processing…” / “Done” for resources and fact-check.
-7. **Polish** — Topic edit/delete, resource edit, reprocess OCR, batch create (if needed).
+Students or instructors who create courses.
 
-Use this doc as the single “what I have / what’s missing” list and update it as you implement each piece.
+Capabilities:
+
+* create course spaces
+* invite students
+* manage topics
+
+---
+
+### Contributors
+
+Students who upload materials.
+
+Their contributions improve the shared knowledge base.
+
+---
+
+# 4. System Structure
+
+Visible structure:
+
+```
+Workspace
+   → Courses
+        → Topics
+```
+
+Example:
+
+```
+School
+
+Biology 201
+   Photosynthesis
+   Cell Structure
+   DNA Replication
+
+Chemistry 101
+   Organic Reactions
+   Energy Transfer
+```
+
+This hierarchy is intentionally simple to reduce friction.
+
+---
+
+# 5. Topic Page (Core Surface)
+
+The **topic page** is where users spend most of their time.
+
+Example:
+
+```
+Biology / Photosynthesis
+```
+
+Topic page sections:
+
+### Knowledge Layer
+
+AI-generated summary of the topic.
+
+Example:
+
+Key ideas
+
+* Photosynthesis converts light energy into chemical energy
+* Occurs in chloroplasts
+* Light reactions produce ATP
+* Calvin cycle produces glucose
+
+---
+
+### Study Tools
+
+AI-generated learning tools.
+
+```
+▶ Learn Mode
+🎧 Listen Mode
+❓ Quiz
+🎤 Speak Answer
+🧠 Key Points
+```
+
+These tools are automatically created when materials are added.
+
+---
+
+### Sources (Collapsed)
+
+Original materials.
+
+Example:
+
+Sources (4)
+
+* Lecture recording
+* Slides PDF
+* Whiteboard photo
+* Personal notes
+
+These exist for reference but are not the main interface.
+
+---
+
+# 6. Resource Types
+
+Topics support multiple input types.
+
+### Text
+
+* typed notes
+* pasted notes
+
+### Documents
+
+* PDFs
+* slides
+* lecture documents
+
+### Images
+
+* whiteboard photos
+* handwritten notes
+
+Processed using OCR.
+
+### Audio
+
+* lecture recordings
+* voice notes
+
+Processed using transcription.
+
+---
+
+# 7. AI Processing Pipeline
+
+When materials are uploaded, the system performs the following:
+
+### Step 1: Ingestion
+
+Content is uploaded.
+
+### Step 2: Processing
+
+The system performs:
+
+```
+transcription (audio)
+OCR (images)
+text extraction (PDF)
+```
+
+### Step 3: Knowledge Extraction
+
+AI extracts:
+
+```
+concepts
+definitions
+relationships
+important facts
+```
+
+### Step 4: Knowledge Merging
+
+All information becomes **topic knowledge**.
+
+### Step 5: Learning Asset Generation
+
+AI generates:
+
+```
+key points
+quiz questions
+audio scripts
+recall prompts
+```
+
+---
+
+# 8. Study Tools
+
+## Learn Mode
+
+Primary learning feature.
+
+AI provides structured mini-lesson.
+
+Flow:
+
+```
+concept explanation
+example
+highlight key point
+ask question
+pause
+reveal answer
+```
+
+Duration:
+
+2–5 minutes.
+
+---
+
+## Listen Mode
+
+Passive learning system.
+
+Memory loop format:
+
+```
+concept
+definition
+question
+pause
+answer
+```
+
+Designed for studying while:
+
+* walking
+* commuting
+* exercising
+
+---
+
+## Quiz Mode
+
+Generates questions from topic knowledge.
+
+Possible formats:
+
+* multiple choice
+* short answer
+* concept identification
+* definition recall
+
+---
+
+## Speak Answer
+
+User records spoken explanation.
+
+AI evaluates answer.
+
+Example output:
+
+```
+Score: 7/10
+
+Missing concepts:
+- Calvin cycle
+- ATP production
+```
+
+This simulates oral exam preparation.
+
+---
+
+## Key Points
+
+Quick summary of important facts.
+
+Used for fast review sessions.
+
+---
+
+# 9. Automatic Topic Connections
+
+AI extracts concepts from each topic.
+
+Example:
+
+Photosynthesis concepts:
+
+```
+chloroplast
+ATP
+light reactions
+Calvin cycle
+```
+
+If other topics share concepts, the system displays:
+
+```
+Related Topics
+
+Cell Respiration
+ATP Cycle
+Energy Reactions
+```
+
+This creates a **second-brain style knowledge network**.
+
+Users never manage links manually.
+
+---
+
+# 10. Shared Learning System
+
+Courses act as **shared knowledge hubs**.
+
+Example:
+
+Biology 201
+
+Members:
+
+```
+72 students
+1 lecturer
+```
+
+Students can upload materials to topics.
+
+Example contributions:
+
+```
+Lecture slides (Alex)
+Voice recording (Sarah)
+Whiteboard photo (Daniel)
+Personal notes (Emma)
+```
+
+The AI merges these into topic knowledge.
+
+One upload benefits the entire class.
+
+---
+
+# 11. Personal Learning Layer
+
+Even though materials are shared, learning progress is personal.
+
+Each student tracks:
+
+```
+quiz results
+review history
+voice answer scores
+studied topics
+```
+
+Shared knowledge, personal learning.
+
+---
+
+# 12. Home Screen Design
+
+The app opens like a **notebook you left open**, not a SaaS dashboard.
+
+Example:
+
+Continue Studying
+
+```
+Biology / Photosynthesis
+▶ Resume Learn Mode
+```
+
+Below:
+
+Recent Topics
+
+```
+Photosynthesis
+Cell Structure
+Derivatives
+```
+
+Quick Action:
+
+```
++ Add Material
+```
+
+Minimal interface.
+
+---
+
+# 13. Exam Packs (Optional Feature)
+
+Exam packs allow students to group topics across courses.
+
+Example:
+
+Biology Midterm
+
+Topics:
+
+```
+Photosynthesis
+Cell Structure
+Cell Respiration
+```
+
+Exam pack generates:
+
+```
+review sessions
+quiz flows
+audio recap
+practice explanations
+```
+
+This supports exam preparation.
+
+---
+
+# 14. Data Architecture
+
+Internal system structure:
+
+```
+Course
+   → Topic
+        → Resources
+        → Extracted Concepts
+        → Knowledge Summary
+        → Study Assets
+```
+
+Study assets include:
+
+```
+quiz questions
+audio scripts
+recall prompts
+key points
+```
+
+---
+
+# 15. Core Learning Loop
+
+The platform reinforces memory through repetition.
+
+Study flow:
+
+```
+Learn
+↓
+Recall
+↓
+Test
+↓
+Review
+```
+
+Example session:
+
+```
+Learn Mode
+↓
+Quiz
+↓
+Speak Answer
+↓
+Listen Review
+```
+
+---
+
+# 16. Network Effect
+
+The system improves as more students contribute.
+
+```
+more uploads
+↓
+better topic knowledge
+↓
+better quizzes
+↓
+better learning
+```
+
+Courses become **collective knowledge bases**.
+
+---
+
+# 17. Product Positioning
+
+NotesOS is positioned as:
+
+**“The AI that turns class materials into something you actually remember.”**
+
+Not:
+
+* note-taking software
+* file storage
+* AI chatbot
+
+---
+
+# 18. MVP Scope
+
+First version should include:
+
+Core features:
+
+```
+courses
+topics
+material upload
+AI knowledge extraction
+Learn Mode
+Quiz
+Listen Mode
+```
+
+Later features:
+
+```
+voice answer grading
+exam packs
+advanced review systems
+contribution ranking
+```
+
+---
+
+# 19. Long-Term Vision
+
+NotesOS evolves into:
+
+* a **shared academic knowledge network**
+* an **AI learning companion**
+* a **memory reinforcement system**
+
+Goal:
+
+Reduce the effort required to turn class materials into **true understanding and recall**.

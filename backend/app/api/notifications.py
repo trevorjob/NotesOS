@@ -36,7 +36,7 @@ async def list_notifications(
                 "title": n.title,
                 "body": n.body,
                 "is_read": n.is_read,
-                "metadata": n.metadata,
+                "meta_data": n.meta_data,
                 "created_at": n.created_at.isoformat(),
             }
             for n in notifications
