@@ -12,6 +12,7 @@ from sqlalchemy import select
 
 from app.database import get_db
 from app.models.course import Topic, CourseEnrollment
+from app.models.knowledge import AudioLesson, KnowledgeStatus, TopicKnowledge
 from app.models.progress import UserProgress
 from app.api.auth import get_current_user
 from app.models.user import User
@@ -182,10 +183,28 @@ async def get_topic(
     mastery = float(progress.mastery_level) if progress else 0.0
     completion_percentage = round(mastery * 100, 1)
 
+    # Fetch knowledge synthesis status
+    knowledge_result = await db.execute(
+        select(TopicKnowledge).where(TopicKnowledge.topic_id == topic.id)
+    )
+    knowledge = knowledge_result.scalar_one_or_none()
+
+    # Fetch latest audio lesson status
+    audio_result = await db.execute(
+        select(AudioLesson)
+        .where(AudioLesson.topic_id == topic.id)
+        .order_by(AudioLesson.created_at.desc())
+        .limit(1)
+    )
+    audio = audio_result.scalar_one_or_none()
+
     payload = {
         **_topic_to_dict(topic),
         "completion_percentage": completion_percentage,
         "status": _derive_topic_status(mastery),
+        "knowledge_status": knowledge.status.value if knowledge else "pending",
+        "audio_status": audio.status.value if audio else "pending",
+        "has_audio": audio is not None and audio.status == KnowledgeStatus.COMPLETED,
     }
     return payload
 

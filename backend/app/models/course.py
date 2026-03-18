@@ -125,6 +125,12 @@ class Topic(Base):
     ai_conversations = relationship(
         "AIConversation", back_populates="topic", cascade="all, delete-orphan"
     )
+    knowledge = relationship(
+        "TopicKnowledge", back_populates="topic", uselist=False, cascade="all, delete-orphan"
+    )
+    audio_lessons = relationship(
+        "AudioLesson", back_populates="topic", cascade="all, delete-orphan"
+    )
 
 
 class CourseOutline(Base):

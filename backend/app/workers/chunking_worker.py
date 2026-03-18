@@ -15,6 +15,7 @@ from app.services.embeddings import embedding_service
 from app.services.vector_store import vector_store
 from app.services.websocket import broadcast_processing_status
 from app.models.course import Topic
+from app.config import settings
 
 # Use the centralized async engine and session maker
 AsyncSessionLocal = async_session_maker
@@ -86,6 +87,16 @@ async def process_chunking_job(job_data: dict):
             # Broadcast completion
             if course_id:
                 await broadcast_processing_status(course_id, resource_id, "completed")
+
+            # Step 5: Enqueue knowledge synthesis for this topic
+            if resource.topic_id and settings.ENABLE_KNOWLEDGE_SYNTHESIS:
+                await redis_client.enqueue_job(
+                    "knowledge",
+                    {
+                        "topic_id": str(resource.topic_id),
+                        "course_id": course_id,
+                    },
+                )
 
         except Exception as e:
             print(f"❌ Error processing resource {resource_id}: {str(e)}")

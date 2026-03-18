@@ -1,10 +1,3 @@
-Below is a **complete product specification document** for the new direction of **NotesOS**.
-You can use this as your **foundation for planning, architecture, and development**.
-
-I structured it like a real **product spec / system design document** so it’s easier to build from.
-
----
-
 # NotesOS — Product Specification (v3)
 
 ## 1. Product Overview
@@ -231,6 +224,29 @@ Processed using OCR.
 * voice notes
 
 Processed using transcription.
+
+---
+
+# 6. The Final Product Architecture
+
+```
+Home
+↓
+
+Courses
+↓
+
+Topics
+↓
+
+Knowledge
+↓
+
+Study Tools
+```
+
+Everything else supports this flow.
+
 
 ---
 
@@ -634,3 +650,4 @@ NotesOS evolves into:
 Goal:
 
 Reduce the effort required to turn class materials into **true understanding and recall**.
+

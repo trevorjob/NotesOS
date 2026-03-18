@@ -74,6 +74,7 @@ from app.api.ai_features import router as ai_features_router
 from app.api.progress import router as progress_router
 from app.api.semesters import router as semesters_router
 from app.api.notifications import router as notifications_router
+from app.api.knowledge import router as knowledge_router
 from app.services.websocket import connection_manager
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
@@ -87,10 +88,10 @@ app.include_router(semesters_router, prefix="/api/semesters", tags=["semesters"]
 app.include_router(
     notifications_router, prefix="/api/notifications", tags=["notifications"]
 )
+app.include_router(knowledge_router, prefix="/api", tags=["knowledge"])
 
 
 # WebSocket endpoint for real-time updates
-
 
 @app.websocket("/ws/{course_id}")
 async def websocket_endpoint(
