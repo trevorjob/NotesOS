@@ -103,20 +103,24 @@ async def websocket_endpoint(
     Query params:
         token: JWT authentication token
     """
-    # Authenticate via token
+    # Authenticate via token.
+    # Must accept() before close() — otherwise Starlette responds with HTTP 403
+    # instead of a proper WebSocket close code, causing the client to loop forever.
     try:
         payload = jwt.decode(
             token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM]
         )
         user_id: str = payload.get("sub")
         if user_id is None:
-            await websocket.close(code=1008)  # Policy violation
+            await websocket.accept()
+            await websocket.close(code=1008)
             return
     except JWTError:
+        await websocket.accept()
         await websocket.close(code=1008)
         return
 
-    # Connect
+    # Connect (connection_manager.connect calls websocket.accept() internally)
     await connection_manager.connect(websocket, course_id, user_id)
 
     try:

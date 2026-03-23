@@ -8,7 +8,7 @@ import { tokenManager } from './api';
 export type WebSocketMessage =
     | { type: 'processing_status'; resource_id: string; status: 'processing' | 'completed' | 'failed' }
     | { type: 'fact_check:complete'; data: { resource_id: string; topic_id: string; summary: string; stats: Record<string, number> } }
-    | { type: 'grading:complete'; answer_id: string; attempt_id: string; score: number; encouragement: string }
+    | { type: 'grading:complete'; data: { answer_id: string; attempt_id: string; score: number; encouragement: string } }
     | { type: 'resource_created'; data: any }
     | { type: 'resource_updated'; data: any }
     | { type: 'resource_deleted'; resource_id: string }
@@ -81,9 +81,15 @@ export class WebSocketClient {
                 this.callbacks.onError?.(error);
             };
 
-            this.ws.onclose = () => {
-                console.log('[WebSocket] Disconnected');
+            this.ws.onclose = (event) => {
+                console.log('[WebSocket] Disconnected', event.code);
                 this.callbacks.onClose?.();
+
+                // 1008 = policy violation (auth failure) — don't retry, token won't fix itself
+                if (event.code === 1008) {
+                    console.error('[WebSocket] Auth rejected (1008), not reconnecting');
+                    return;
+                }
 
                 // Reconnect if not intentional close and haven't exceeded max attempts
                 if (!this.isIntentionalClose && this.reconnectAttempts < this.maxReconnectAttempts) {

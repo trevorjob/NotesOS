@@ -178,7 +178,12 @@ export const useCourseStore = create<CourseState>()(
                     const topics = topicsResponse.data || [];
                     const course = { ...courseResponse.data.course, topics };
 
-                    set({ currentCourse: course, isLoading: false, _isSelectingCourse: false });
+                    set((state) => ({
+                        currentCourse: course,
+                        courses: state.courses.map((c) => c.id === courseId ? { ...c, topics } : c),
+                        isLoading: false,
+                        _isSelectingCourse: false,
+                    }));
 
                     offlineDb.putCourses([courseResponse.data.course]).catch(() => { });
                     offlineDb.putTopics(courseId, topics).catch(() => { });

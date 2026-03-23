@@ -1,12 +1,13 @@
-import { TextareaHTMLAttributes, forwardRef } from 'react';
+import { InputHTMLAttributes, forwardRef } from 'react';
 
-interface TextareaProps extends TextareaHTMLAttributes<HTMLTextAreaElement> {
+interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   label?: string;
   error?: string;
+  mono?: boolean;
 }
 
-export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
-  ({ label, error, className = '', id, ...props }, ref) => {
+export const Input = forwardRef<HTMLInputElement, InputProps>(
+  ({ label, error, mono, className = '', id, ...props }, ref) => {
     const inputId = id ?? label?.toLowerCase().replace(/\s+/g, '-');
     return (
       <div className="flex flex-col gap-1.5">
@@ -15,15 +16,16 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
             {label}
           </label>
         )}
-        <textarea
+        <input
           ref={ref}
           id={inputId}
           className={`
-            min-h-[100px] px-3 py-2.5 rounded-lg border font-serif text-sm text-[#1a1917]
-            bg-[#f0eeea] border-[#dedad4] placeholder:text-[#c4bfb9] resize-y
+            h-10 px-3 rounded-lg border font-serif text-sm text-[#1a1917]
+            bg-[#f0eeea] border-[#dedad4] placeholder:text-[#c4bfb9]
             focus:outline-none focus:border-[#1a1917] transition-colors duration-150
             disabled:opacity-50 disabled:cursor-not-allowed
-            ${error ? 'border-red-500' : ''}
+            ${mono ? 'font-mono tracking-wider' : ''}
+            ${error ? 'border-red-500 focus:border-red-500' : ''}
             ${className}
           `}
           {...props}
@@ -34,4 +36,4 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
   }
 );
 
-Textarea.displayName = 'Textarea';
+Input.displayName = 'Input';

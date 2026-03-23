@@ -335,18 +335,23 @@ async def ask_study_question(
 @router.get("/study/conversations", response_model=List[ConversationResponse])
 async def list_conversations(
     course_id: str,
+    topic_id: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """List user's study conversations."""
+    """List user's study conversations, optionally filtered by topic."""
     await verify_course_enrollment(db, current_user.id, uuid.UUID(course_id))
+
+    filters = [
+        AIConversation.user_id == current_user.id,
+        AIConversation.course_id == uuid.UUID(course_id),
+    ]
+    if topic_id:
+        filters.append(AIConversation.topic_id == uuid.UUID(topic_id))
 
     query = (
         select(AIConversation)
-        .where(
-            AIConversation.user_id == current_user.id,
-            AIConversation.course_id == uuid.UUID(course_id),
-        )
+        .where(*filters)
         .order_by(AIConversation.updated_at.desc())
     )
     result = await db.execute(query)
@@ -360,6 +365,26 @@ async def list_conversations(
         )
         for conv in conversations
     ]
+
+
+@router.delete("/study/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_conversation(
+    conversation_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Delete a conversation and all its messages."""
+    conv_result = await db.execute(
+        select(AIConversation).where(AIConversation.id == uuid.UUID(conversation_id))
+    )
+    conv = conv_result.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+    if conv.user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your conversation")
+    await db.delete(conv)
+    await db.commit()
+    return None
 
 
 @router.get(
@@ -437,6 +462,9 @@ class SubmitAnswerRequest(BaseModel):
 
 
 class GradedAnswerResponse(BaseModel):
+    question_id: str
+    question_text: str
+    user_answer: str
     score: float
     feedback: str
     encouragement: str
@@ -533,6 +561,45 @@ async def list_tests(
         )
         for t in tests
     ]
+
+
+# ── Recent Attempts Endpoint ──────────────────────────────────────────────────
+# IMPORTANT: Must be defined BEFORE /tests/{test_id} to avoid route shadowing.
+
+
+@router.get("/tests/attempts/recent")
+async def get_recent_attempts(
+    limit: int = Query(10, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get the user's most recent completed test attempts across all courses."""
+    result = await db.execute(
+        select(TestAttempt, Test)
+        .join(Test, Test.id == TestAttempt.test_id)
+        .where(
+            TestAttempt.user_id == current_user.id,
+            TestAttempt.completed_at.isnot(None),
+        )
+        .order_by(TestAttempt.completed_at.desc())
+        .limit(limit)
+    )
+    rows = result.all()
+
+    return {
+        "attempts": [
+            {
+                "attempt_id": str(attempt.id),
+                "test_id": str(test.id),
+                "title": test.title,
+                "total_score": float(attempt.total_score or 0),
+                "max_score": attempt.max_score,
+                "score_pct": round(float(attempt.total_score or 0) / max(attempt.max_score, 1) * 100, 1),
+                "completed_at": attempt.completed_at.isoformat(),
+            }
+            for attempt, test in rows
+        ]
+    }
 
 
 # ── Test Stats Endpoint ───────────────────────────────────────────────────────
@@ -829,8 +896,13 @@ async def get_test_results(
             detail="You don't have access to this attempt",
         )
 
-    # Get all answers
-    answers_query = select(TestAnswer).where(TestAnswer.attempt_id == attempt.id)
+    # Get all answers with their questions
+    from sqlalchemy.orm import joinedload
+    answers_query = (
+        select(TestAnswer)
+        .options(joinedload(TestAnswer.question))
+        .where(TestAnswer.attempt_id == attempt.id)
+    )
     answers_result = await db.execute(answers_query)
     answers = answers_result.scalars().all()
 
@@ -840,6 +912,9 @@ async def get_test_results(
         if ans.score is not None:
             graded_answers.append(
                 GradedAnswerResponse(
+                    question_id=str(ans.question_id),
+                    question_text=ans.question.question_text if ans.question else "",
+                    user_answer=ans.transcription or ans.answer_text or "",
                     score=float(ans.score),
                     feedback=ans.ai_feedback or "",
                     encouragement=ans.encouragement or "",

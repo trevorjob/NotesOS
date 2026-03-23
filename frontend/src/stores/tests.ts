@@ -24,6 +24,9 @@ export interface Test {
 }
 
 export interface GradedAnswer {
+    question_id: string;
+    question_text: string;
+    user_answer: string;
     score: number;
     feedback: string;
     encouragement: string;
@@ -129,16 +132,18 @@ export const useTestsStore = create<TestsState>()((set, get) => ({
     listenForGrading: (attemptId, courseId, onComplete) => {
         const ws = new WebSocketClient(courseId, {
             onMessage: async (message) => {
-                if (message.type === 'grading:complete' && message.attempt_id === attemptId) {
-                    clearTimeout(timeout);
-                    ws.disconnect();
+                if (message.type === 'grading:complete' && message.data.attempt_id === attemptId) {
+                    // Backend only broadcasts this once all answers are graded and
+                    // completed_at has been committed — safe to fetch results immediately.
                     try {
                         const response = await api.ai.getTestResults(attemptId);
                         const results: TestResults = response.data;
                         set({ results });
+                        clearTimeout(timeout);
+                        ws.disconnect();
                         onComplete(results);
                     } catch {
-                        // Best-effort — page will show what's available
+                        // keep listening
                     }
                 }
             },

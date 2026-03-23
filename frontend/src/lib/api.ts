@@ -332,13 +332,16 @@ export const api = {
             params: { course_id: courseId },
         }),
 
-        getConversations: (courseId: string) =>
+        getConversations: (courseId: string, topicId?: string) =>
             apiClient.get('/api/study/conversations', {
-                params: { course_id: courseId },
+                params: { course_id: courseId, ...(topicId ? { topic_id: topicId } : {}) },
             }),
 
         getConversation: (conversationId: string) =>
             apiClient.get(`/api/study/conversations/${conversationId}`),
+
+        deleteConversation: (conversationId: string) =>
+            apiClient.delete(`/api/study/conversations/${conversationId}`),
 
         // Tests
         generateTest: (courseId: string, data: {
@@ -377,16 +380,20 @@ export const api = {
                     formData.append(`voice_${questionId}`, file);
                 });
             }
+            // Clear Content-Type so browser sets multipart/form-data with boundary
             return apiClient.post(`/api/tests/${testId}/submit-full`, formData, {
-                headers: { 'Content-Type': 'multipart/form-data' },
+                headers: { 'Content-Type': undefined },
             });
         },
 
         getTestResults: (attemptId: string) =>
             apiClient.get(`/api/tests/attempts/${attemptId}/results`),
 
-        getTestStats: (courseId?: string) =>
-            apiClient.get('/api/tests/stats', { params: courseId ? { course_id: courseId } : {} }),
+        getTestStats: (courseId: string) =>
+            apiClient.get('/api/tests/stats', { params: { course_id: courseId } }),
+
+        getRecentAttempts: (limit = 10) =>
+            apiClient.get('/api/tests/attempts/recent', { params: { limit } }),
 
         saveDraft: (testId: string, answers: Array<{ question_id: string; answer_text: string }>) =>
             apiClient.post(`/api/tests/${testId}/draft`, { answers }),
@@ -420,7 +427,10 @@ export const api = {
 
     // Notifications
     notifications: {
-        getAll: () => apiClient.get('/api/notifications'),
+        getAll: (limit = 20, offset = 0) =>
+            apiClient.get('/api/notifications', { params: { limit, offset } }),
+
+        getUnreadCount: () => apiClient.get('/api/notifications/unread-count'),
 
         markRead: (id: string) => apiClient.patch(`/api/notifications/${id}/read`),
 
@@ -448,6 +458,24 @@ export const api = {
 
         getRecommendations: (courseId: string) =>
             apiClient.get(`/api/progress/${courseId}/recommendations`),
+    },
+
+    // Knowledge & Audio
+    knowledge: {
+        get: (topicId: string) =>
+            apiClient.get(`/api/topics/${topicId}/knowledge`),
+
+        regenerate: (topicId: string) =>
+            apiClient.post(`/api/topics/${topicId}/knowledge/regenerate`),
+
+        getAudio: (topicId: string) =>
+            apiClient.get(`/api/topics/${topicId}/audio`),
+
+        regenerateAudio: (topicId: string) =>
+            apiClient.post(`/api/topics/${topicId}/audio/regenerate`),
+
+        getTopicQuiz: (topicId: string) =>
+            apiClient.get(`/api/topics/${topicId}/quiz`),
     },
 
     // Invites (Global Class Invites)
