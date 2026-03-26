@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.models.course import Topic, CourseEnrollment
+from app.models.course import Course, Topic, CourseEnrollment
 from app.models.knowledge import AudioLesson, KnowledgeStatus, TopicKnowledge
 from app.models.progress import UserProgress
 from app.models.resource import Resource
@@ -289,6 +289,12 @@ async def get_topic_quiz(
                 detail="No materials uploaded for this topic yet. Add materials before taking a quiz.",
             )
 
+        # Load course code for quiz title
+        course_result = await db.execute(select(Course).where(Course.id == topic.course_id))
+        course = course_result.scalar_one_or_none()
+        course_code = course.code if course else ""
+        quiz_title = f"{course_code}: {topic.title}" if course_code else topic.title
+
         # Generate shared quiz (synchronous — ~10-15s on first call)
         test = await question_generator.generate_test(
             db=db,
@@ -298,6 +304,7 @@ async def get_topic_quiz(
             question_count=10,
             difficulty="medium",
             question_types=["mcq", "short_answer"],
+            title=quiz_title,
         )
         # Override test_type to SELF_TEST so this acts as the shared topic quiz
         test.test_type = TestType.SELF_TEST

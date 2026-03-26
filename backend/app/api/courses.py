@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models import Course, CourseEnrollment, Topic, User
+from app.models.semester import SemesterMember
 from app.models.progress import UserProgress
 from app.api.auth import get_current_user, verify_course_enrollment
 from app.services.cache import (
@@ -33,7 +34,7 @@ router = APIRouter()
 class CreateCourseRequest(BaseModel):
     code: str
     name: str
-    semester: Optional[str] = None
+    semester_id: Optional[str] = None
     description: Optional[str] = None
     is_public: bool = True
 
@@ -161,7 +162,6 @@ async def list_courses(
             "id": str(course.id),
             "code": course.code,
             "name": course.name,
-            "semester": course.semester,
             "semester_id": str(course.semester_id) if course.semester_id else None,
             "member_count": member_counts.get(str(course.id), 1),
             "created_by": str(course.created_by),
@@ -189,7 +189,7 @@ async def create_course(
     course = Course(
         code=request.code,
         name=request.name,
-        semester=request.semester,
+        semester_id=request.semester_id,
         description=request.description,
         is_public=request.is_public,
         invite_code=invite_code,
@@ -201,6 +201,16 @@ async def create_course(
     # Auto-enroll creator
     enrollment = CourseEnrollment(user_id=current_user.id, course_id=course.id)
     db.add(enrollment)
+
+    # Auto-enroll all existing semester members (other than creator)
+    if request.semester_id:
+        members_result = await db.execute(
+            select(SemesterMember).where(SemesterMember.semester_id == request.semester_id)
+        )
+        for member in members_result.scalars().all():
+            if str(member.user_id) != str(current_user.id):
+                db.add(CourseEnrollment(user_id=member.user_id, course_id=course.id))
+
     await db.commit()
     await db.refresh(course)
 
@@ -337,7 +347,7 @@ async def get_course(
             "code": course.code,
             "name": course.name,
             "description": course.description,
-            "semester": course.semester,
+            "semester_id": str(course.semester_id) if course.semester_id else None,
         },
         "topics": [
             {

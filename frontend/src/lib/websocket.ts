@@ -9,12 +9,15 @@ export type WebSocketMessage =
     | { type: 'processing_status'; resource_id: string; status: 'processing' | 'completed' | 'failed' }
     | { type: 'fact_check:complete'; data: { resource_id: string; topic_id: string; summary: string; stats: Record<string, number> } }
     | { type: 'grading:complete'; data: { answer_id: string; attempt_id: string; score: number; encouragement: string } }
-    | { type: 'resource_created'; data: any }
-    | { type: 'resource_updated'; data: any }
+    | { type: 'knowledge_updated'; topic_id: string; knowledge_id: string }
+    | { type: 'knowledge_status'; topic_id: string; status: string }
+    | { type: 'notification'; data: { id: string; type: string; title: string; body: string; is_read: boolean; created_at: string; meta_data?: Record<string, string> } }
+    | { type: 'resource_created'; data: unknown }
+    | { type: 'resource_updated'; data: unknown }
     | { type: 'resource_deleted'; resource_id: string }
     | { type: 'user_joined'; user_id: string; timestamp: string | null }
     | { type: 'active_users'; users: string[] }
-    | { type: 'echo'; data: any };
+    | { type: 'echo'; data: unknown };
 
 export interface WebSocketCallbacks {
     onMessage?: (message: WebSocketMessage) => void;

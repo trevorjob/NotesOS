@@ -90,6 +90,15 @@ class PreferencesUpdate(BaseModel):
     personality_tags: Optional[list] = None
 
 
+class ProfileUpdate(BaseModel):
+    full_name: Optional[str] = None
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
 # =============================================================================
 # Utility Functions
 # =============================================================================
@@ -370,6 +379,43 @@ async def update_personality(
     await db.commit()
 
     return {"study_personality": current_personality}
+
+
+@router.patch("/me")
+async def update_profile(
+    data: ProfileUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update user profile fields (e.g. full_name)."""
+    if data.full_name is not None:
+        current_user.full_name = data.full_name.strip()
+    await db.commit()
+    return {
+        "id": str(current_user.id),
+        "email": current_user.email,
+        "full_name": current_user.full_name,
+        "avatar_url": current_user.avatar_url,
+        "study_personality": current_user.study_personality,
+    }
+
+
+@router.post("/me/change-password", status_code=status.HTTP_200_OK)
+async def change_password(
+    data: ChangePasswordRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Change password — verifies current password before updating."""
+    if not current_user.password_hash:
+        raise HTTPException(status_code=400, detail="Password change not available for OAuth accounts.")
+    if not pwd_context.verify(data.current_password, current_user.password_hash):
+        raise HTTPException(status_code=400, detail="Current password is incorrect.")
+    if len(data.new_password) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters.")
+    current_user.password_hash = hash_password(data.new_password)
+    await db.commit()
+    return {"message": "Password updated successfully."}
 
 
 @router.post("/forgot-password", status_code=status.HTTP_200_OK)

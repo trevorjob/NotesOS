@@ -56,7 +56,7 @@ class Grader:
             print(f"[GRADER] Error parsing grading result: {e}")
             # Fallback grading
             grading_result = {
-                "score": 50,
+                "score": 5,
                 "key_points_covered": [],
                 "key_points_missed": [],
                 "feedback": "Could not grade automatically. Please review manually.",

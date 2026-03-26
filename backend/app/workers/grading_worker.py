@@ -51,6 +51,11 @@ async def process_grading_job(job_data: dict):
                 print(f"[GRADING WORKER] Answer {answer_id} not found")
                 return
 
+            # Save scalars before any commit (relationships expire after commit)
+            attempt_id = answer.attempt_id
+            course_id = str(answer.attempt.test.course_id) if answer.attempt and answer.attempt.test else None
+            user_id = answer.attempt.user_id if answer.attempt else None
+
             question = answer.question
             student_answer_text = answer.answer_text or ""
 
@@ -64,6 +69,21 @@ async def process_grading_job(job_data: dict):
                 answer.transcription = student_answer_text
                 print(f"[GRADING WORKER] Transcription: {student_answer_text[:100]}...")
 
+            # 1b. Skip AI grading for blank/skipped answers — score 0 immediately
+            if not student_answer_text.strip():
+                answer.score = 0.0
+                answer.ai_feedback = "No answer provided."
+                answer.encouragement = ""
+                answer.key_points_covered = []
+                answer.key_points_missed = []
+                answer.status = AnswerStatus.NEEDS_REVIEW
+                await db.commit()
+                all_done = await _update_attempt_score(db, attempt_id)
+                print(f"[GRADING WORKER] Blank answer — scored 0 without AI call")
+                if all_done:
+                    await _broadcast_and_notify(db, attempt_id, course_id, user_id)
+                return
+
             # 2. Grade the answer
             print(f"[GRADING WORKER] Grading answer {answer_id}")
             grading_result = await grader.grade_answer(
@@ -73,14 +93,14 @@ async def process_grading_job(job_data: dict):
                 is_voice=is_voice,
             )
 
-            # 3. Save grading results
+            # 3. Save grading results (grader returns 0–10, matching MCQ scale)
             answer.score = grading_result["score"]
             answer.ai_feedback = grading_result["feedback"]
             answer.encouragement = grading_result["encouragement"]
             answer.key_points_covered = grading_result.get("key_points_covered") or []
             answer.key_points_missed = grading_result.get("key_points_missed") or []
 
-            # Derive answer status from normalized score (score is 0–10)
+            # Derive answer status from normalized score (normalize 0–10 → 0–1 for threshold check)
             normalized = float(grading_result["score"]) / 10.0
             if normalized >= 0.85:
                 answer.status = AnswerStatus.CORRECT
@@ -91,60 +111,15 @@ async def process_grading_job(job_data: dict):
 
             await db.commit()
 
-            print(f"[GRADING WORKER] Score: {grading_result['score']}/100")
+            print(f"[GRADING WORKER] Score: {grading_result['score']}/10")
             print(f"[GRADING WORKER] Encouragement: {grading_result['encouragement']}")
 
             # 4. Update test attempt total score; returns True if all answers are now graded
-            all_done = False
-            if answer.attempt:
-                all_done = await _update_attempt_score(db, answer.attempt_id)
+            all_done = await _update_attempt_score(db, attempt_id)
 
             # 5. Only broadcast + notify once the WHOLE test is graded (not per-answer)
-            if all_done and answer.attempt:
-                attempt = answer.attempt
-                course_id = None
-                if hasattr(attempt, "test") and attempt.test:
-                    course_id = str(attempt.test.course_id)
-
-                if course_id:
-                    score_pct = round(
-                        float(attempt.total_score or 0) / max(attempt.max_score, 1) * 100
-                    )
-                    await redis_client.publish(
-                        channel="course_updates",
-                        message={
-                            "course_id": course_id,
-                            "message": {
-                                "type": "grading:complete",
-                                "data": {
-                                    "attempt_id": str(answer.attempt_id),
-                                    "score_pct": score_pct,
-                                },
-                            },
-                        },
-                    )
-
-                # Create TEST_GRADED notification once for this user
-                try:
-                    from app.services.notifications import create_and_push_notification
-                    from app.models.notification import NotificationType
-
-                    score_pct = round(
-                        float(attempt.total_score or 0) / max(attempt.max_score, 1) * 100
-                    )
-                    await create_and_push_notification(
-                        db=db,
-                        user_id=attempt.user_id,
-                        notif_type=NotificationType.TEST_GRADED,
-                        title="Your test has been graded",
-                        body=f"You scored {score_pct}% on your test.",
-                        meta_data={
-                            "attempt_id": str(answer.attempt_id),
-                            "course_id": course_id,
-                        },
-                    )
-                except Exception as notif_err:
-                    print(f"[GRADING WORKER] Notification error: {notif_err}")
+            if all_done:
+                await _broadcast_and_notify(db, attempt_id, course_id, user_id)
 
         except Exception as e:
             print(f"[GRADING WORKER] Error processing job: {e}")
@@ -152,6 +127,47 @@ async def process_grading_job(job_data: dict):
 
             traceback.print_exc()
             await db.rollback()
+
+
+async def _broadcast_and_notify(db, attempt_id, course_id, user_id) -> None:
+    """Broadcast grading:complete and send notification. Uses fresh DB query — safe after commit."""
+    from app.models.test import TestAttempt as _TA
+    attempt_result = await db.execute(select(_TA).where(_TA.id == attempt_id))
+    attempt = attempt_result.scalar_one_or_none()
+    if not attempt:
+        return
+
+    score_pct = round(float(attempt.total_score or 0) / max(attempt.max_score, 1) * 100)
+
+    if course_id:
+        await redis_client.publish(
+            channel="course_updates",
+            message={
+                "course_id": course_id,
+                "message": {
+                    "type": "grading:complete",
+                    "data": {
+                        "attempt_id": str(attempt_id),
+                        "score_pct": score_pct,
+                    },
+                },
+            },
+        )
+
+    if user_id:
+        try:
+            from app.services.notifications import create_and_push_notification
+            from app.models.notification import NotificationType
+            await create_and_push_notification(
+                db=db,
+                user_id=user_id,
+                notif_type=NotificationType.TEST_GRADED,
+                title="Your test has been graded",
+                body=f"You scored {score_pct}% on your test.",
+                meta_data={"attempt_id": str(attempt_id), "course_id": course_id or ""},
+            )
+        except Exception as notif_err:
+            print(f"[GRADING WORKER] Notification error: {notif_err}")
 
 
 async def _update_attempt_score(db, attempt_id) -> bool:
@@ -172,7 +188,8 @@ async def _update_attempt_score(db, attempt_id) -> bool:
 
     if attempt:
         attempt.total_score = total_score
-        if not attempt.completed_at and all_graded:
+        now_completed = not attempt.completed_at and all_graded
+        if now_completed:
             attempt.completed_at = datetime.utcnow()
         await db.commit()
 
@@ -180,7 +197,7 @@ async def _update_attempt_score(db, attempt_id) -> bool:
             f"[GRADING WORKER] Updated attempt {attempt_id} total score: {total_score}"
         )
 
-    return bool(all_graded and attempt and attempt.completed_at)
+    return bool(all_graded and attempt and (attempt.completed_at or now_completed))
 
 
 async def start_grading_worker():

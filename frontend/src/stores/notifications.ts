@@ -118,8 +118,8 @@ export const useNotificationStore = create<NotificationState>()((set, get) => ({
                     }
                 } else if (msg.type === 'fact_check:complete') {
                     addToast('AI summary ready for your resource.', 'info');
-                } else if ((msg as any).type === 'notification') {
-                    const n = (msg as any).data as AppNotification;
+                } else if (msg.type === 'notification') {
+                    const n = msg.data as AppNotification;
                     if (n?.id) {
                         pushNotification(n);
                         addToast(n.title, 'info');

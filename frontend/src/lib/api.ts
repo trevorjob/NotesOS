@@ -48,6 +48,19 @@ export const tokenManager = {
         localStorage.removeItem(TOKEN_KEY);
         localStorage.removeItem(REFRESH_TOKEN_KEY);
     },
+
+    clearAll: () => {
+        if (typeof window === 'undefined') return;
+        localStorage.clear();
+        // Clear all IndexedDB databases
+        if (typeof indexedDB !== 'undefined' && indexedDB.databases) {
+            indexedDB.databases().then((dbs) => {
+                dbs.forEach((db) => {
+                    if (db.name) indexedDB.deleteDatabase(db.name);
+                });
+            }).catch(() => {});
+        }
+    },
 };
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -93,8 +106,13 @@ apiClient.interceptors.response.use(
             _retry?: boolean;
         };
 
-        // If 401 and not already retrying
-        if (error.response?.status === 401 && !originalRequest._retry) {
+        // If 401 and not already retrying, and not an auth endpoint
+        // (login/register return 401 on bad creds; logout doesn't need auth)
+        const isAuthEndpoint =
+            originalRequest.url?.includes('/api/auth/login') ||
+            originalRequest.url?.includes('/api/auth/register') ||
+            originalRequest.url?.includes('/api/auth/logout');
+        if (error.response?.status === 401 && !originalRequest._retry && !isAuthEndpoint) {
             if (isRefreshing) {
                 // Queue this request
                 return new Promise((resolve, reject) => {
@@ -192,6 +210,12 @@ export const api = {
             emoji_usage?: string;
             explanation_style?: string;
         }) => apiClient.patch('/api/auth/me/personality', prefs),
+
+        updateProfile: (data: { full_name?: string }) =>
+            apiClient.patch('/api/auth/me', data),
+
+        changePassword: (data: { current_password: string; new_password: string }) =>
+            apiClient.post('/api/auth/me/change-password', data),
     },
 
     // Courses
@@ -204,7 +228,7 @@ export const api = {
             code: string;
             name: string;
             description?: string;
-            semester?: string;
+            semester_id?: string;
             is_public?: boolean;
         }) => apiClient.post('/api/courses', data),
 

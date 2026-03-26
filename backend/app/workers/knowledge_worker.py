@@ -7,9 +7,14 @@ a TopicKnowledge record, then enqueues an audio generation job.
 import asyncio
 import json
 
+from sqlalchemy import select
+
 from app.database import async_session_maker
+from app.models.course import CourseEnrollment, Topic
+from app.models.notification import NotificationType
 from app.services.cache import cache, topic_key
 from app.services.knowledge_synthesizer import knowledge_synthesizer
+from app.services.notifications import create_and_push_notification
 from app.services.redis_client import redis_client
 from app.services.websocket import connection_manager
 
@@ -54,6 +59,33 @@ async def process_knowledge_job(job_data: dict):
                             "knowledge_id": str(knowledge.id),
                         },
                     )
+
+                # Notify all enrolled users in the course
+                if course_id:
+                    try:
+                        # Get topic title for the notification body
+                        topic_result = await db.execute(
+                            select(Topic).where(Topic.id == topic_id)
+                        )
+                        topic_obj = topic_result.scalar_one_or_none()
+                        topic_title = topic_obj.title if topic_obj else "your topic"
+
+                        # Get all enrolled users
+                        enrollment_result = await db.execute(
+                            select(CourseEnrollment).where(CourseEnrollment.course_id == course_id)
+                        )
+                        enrollments = enrollment_result.scalars().all()
+                        for enrollment in enrollments:
+                            await create_and_push_notification(
+                                db=db,
+                                user_id=enrollment.user_id,
+                                notif_type=NotificationType.AI_SUMMARY_READY,
+                                title="Learning materials ready",
+                                body=f'Notes and key concepts for "{topic_title}" are ready.',
+                                meta_data={"topic_id": topic_id, "course_id": course_id},
+                            )
+                    except Exception as notif_err:
+                        print(f"[knowledge_worker] Failed to send notifications: {notif_err}")
 
                 # Enqueue audio generation
                 await redis_client.enqueue_job(

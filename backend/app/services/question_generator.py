@@ -41,11 +41,12 @@ class QuestionGenerator:
         self,
         db: AsyncSession,
         course_id: str,
-        user_id: str,  # Added user_id
+        user_id: str,
         topic_ids: List[str],
         question_count: int = 10,
         difficulty: str = "medium",
         question_types: List[str] = None,
+        title: str = None,
     ) -> Test:
         """
         Generate a complete test with questions.
@@ -74,7 +75,7 @@ class QuestionGenerator:
         test = Test(
             course_id=uuid.UUID(course_id),
             created_by=uuid.UUID(user_id),
-            title=f"Practice Test - {difficulty.capitalize()}",
+            title=title or f"Practice Test - {difficulty.capitalize()}",
             test_type=TestType.PRACTICE,
             topics=topic_ids,
             question_count=question_count,
@@ -178,19 +179,21 @@ Requirements:
 Return JSON array of questions in this format:
 [
   {{
-    "question_text": "What is...?",
+    "question_text": "What was the primary cause of X?",
     "question_type": "mcq",
-    "correct_answer": "Option B",
-    "answer_options": ["Option A", "Option B", "Option C", "Option D"],
+    "answer_options": ["First plausible answer", "The actual correct answer", "Another wrong answer", "Another wrong answer"],
+    "correct_answer": "The actual correct answer",
     "points": 1
   }},
   {{
     "question_text": "Explain...",
     "question_type": "short_answer",
-    "correct_answer": "Model answer here...",
+    "correct_answer": "Model answer here with key points the student should cover.",
     "points": 2
   }}
 ]
+
+CRITICAL for MCQ: correct_answer MUST be the EXACT TEXT of one of the answer_options strings. Do NOT use labels like "Option A" or "Option B". The correct_answer field must copy the full text of the correct option exactly.
 
 Return ONLY valid JSON, no other text."""
 

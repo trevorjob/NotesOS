@@ -100,8 +100,9 @@ export default function GenerateTestPage() {
       });
       const test = res.data?.test ?? res.data;
       router.push(`/tests/${test.id}`);
-    } catch (e: any) {
-      setError(e.response?.data?.detail || 'Failed to generate test. Please try again.');
+    } catch (e: unknown) {
+      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(detail || 'Failed to generate test. Please try again.');
       setGenerating(false);
     }
   }

@@ -28,6 +28,7 @@ class StudyAgent:
         question: str,
         topic_id: Optional[str] = None,
         conversation_id: Optional[str] = None,
+        personality: Optional[dict] = None,
     ) -> Dict[str, Any]:
         """
         Answer a study question using RAG + AI.
@@ -70,7 +71,7 @@ class StudyAgent:
         history = await self._get_conversation_history(db, conversation.id)
 
         # 4. Generate answer with DeepSeek
-        answer = await self._generate_answer(question, context, history)
+        answer = await self._generate_answer(question, context, history, personality=personality)
 
         # 5. Save messages to conversation
         await self._save_messages(db, conversation.id, question, answer)
@@ -143,17 +144,41 @@ class StudyAgent:
 
         return history
 
-    async def _generate_answer(self, question: str, context: str, history: list) -> str:
-        """Generate answer using DeepSeek with RAG context."""
-        system_prompt = """You are a friendly, knowledgeable study assistant helping students learn course material.
+    async def _generate_answer(self, question: str, context: str, history: list, personality: Optional[dict] = None) -> str:
+        """Generate answer using DeepSeek with RAG context and user personality."""
+        tone = (personality or {}).get("tone", "encouraging")
+        emoji_usage = (personality or {}).get("emoji_usage", "moderate")
+        explanation_style = (personality or {}).get("explanation_style", "detailed")
 
-Your job is to:
-1. Answer questions clearly and accurately based on the provided course notes
-2. Explain concepts in an easy-to-understand way
-3. Encourage students and keep them motivated
-4. If the notes don't contain the answer, say so honestly
+        tone_desc = {
+            "encouraging": "warm, supportive, and positive",
+            "direct": "concise and straight to the point — no fluff",
+            "humorous": "light-hearted with occasional wit",
+        }.get(tone, "friendly and supportive")
 
-Be conversational, supportive, and use examples when helpful."""
+        emoji_desc = {
+            "none": "Do NOT use any emojis.",
+            "moderate": "Use emojis sparingly (1–2 per response where fitting).",
+            "heavy": "Use emojis freely throughout your response.",
+        }.get(emoji_usage, "Use emojis sparingly.")
+
+        style_desc = {
+            "concise": "Keep answers short and punchy — get to the point fast.",
+            "detailed": "Give thorough explanations with full context.",
+            "visual": "Use plenty of examples, analogies, and step-by-step breakdowns.",
+        }.get(explanation_style, "Give thorough explanations.")
+
+        system_prompt = f"""You are a knowledgeable study assistant helping a student learn course material.
+
+Personality guidelines (FOLLOW THESE CAREFULLY):
+- Tone: Be {tone_desc}.
+- Emoji usage: {emoji_desc}
+- Explanation style: {style_desc}
+
+Your job:
+1. Answer questions clearly and accurately based on the provided course notes.
+2. If the notes don't contain the answer, say so honestly.
+3. Never make up facts not present in the notes."""
 
         user_prompt = f"""Question: {question}
 

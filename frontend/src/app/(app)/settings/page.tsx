@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth';
+import { useSemesterStore } from '@/stores/semesters';
 import { api } from '@/lib/api';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
@@ -16,8 +17,7 @@ type Tone = 'encouraging' | 'direct' | 'humorous';
 type EmojiUsage = 'none' | 'moderate' | 'heavy';
 type ExplanationStyle = 'concise' | 'detailed' | 'visual';
 
-interface Semester { id: string; name: string; is_active: boolean; course_count?: number }
-interface ClassInvite { id: string; invite_code: string; name?: string; is_active: boolean }
+interface Semester { id: string; name: string; invite_code?: string; role?: string; course_count?: number }
 interface Notification { id: string; title: string; body: string; is_read: boolean; created_at: string }
 
 const NAV = [
@@ -60,6 +60,7 @@ function OptionCard<T extends string>({ value, label, desc, selected, onClick }:
 
 export default function SettingsPage() {
   const { user, setUser, updatePersonality, logout } = useAuthStore();
+  const { semesters: storeSemesters, activeSemesterId, fetchSemesters, createSemester: storeCreateSemester, deleteSemester: storeDeleteSemester, setActiveSemester } = useSemesterStore();
   const router = useRouter();
 
   // Profile
@@ -81,9 +82,9 @@ export default function SettingsPage() {
   const [savingPersonality, setSavingPersonality] = useState(false);
   const [personalitySaved, setPersonalitySaved] = useState(false);
 
-  // Semesters
-  const [semesters, setSemesters] = useState<Semester[]>([]);
-  const [loadingSemesters, setLoadingSemesters] = useState(true);
+  // Semesters — driven by store (persisted)
+  const semesters = storeSemesters as Semester[];
+  const loadingSemesters = false;
   const [showNewSemester, setShowNewSemester] = useState(false);
   const [newSemesterName, setNewSemesterName] = useState('');
   const [creatingSemester, setCreatingSemester] = useState(false);
@@ -91,11 +92,7 @@ export default function SettingsPage() {
   const [editingSemesterId, setEditingSemesterId] = useState<string | null>(null);
   const [editSemesterName, setEditSemesterName] = useState('');
 
-  // Class invite
-  const [classInvite, setClassInvite] = useState<ClassInvite | null>(null);
-  const [loadingInvite, setLoadingInvite] = useState(true);
-  const [creatingInvite, setCreatingInvite] = useState(false);
-  const [copiedInvite, setCopiedInvite] = useState(false);
+  const [copiedSemesterCode, setCopiedSemesterCode] = useState<string | null>(null);
 
   // Sidebar filter
   const SIDEBAR_FILTER_KEY = 'notesos-sidebar-filter';
@@ -123,20 +120,8 @@ export default function SettingsPage() {
     if (hasFetched.current) return;
     hasFetched.current = true;
 
-    // Load semesters
-    api.semesters.getAll()
-      .then((r) => setSemesters(r.data?.semesters ?? r.data ?? []))
-      .catch(() => {})
-      .finally(() => setLoadingSemesters(false));
-
-    // Load class invites
-    api.invites.listMyInvites()
-      .then((r) => {
-        const list: ClassInvite[] = r.data?.classes ?? r.data ?? [];
-        setClassInvite(list.find((c) => c.is_active) ?? list[0] ?? null);
-      })
-      .catch(() => {})
-      .finally(() => setLoadingInvite(false));
+    // Load semesters via store (persists activeSemesterId)
+    fetchSemesters();
 
     // Load notifications (first page)
     api.notifications.getAll(20, 0)
@@ -155,6 +140,7 @@ export default function SettingsPage() {
     if (!fullName.trim() || !user) return;
     setSavingName(true); setNameMsg('');
     try {
+      await api.auth.updateProfile({ full_name: fullName.trim() });
       setUser({ ...user, full_name: fullName.trim() });
       setNameMsg('Saved!');
       setTimeout(() => setNameMsg(''), 2000);
@@ -169,11 +155,14 @@ export default function SettingsPage() {
     if (newPw.length < 8) { setPwError('Password must be at least 8 characters.'); return; }
     setSavingPw(true); setPwMsg('');
     try {
-      await api.auth.login(user!.email, currentPw);
+      await api.auth.changePassword({ current_password: currentPw, new_password: newPw });
       setPwMsg('Password updated!');
       setCurrentPw(''); setNewPw(''); setConfirmPw('');
       setTimeout(() => setPwMsg(''), 3000);
-    } catch { setPwError('Current password is incorrect.'); }
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setPwError(msg || 'Failed to update password.');
+    }
     finally { setSavingPw(false); }
   }
 
@@ -195,11 +184,13 @@ export default function SettingsPage() {
     if (!newSemesterName.trim()) { setSemesterError('Name required.'); return; }
     setCreatingSemester(true); setSemesterError('');
     try {
-      await api.semesters.create({ name: newSemesterName.trim() });
-      const r = await api.semesters.getAll();
-      setSemesters(r.data?.semesters ?? r.data ?? []);
+      const newSemester = await storeCreateSemester({ name: newSemesterName.trim() });
+      setActiveSemester(newSemester.id);
       setNewSemesterName(''); setShowNewSemester(false);
-    } catch (e: any) { setSemesterError(e.response?.data?.detail || 'Failed.'); }
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setSemesterError(msg || 'Failed.');
+    }
     finally { setCreatingSemester(false); }
   }
 
@@ -207,23 +198,19 @@ export default function SettingsPage() {
     if (!editSemesterName.trim()) return;
     try {
       await api.semesters.update(id, { name: editSemesterName.trim() });
-      setSemesters((prev) => prev.map((s) => s.id === id ? { ...s, name: editSemesterName.trim() } : s));
+      await fetchSemesters();
       setEditingSemesterId(null);
     } catch { /* ignore */ }
   }
 
-  async function handleSetCurrentSemester(id: string) {
-    try {
-      await api.semesters.update(id, { name: semesters.find((s) => s.id === id)?.name ?? '' });
-      setSemesters((prev) => prev.map((s) => ({ ...s, is_active: s.id === id })));
-    } catch { /* ignore */ }
+  function handleSetCurrentSemester(id: string) {
+    setActiveSemester(activeSemesterId === id ? null : id);
   }
 
   async function handleDeleteSemester(id: string) {
     if (!confirm('Delete this semester? Courses become unassigned.')) return;
     try {
-      await api.semesters.delete(id);
-      setSemesters((prev) => prev.filter((s) => s.id !== id));
+      await storeDeleteSemester(id);
     } catch { /* ignore */ }
   }
 
@@ -232,30 +219,10 @@ export default function SettingsPage() {
     localStorage.setItem(SIDEBAR_FILTER_KEY, v);
   }
 
-  // ── Class invite ─────────────────────────────────────────────────────────
-
-  async function handleCreateClassInvite() {
-    setCreatingInvite(true);
-    try {
-      const r = await api.invites.createClass();
-      setClassInvite(r.data?.class ?? r.data);
-    } catch { /* ignore */ }
-    finally { setCreatingInvite(false); }
-  }
-
-  async function handleDeactivateInvite() {
-    if (!classInvite) return;
-    try {
-      await api.invites.deactivateClass(classInvite.id);
-      setClassInvite(null);
-    } catch { /* ignore */ }
-  }
-
-  function copyInviteCode() {
-    if (!classInvite) return;
-    navigator.clipboard.writeText(classInvite.invite_code).then(() => {
-      setCopiedInvite(true);
-      setTimeout(() => setCopiedInvite(false), 2000);
+  function copySemesterCode(id: string, code: string) {
+    navigator.clipboard.writeText(code).then(() => {
+      setCopiedSemesterCode(id);
+      setTimeout(() => setCopiedSemesterCode(null), 2000);
     });
   }
 
@@ -424,16 +391,16 @@ export default function SettingsPage() {
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2">
                                 <p className="text-sm font-medium text-[#1a1917] truncate">{s.name}</p>
-                                {s.is_active && <Badge variant="success">Current</Badge>}
+                                {activeSemesterId === s.id && <Badge variant="success">Current</Badge>}
                               </div>
                             </div>
                             <div className="flex items-center gap-1 shrink-0">
                               <button onClick={() => { setEditingSemesterId(s.id); setEditSemesterName(s.name); }}
                                 className="text-xs text-[#6b6762] hover:text-[#1a1917] px-2 py-1 rounded-lg hover:bg-[#f0eeea]">Edit</button>
-                              {!s.is_active && (
-                                <button onClick={() => handleSetCurrentSemester(s.id)}
-                                  className="text-xs text-[#6b6762] hover:text-[#1a1917] px-2 py-1 rounded-lg hover:bg-[#f0eeea]">Set current</button>
-                              )}
+                              <button onClick={() => handleSetCurrentSemester(s.id)}
+                                className="text-xs text-[#6b6762] hover:text-[#1a1917] px-2 py-1 rounded-lg hover:bg-[#f0eeea]">
+                                {activeSemesterId === s.id ? 'Unset' : 'Set current'}
+                              </button>
                               <button onClick={() => handleDeleteSemester(s.id)}
                                 className="text-xs text-[#9e9a94] hover:text-[#dc2626] px-2 py-1 rounded-lg hover:bg-[#f0eeea]">Delete</button>
                             </div>
@@ -469,26 +436,29 @@ export default function SettingsPage() {
                     ))}
                   </div>
 
-                  {/* Class invite */}
-                  <div className="border-t border-[#f0eeea] pt-4 space-y-3">
-                    <div>
-                      <p className="text-xs font-semibold text-[#6b6762]">Class invite link</p>
-                      <p className="text-xs text-[#9e9a94] mt-0.5">Share this code and classmates join ALL your current courses at once.</p>
-                    </div>
-                    {loadingInvite ? <Spinner size="sm" /> : classInvite && classInvite.is_active ? (
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-2 bg-[#f0eeea] rounded-xl px-4 py-3">
-                          <p className="flex-1 font-mono text-sm font-semibold text-[#1a1917] tracking-widest">{classInvite.invite_code}</p>
-                          <button onClick={copyInviteCode} className="text-xs text-[#6b6762] hover:text-[#1a1917] px-2 py-1 rounded-lg hover:bg-white transition-colors">
-                            {copiedInvite ? '✓ Copied' : 'Copy'}
-                          </button>
-                        </div>
-                        <Button size="sm" variant="ghost" onClick={handleDeactivateInvite}>Deactivate</Button>
+                  {/* Semester invite codes */}
+                  {semesters.some((s) => s.role === 'OWNER' && s.invite_code) && (
+                    <div className="border-t border-[#f0eeea] pt-4 space-y-3">
+                      <div>
+                        <p className="text-xs font-semibold text-[#6b6762]">Semester invite codes</p>
+                        <p className="text-xs text-[#9e9a94] mt-0.5">Share these codes so classmates can join your semester and access all its courses.</p>
                       </div>
-                    ) : (
-                      <Button size="sm" loading={creatingInvite} onClick={handleCreateClassInvite}>Create class invite</Button>
-                    )}
-                  </div>
+                      {semesters.filter((s) => s.role === 'OWNER' && s.invite_code).map((s) => (
+                        <div key={s.id} className="space-y-1">
+                          <p className="text-xs text-[#6b6762]">{s.name}</p>
+                          <div className="flex items-center gap-2 bg-[#f0eeea] rounded-xl px-4 py-3">
+                            <p className="flex-1 font-mono text-sm font-semibold text-[#1a1917] tracking-widest">{s.invite_code}</p>
+                            <button
+                              onClick={() => copySemesterCode(s.id, s.invite_code!)}
+                              className="text-xs text-[#6b6762] hover:text-[#1a1917] px-2 py-1 rounded-lg hover:bg-white transition-colors"
+                            >
+                              {copiedSemesterCode === s.id ? '✓ Copied' : 'Copy'}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </>
               )}
             </Section>

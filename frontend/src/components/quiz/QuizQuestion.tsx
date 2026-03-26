@@ -19,28 +19,30 @@ interface QuizQuestionProps {
   total: number;
   onSubmit: (questionId: string, answer: string, isVoice?: boolean, voiceFile?: File) => void;
   onSkip: () => void;
+  onPrevious?: () => void;
+  defaultAnswer?: string;
+  defaultIsVoice?: boolean;
   loading?: boolean;
 }
 
 const MCQ_TYPES = ['mcq', 'multiple_choice', 'multiple-choice'];
 
-export function QuizQuestion({ question, index, total, onSubmit, onSkip, loading }: QuizQuestionProps) {
+export function QuizQuestion({ question, index, total, onSubmit, onSkip, onPrevious, defaultAnswer, defaultIsVoice, loading }: QuizQuestionProps) {
   const normalizedType = question.question_type?.toLowerCase() ?? '';
   const options = question.answer_options ?? question.options ?? [];
   const isMCQ = MCQ_TYPES.includes(normalizedType) && options.length > 0;
 
-  // Reset all state when the question changes
-  const [answer, setAnswer] = useState('');
-  const [selectedOption, setSelectedOption] = useState('');
+  // If previously answered by voice, don't pre-fill textarea with '[voice answer]'
+  const [answer, setAnswer] = useState(isMCQ ? '' : (defaultIsVoice ? '' : (defaultAnswer ?? '')));
+  const [selectedOption, setSelectedOption] = useState(isMCQ ? (defaultAnswer ?? '') : '');
   const [recording, setRecording] = useState(false);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
   useEffect(() => {
-    // Reset per-question state whenever question changes
-    setAnswer('');
-    setSelectedOption('');
+    setAnswer(isMCQ ? '' : (defaultIsVoice ? '' : (defaultAnswer ?? '')));
+    setSelectedOption(isMCQ ? (defaultAnswer ?? '') : '');
     setAudioBlob(null);
     if (recording) {
       mediaRecorderRef.current?.stop();
@@ -81,13 +83,16 @@ export function QuizQuestion({ question, index, total, onSubmit, onSkip, loading
     } else if (audioBlob) {
       const file = new File([audioBlob], 'voice.webm', { type: 'audio/webm' });
       onSubmit(question.id, '[voice answer]', true, file);
+    } else if (defaultIsVoice && !answer.trim()) {
+      // Keep existing voice answer — signal with is_voice=true but no new file
+      onSubmit(question.id, '[voice answer]', true);
     } else {
       if (!answer.trim()) return;
       onSubmit(question.id, answer.trim());
     }
   }
 
-  const canSubmit = isMCQ ? !!selectedOption : (!!answer.trim() || !!audioBlob);
+  const canSubmit = isMCQ ? !!selectedOption : (!!answer.trim() || !!audioBlob || !!defaultIsVoice);
 
   return (
     <div className="space-y-5">
@@ -127,6 +132,18 @@ export function QuizQuestion({ question, index, total, onSubmit, onSkip, loading
       {/* Free-text / voice — non-MCQ only */}
       {!isMCQ && (
         <div className="space-y-3">
+          {/* Previously recorded voice answer indicator (shown when navigating back) */}
+          {defaultIsVoice && !audioBlob && (
+            <div className="flex items-center gap-2 px-3 py-2 bg-[#f0fdf4] border border-[#86efac] rounded-lg">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="text-[#16a34a] shrink-0">
+                <rect x="9" y="2" width="6" height="12" rx="3" fill="currentColor"/>
+                <path d="M5 10v2a7 7 0 0014 0v-2" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                <line x1="12" y1="19" x2="12" y2="22" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+              </svg>
+              <span className="text-xs text-[#16a34a] font-medium">Voice answer already recorded</span>
+              <span className="text-xs text-[#6b6762] ml-1">— record again or type to replace</span>
+            </div>
+          )}
           <textarea
             value={answer}
             onChange={(e) => { setAnswer(e.target.value); setAudioBlob(null); }}
@@ -177,9 +194,16 @@ export function QuizQuestion({ question, index, total, onSubmit, onSkip, loading
 
       {/* Actions */}
       <div className="flex justify-between items-center pt-2">
-        <Button variant="ghost" size="sm" onClick={onSkip}>
-          {index + 1 === total ? 'Skip & finish' : 'Skip'}
-        </Button>
+        <div className="flex items-center gap-2">
+          {onPrevious && index > 0 && (
+            <Button variant="ghost" size="sm" onClick={onPrevious}>
+              ← Previous
+            </Button>
+          )}
+          <Button variant="ghost" size="sm" onClick={onSkip}>
+            {index + 1 === total ? 'Skip & finish' : 'Skip'}
+          </Button>
+        </div>
         <Button size="sm" loading={loading} onClick={handleSubmit} disabled={!canSubmit}>
           {index + 1 === total ? 'Submit quiz' : 'Next →'}
         </Button>

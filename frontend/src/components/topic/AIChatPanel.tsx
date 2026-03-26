@@ -128,7 +128,7 @@ export function AIChatPanel({ topicId, courseId, onClose }: AIChatPanelProps) {
       <div className={`
         fixed z-50 bg-white border-[#dedad4] flex flex-col shadow-xl
         bottom-0 left-0 right-0 h-[80vh] border-t rounded-t-2xl
-        md:inset-y-0 md:bottom-auto md:left-auto md:right-0 md:h-auto md:w-[38%] md:border-t-0 md:border-l md:rounded-none
+        md:top-0 md:bottom-0 md:left-auto md:right-0 md:h-full md:w-[38%] md:border-t-0 md:border-l md:rounded-none md:overflow-hidden
         animate-slide-up md:animate-slide-in-right
       `}>
         {/* Header */}

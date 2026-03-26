@@ -99,8 +99,8 @@ export const useAuthStore = create<AuthState>()(
           // Ignore logout errors
           console.error('Logout error:', error);
         } finally {
-          // Clear tokens and state
-          tokenManager.clearTokens();
+          // Wipe all persisted client state (localStorage + IndexedDB)
+          tokenManager.clearAll();
           set({
             user: null,
             isAuthenticated: false,

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useCourseStore } from '@/stores/courses';
@@ -29,6 +29,11 @@ interface TopicDetail {
   has_audio?: boolean;
 }
 
+// Module-level caches — survive component re-mounts and back/forward navigation.
+// Data stays until the user refreshes the page.
+const topicDetailCache = new Map<string, TopicDetail>();
+const resourceCache = new Map<string, Resource[]>();
+
 export default function TopicPage() {
   const params = useParams<{ courseId: string; topicId: string }>();
   const { courseId, topicId } = params;
@@ -40,44 +45,71 @@ export default function TopicPage() {
   const knowledge = useKnowledgeStore((s) => s.topicKnowledge[topicId]);
   const audio = useKnowledgeStore((s) => s.topicAudio[topicId]);
 
-  const [topic, setTopic] = useState<TopicDetail | null>(null);
-  const [loadingTopic, setLoadingTopic] = useState(true);
+  // Re-render trigger — called after writing new data into a module-level cache.
+  // This avoids synchronous setState calls inside effects.
+  const [, bump] = useReducer((n: number) => n + 1, 0);
 
-  // Resources — lifted to avoid re-fetch on FocusMode toggle
-  const [resources, setResources] = useState<Resource[]>([]);
-  const resourcesFetched = useRef(false);
+  // Read directly from module-level caches (populated on first visit, persisted across navigations).
+  const cachedDetail = topicDetailCache.get(topicId) ?? null;
+  const cachedResources = resourceCache.get(topicId) ?? null;
+
+  // Sidebar stub — available immediately from the courses store (no API needed)
+  const course = courses.find((c) => c.id === courseId);
+  const storeTopicStub = course?.topics?.find((t) => t.id === topicId);
+
+  // Compose topic: full API detail > store stub (enough to render instantly)
+  const topic: TopicDetail | null =
+    cachedDetail ??
+    (storeTopicStub
+      ? { id: storeTopicStub.id, title: storeTopicStub.title, course_id: courseId }
+      : null);
+
+  // Only show the full-screen spinner when we have absolutely nothing
+  const loadingTopic = !topic;
+
+  // Resources from cache; fall back to empty array while loading
+  const resources: Resource[] = cachedResources ?? [];
+
+  const resourcesFetched = useRef(resourceCache.has(topicId));
 
   const [showChat, setShowChat] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
+  const [processingResources, setProcessingResources] = useState(false);
 
   // ── Data fetching ───────────────────────────────────────────────────────
 
   const fetchResources = useCallback(async () => {
     try {
       const res = await api.resources.getByTopic(topicId);
-      setResources(res.data?.resources ?? res.data ?? []);
+      const data: Resource[] = res.data?.resources ?? res.data ?? [];
+      resourceCache.set(topicId, data);
+      bump();
     } catch { /* ignore */ }
-  }, [topicId]);
+  }, [topicId, bump]);
 
   useEffect(() => {
     if (!topicId) return;
 
-    // Load topic detail + siblings (for focus mode prev/next)
-    setLoadingTopic(true);
-    api.topics.getById(topicId)
-      .then((res) => setTopic(res.data?.topic ?? res.data))
-      .finally(() => setLoadingTopic(false));
+    // Reset the resources-fetched gate for this topic
+    resourcesFetched.current = resourceCache.has(topicId);
 
-    // Load course with topics (for focus mode prev/next + sidebar accuracy)
+    // Fetch full topic detail if not already cached; bump to re-render when done
+    if (!topicDetailCache.has(topicId)) {
+      api.topics.getById(topicId)
+        .then((res) => {
+          topicDetailCache.set(topicId, res.data?.topic ?? res.data);
+          bump();
+        })
+        .catch(() => {});
+    }
+
+    // Load course with topics (for sidebar + prev/next)
     selectCourse(courseId);
 
-    // Load knowledge & audio
+    // Load knowledge (store skips automatically if already cached)
     fetchKnowledge(topicId);
-
-    // Only fetch audio if topic indicates one may exist
-    // We'll fetch after topic loads to check has_audio
-  }, [topicId, courseId, selectCourse, fetchKnowledge]);
+  }, [topicId, courseId, selectCourse, fetchKnowledge, bump]);
 
   // Fetch audio only if the topic has one or audio is already in store
   useEffect(() => {
@@ -87,11 +119,7 @@ export default function TopicPage() {
     }
   }, [topic, topicId, fetchAudio]);
 
-  // Fetch resources once per topic
-  useEffect(() => {
-    resourcesFetched.current = false;
-  }, [topicId]);
-
+  // Fetch resources if not already cached
   useEffect(() => {
     if (!resourcesFetched.current) {
       resourcesFetched.current = true;
@@ -143,21 +171,43 @@ export default function TopicPage() {
 
   // Auto start/end reading session (silent background tracking)
   useEffect(() => {
+    let cancelled = false;
     const { startSession, endSession } = useProgressStore.getState();
     let sessionId: string | null = null;
-    startSession(topicId, 'reading').then((id) => { sessionId = id; }).catch(() => {});
+    startSession(topicId, 'reading')
+      .then((id) => {
+        if (cancelled) { endSession(id).catch(() => {}); }
+        else { sessionId = id; }
+      })
+      .catch(() => {});
     return () => {
+      cancelled = true;
       if (sessionId) endSession(sessionId).catch(() => {});
     };
   }, [topicId]);
 
   // ── Derived: prev/next topics ────────────────────────────────────────────
 
-  const course = courses.find((c) => c.id === courseId);
   const siblings = course?.topics ?? [];
   const currentIdx = siblings.findIndex((t) => t.id === topicId);
   const prevTopic = currentIdx > 0 ? siblings[currentIdx - 1] : null;
   const nextTopic = currentIdx >= 0 && currentIdx < siblings.length - 1 ? siblings[currentIdx + 1] : null;
+
+  // Warm caches for a sibling topic on hover — so clicking feels instant
+  function prefetchTopic(tid: string) {
+    if (!topicDetailCache.has(tid)) {
+      api.topics.getById(tid)
+        .then((res) => topicDetailCache.set(tid, res.data?.topic ?? res.data))
+        .catch(() => {});
+    }
+    if (!resourceCache.has(tid)) {
+      api.resources.getByTopic(tid)
+        .then((res) => resourceCache.set(tid, res.data?.resources ?? res.data ?? []))
+        .catch(() => {});
+    }
+    // Knowledge store already skips if cached
+    fetchKnowledge(tid);
+  }
 
   // ── Render ──────────────────────────────────────────────────────────────
 
@@ -172,7 +222,7 @@ export default function TopicPage() {
   const showAudioPlayer = !!(topic.has_audio || audio?.audio_url || audio?.status === 'processing');
 
   const mainContent = (
-    <div className="max-w-3xl mx-auto px-4 md:px-6 py-8 space-y-6">
+    <div className={`px-4 md:px-6 py-8 space-y-6 max-w-3xl mx-auto transition-all duration-300 ${showChat ? 'md:mr-[38%]' : ''}`}>
       {/* Breadcrumb */}
       <nav className="flex items-center gap-1.5 text-xs text-[#9e9a94] flex-wrap">
         <Link href="/home" className="hover:text-[#1a1917] transition-colors">Home</Link>
@@ -190,6 +240,19 @@ export default function TopicPage() {
           <Button variant="ghost" size="sm" onClick={() => setFocusMode(true)}>Focus</Button>
         </div>
       </div>
+
+      {/* Processing banner — shown after upload until knowledge synthesis completes */}
+      {(processingResources || knowledge?.status === 'processing') && (
+        <div className="flex items-center gap-3 bg-[#f0f9ff] border border-[#bae6fd] rounded-xl px-4 py-3">
+          <span className="h-4 w-4 rounded-full border-2 border-[#0284c7] border-t-transparent animate-spin shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-[#0c4a6e]">Processing your materials…</p>
+            <p className="text-xs text-[#0369a1] mt-0.5">
+              We&apos;re reading your files, generating notes and key concepts. This usually takes 1–3 minutes.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Audio player */}
       {showAudioPlayer && <AudioPlayer topicId={topicId} />}
@@ -216,6 +279,38 @@ export default function TopicPage() {
         <div className="bg-white rounded-xl border border-[#dedad4] px-6 py-8 text-center">
           <p className="text-sm text-[#6b6762] mb-3">No materials uploaded yet.</p>
           <Button size="sm" onClick={() => setShowUpload(true)}>+ Add Materials</Button>
+        </div>
+      )}
+
+      {/* Prev / Next topic navigation */}
+      {(prevTopic || nextTopic) && (
+        <div className="flex items-center justify-between pt-4 border-t border-[#dedad4]">
+          {prevTopic ? (
+            <Link
+              href={`/courses/${courseId}/topics/${prevTopic.id}`}
+              prefetch
+              onMouseEnter={() => prefetchTopic(prevTopic.id)}
+              className="group flex items-center gap-2 text-sm text-[#6b6762] hover:text-[#1a1917] transition-colors"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M10 3L5 8l5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+              </svg>
+              <span className="truncate max-w-[180px]">{prevTopic.title}</span>
+            </Link>
+          ) : <div />}
+          {nextTopic ? (
+            <Link
+              href={`/courses/${courseId}/topics/${nextTopic.id}`}
+              prefetch
+              onMouseEnter={() => prefetchTopic(nextTopic.id)}
+              className="group flex items-center gap-2 text-sm text-[#6b6762] hover:text-[#1a1917] transition-colors"
+            >
+              <span className="truncate max-w-[180px]">{nextTopic.title}</span>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M6 3l5 5-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+              </svg>
+            </Link>
+          ) : <div />}
         </div>
       )}
     </div>
@@ -255,8 +350,16 @@ export default function TopicPage() {
         courseId={courseId}
         onClose={() => setShowUpload(false)}
         onAdded={() => {
+          setProcessingResources(true);
+          resourceCache.delete(topicId); // invalidate cache so fresh data loads
           resourcesFetched.current = false;
           fetchResources();
+          // Start polling immediately so we catch when the workers kick off
+          startPollingKnowledge(topicId);
+          // Clear banner when knowledge synthesis completes
+          if (knowledge?.status === 'completed') {
+            setProcessingResources(false);
+          }
         }}
       />
     </>

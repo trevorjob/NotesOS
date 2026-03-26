@@ -37,7 +37,7 @@ export default function TestPage() {
   const [meta, setMeta] = useState<TestMeta | null>(null);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [questionIndex, setQuestionIndex] = useState(0);
-  const [answers, setAnswers] = useState<Array<{ question_id: string; answer_text: string; is_voice?: boolean }>>([]);
+  const [answers, setAnswers] = useState<Record<string, { answer_text: string; is_voice?: boolean }>>({});
   const [voiceFiles, setVoiceFiles] = useState<Record<string, File>>({});
   const [result, setResult] = useState<TestResults | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
@@ -60,11 +60,12 @@ export default function TestPage() {
       setMeta({ id: test.id, title: test.title, course_id: test.course_id, question_count: test.question_count });
       setQuestions(test.questions ?? []);
       setQuestionIndex(0);
-      setAnswers([]);
+      setAnswers({});
       setVoiceFiles({});
       setPhase('questions');
-    } catch (e: any) {
-      setErrorMsg(e.response?.data?.detail || 'Could not load test. Please try again.');
+    } catch (e: unknown) {
+      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setErrorMsg(detail || 'Could not load test. Please try again.');
       setPhase('error');
     } finally {
       loadingRef.current = false;
@@ -73,8 +74,13 @@ export default function TestPage() {
 
   async function submitAll(finalAnswers: typeof answers, finalVoiceFiles: typeof voiceFiles) {
     setPhase('submitting');
+    const answersArray = questions.map((q) => ({
+      question_id: q.id,
+      answer_text: finalAnswers[q.id]?.answer_text ?? '',
+      is_voice: finalAnswers[q.id]?.is_voice,
+    }));
     try {
-      const attemptId = await useTestsStore.getState().submitFull(testId, finalAnswers, finalVoiceFiles);
+      const attemptId = await useTestsStore.getState().submitFull(testId, answersArray, finalVoiceFiles);
       setPhase('grading');
 
       const cleanup = useTestsStore.getState().listenForGrading(attemptId, meta?.course_id ?? '', (results) => {
@@ -82,15 +88,18 @@ export default function TestPage() {
         setPhase('results');
       });
       gradingCleanupRef.current = cleanup;
-    } catch (e: any) {
-      setErrorMsg(e.message || 'Submission failed. Please try again.');
+    } catch (e: unknown) {
+      setErrorMsg(e instanceof Error ? e.message : 'Submission failed. Please try again.');
       setPhase('error');
     }
   }
 
   function handleSubmitAnswer(questionId: string, answerText: string, isVoice?: boolean, voiceFile?: File) {
-    const newAnswers = [...answers, { question_id: questionId, answer_text: answerText, is_voice: isVoice }];
-    const newVoiceFiles = voiceFile ? { ...voiceFiles, [questionId]: voiceFile } : voiceFiles;
+    const newAnswers = { ...answers, [questionId]: { answer_text: answerText, is_voice: isVoice } };
+    // If is_voice but no new file, keep the existing voice file for this question
+    const newVoiceFiles = voiceFile
+      ? { ...voiceFiles, [questionId]: voiceFile }
+      : voiceFiles;
     setAnswers(newAnswers);
     setVoiceFiles(newVoiceFiles);
 
@@ -102,8 +111,8 @@ export default function TestPage() {
   }
 
   function handleSkip() {
-    const skipped = { question_id: questions[questionIndex].id, answer_text: '' };
-    const newAnswers = [...answers, skipped];
+    const questionId = questions[questionIndex].id;
+    const newAnswers = { ...answers, [questionId]: { answer_text: '' } };
     setAnswers(newAnswers);
 
     if (questionIndex + 1 >= questions.length) {
@@ -111,6 +120,10 @@ export default function TestPage() {
     } else {
       setQuestionIndex((i) => i + 1);
     }
+  }
+
+  function handlePrevious() {
+    if (questionIndex > 0) setQuestionIndex((i) => i - 1);
   }
 
   const title = meta?.title ?? 'Practice Test';
@@ -185,6 +198,9 @@ export default function TestPage() {
               total={questions.length}
               onSubmit={handleSubmitAnswer}
               onSkip={handleSkip}
+              onPrevious={questionIndex > 0 ? handlePrevious : undefined}
+              defaultAnswer={answers[questions[questionIndex].id]?.answer_text}
+              defaultIsVoice={answers[questions[questionIndex].id]?.is_voice}
             />
           </div>
         )}
@@ -205,7 +221,7 @@ export default function TestPage() {
               onBack={() => router.push('/generate-test')}
               onRetry={() => {
                 setQuestionIndex(0);
-                setAnswers([]);
+                setAnswers({});
                 setVoiceFiles({});
                 setResult(null);
                 loadTest();

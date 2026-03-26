@@ -10,9 +10,12 @@ from sqlalchemy import select
 from pydantic import BaseModel
 import uuid
 
+from datetime import date
+
 from app.database import get_db
 from app.models.classmate import Class, Classmate
 from app.models.course import Course, CourseEnrollment
+from app.models.semester import Semester
 from app.models.user import User
 from app.api.auth import get_current_user
 
@@ -83,6 +86,10 @@ async def create_class_invite(
     )
 
     db.add(new_class)
+    await db.flush()  # get new_class.id without committing
+
+    # Add the creator as the first classmate
+    db.add(Classmate(class_id=new_class.id, user_id=current_user.id))
     await db.commit()
     await db.refresh(new_class)
 
@@ -91,7 +98,7 @@ async def create_class_invite(
         name=new_class.name,
         invite_code=new_class.invite_code,
         is_active=new_class.is_active,
-        classmate_count=0,
+        classmate_count=1,
         created_at=new_class.created_at.isoformat(),
     )
 
@@ -207,37 +214,47 @@ async def join_class(
             status_code=400, detail="You've already joined via this invite"
         )
 
-    # Get owner's enrolled courses
-    owner_courses_query = select(CourseEnrollment).where(
-        CourseEnrollment.user_id == cls.owner_id
+    # Get owner's enrolled courses — but only from ACTIVE semesters or standalone courses.
+    # "Active" = semester has no end_date, or end_date >= today.
+    # This prevents joining courses from old/past semesters.
+    today = date.today()
+
+    # Load all courses the owner is enrolled in, with their semester info
+    owner_courses_query = (
+        select(Course)
+        .join(CourseEnrollment, CourseEnrollment.course_id == Course.id)
+        .where(CourseEnrollment.user_id == cls.owner_id, Course.is_active.is_(True))
     )
     owner_courses_result = await db.execute(owner_courses_query)
-    owner_enrollments = owner_courses_result.scalars().all()
+    owner_courses = owner_courses_result.scalars().all()
 
-    # Enroll in each course (skip if already enrolled)
+    # Filter: include standalone (no semester) or active semester only
+    eligible_courses = []
+    for course in owner_courses:
+        if course.semester_id is None:
+            # Standalone course — always include
+            eligible_courses.append(course)
+        else:
+            # Load semester to check if still active
+            sem_result = await db.execute(
+                select(Semester).where(Semester.id == course.semester_id)
+            )
+            sem = sem_result.scalar_one_or_none()
+            if sem and (sem.end_date is None or sem.end_date >= today):
+                eligible_courses.append(course)
+
+    # Enroll in each eligible course (skip if already enrolled)
     courses_joined = []
-    for enrollment in owner_enrollments:
-        # Check if already enrolled
+    for course in eligible_courses:
         existing_enrollment_query = select(CourseEnrollment).where(
             CourseEnrollment.user_id == current_user.id,
-            CourseEnrollment.course_id == enrollment.course_id,
+            CourseEnrollment.course_id == course.id,
         )
         existing_enrollment_result = await db.execute(existing_enrollment_query)
 
         if not existing_enrollment_result.scalar_one_or_none():
-            # Enroll in course
-            new_enrollment = CourseEnrollment(
-                user_id=current_user.id,
-                course_id=enrollment.course_id,
-            )
-            db.add(new_enrollment)
-
-            # Get course name
-            course_query = select(Course).where(Course.id == enrollment.course_id)
-            course_result = await db.execute(course_query)
-            course = course_result.scalar_one_or_none()
-            if course:
-                courses_joined.append(course.name)
+            db.add(CourseEnrollment(user_id=current_user.id, course_id=course.id))
+            courses_joined.append(course.name)
 
     # Add as classmate
     classmate = Classmate(

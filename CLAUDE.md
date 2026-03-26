@@ -86,7 +86,7 @@ npm run lint
 - `settings` — User personality preferences
 - `generate-test` — AI quiz generation
 
-**Stores (`stores/`):** `auth`, `courses`, `tests`, `resources`, `knowledge`, `notifications`, `aiChat`, `progress`
+**Stores (`stores/`):** `auth`, `courses`, `tests`, `resources`, `knowledge`, `notifications`, `aiChat`, `progress`, `semesters`
 
 **API layer (`lib/api.ts`):** Axios instance with JWT interceptor. On 401, queues in-flight requests, refreshes the token, then retries. Base URL from `NEXT_PUBLIC_API_URL`.
 
@@ -159,3 +159,28 @@ alembic upgrade head
 # Rollback one step
 alembic downgrade -1
 ```
+
+---
+
+## Key Conventions
+
+### Backend Conventions
+
+- **Sessions:** Use `get_db()` (FastAPI dep) in routes, `worker_session()` (context manager) in workers — never mix them.
+- **Cache invalidation:** Redis cache keys follow `{resource}:{id}` pattern. Invalidate on any write by calling `cache.delete(key)` in the route handler after DB commit.
+- **New API route:** Create file in `api/`, define router, register in `main.py` under the correct prefix.
+- **New worker:** Add to `workers/`, import and add coroutine to `asyncio.gather()` in `run_workers.py`.
+- **Async everywhere:** All DB calls must be `await`ed. Never use sync SQLAlchemy calls.
+- **Migrations:** Always run `alembic revision --autogenerate` after model changes — never edit tables manually.
+
+### Frontend Conventions
+
+- **API calls:** Always go through `lib/api.ts` — never use `fetch` or a bare axios instance.
+- **State:** All server state lives in Zustand stores. Components read from stores, not local state where avoidable.
+- **WebSocket events:** Handle in the store action that owns the related data, not in components.
+- **New store:** Follow existing pattern — define state interface, actions, and `persist` middleware if needed.
+- **Route protection:** Handled by `app/(app)/layout.tsx` — no per-page auth checks needed.
+
+### Global Workflow (from `~/.claude/CLAUDE.md`)
+
+The global config covers: TDD workflow, agent usage, git commit format (`feat/fix/refactor/...`), security checklist, and code quality standards. Refer to it for process — this file covers project-specific structure only.

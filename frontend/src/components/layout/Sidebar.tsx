@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useCourseStore } from '@/stores/courses';
+import { useSemesterStore } from '@/stores/semesters';
 import { api } from '@/lib/api';
 import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
@@ -47,12 +48,12 @@ interface SidebarProps {
   onClose?: () => void;
 }
 
-type JoinTab = 'course' | 'class' | 'search';
 
 export function Sidebar({ onClose }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const { courses, fetchCourses, selectCourse, createTopic } = useCourseStore();
+  const { semesters, activeSemesterId, fetchSemesters, joinSemester } = useSemesterStore();
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [loadingTopics, setLoadingTopics] = useState<Record<string, boolean>>({});
@@ -64,25 +65,20 @@ export function Sidebar({ onClose }: SidebarProps) {
   const [topicForm, setTopicForm] = useState({ title: '' });
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
-  const [createdInviteCode, setCreatedInviteCode] = useState<string | null>(null);
 
   // Join modal state
-  const [joinTab, setJoinTab] = useState<JoinTab>('course');
-  const [joinCourseCode, setJoinCourseCode] = useState('');
-  const [joinClassCode, setJoinClassCode] = useState('');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [joiningCourse, setJoiningCourse] = useState(false);
-  const [joiningClass, setJoiningClass] = useState(false);
-  const [searching, setSearching] = useState(false);
-  const [joinSuccess, setJoinSuccess] = useState<{ type: 'course' | 'class'; names: string[] } | null>(null);
+  const [joinSemesterCode, setJoinSemesterCode] = useState('');
+  const [joiningSemester, setJoiningSemester] = useState(false);
+  const [joinSuccess, setJoinSuccess] = useState<string | null>(null);
 
   useEffect(() => {
     fetchCourses();
+    fetchSemesters();
     try {
       const saved = localStorage.getItem(EXPANDED_KEY);
       if (saved) setExpanded(JSON.parse(saved));
     } catch { /* ignore */ }
-  }, [fetchCourses]);
+  }, [fetchCourses, fetchSemesters]);
 
   async function toggleCourse(courseId: string) {
     const isCurrentlyExpanded = !!expanded[courseId];
@@ -113,15 +109,22 @@ export function Sidebar({ onClose }: SidebarProps) {
       setFormError('Course code and name are required.');
       return;
     }
+    if (!activeSemesterId) {
+      setFormError('No active semester. Go to Settings to create or select one.');
+      return;
+    }
     setSaving(true);
     setFormError('');
     try {
-      const res = await api.courses.create({ code: courseForm.code.trim(), name: courseForm.name.trim() });
+      const res = await api.courses.create({
+        code: courseForm.code.trim(),
+        name: courseForm.name.trim(),
+        semester_id: activeSemesterId,
+      });
       const course = res.data?.course ?? res.data;
       await fetchCourses(true);
       setCourseForm({ code: '', name: '' });
       setShowAddCourse(false);
-      if (course?.invite_code) setCreatedInviteCode(course.invite_code);
     } catch (e: any) {
       setFormError(e.response?.data?.detail || e.message || 'Failed to create course.');
     } finally {
@@ -129,35 +132,22 @@ export function Sidebar({ onClose }: SidebarProps) {
     }
   }
 
-  async function handleJoinByCourseCode() {
-    if (!joinCourseCode.trim()) { setFormError('Enter an invite code.'); return; }
-    setJoiningCourse(true); setFormError('');
+  async function handleJoinBySemesterCode() {
+    if (!joinSemesterCode.trim()) { setFormError('Enter a semester code.'); return; }
+    setJoiningSemester(true); setFormError('');
     try {
-      const res = await api.courses.join({ invite_code: joinCourseCode.trim() });
-      const joined = res.data?.course ?? res.data;
+      const res = await joinSemester(joinSemesterCode.trim());
       await fetchCourses(true);
-      setJoinSuccess({ type: 'course', names: [joined?.name ?? joined?.code ?? 'the course'] });
-    } catch (e: any) {
-      setFormError(e.response?.data?.detail || 'Invalid invite code.');
-    } finally { setJoiningCourse(false); }
-  }
-
-  async function handleJoinByClassCode() {
-    if (!joinClassCode.trim()) { setFormError('Enter a class code.'); return; }
-    setJoiningClass(true); setFormError('');
-    try {
-      const res = await api.invites.joinClass(joinClassCode.trim());
-      const joined: Array<{ name?: string; code?: string }> = res.data?.courses ?? res.data ?? [];
-      await fetchCourses(true);
-      setJoinSuccess({ type: 'class', names: joined.map((c) => c.name ?? c.code ?? '?') });
-    } catch (e: any) {
-      setFormError(e.response?.data?.detail || 'Invalid class code.');
-    } finally { setJoiningClass(false); }
+      const count = (res?.courses_joined ?? []).length;
+      setJoinSuccess(`Joined semester — enrolled in ${count} course${count !== 1 ? 's' : ''}`);
+    } catch (e: unknown) {
+      setFormError((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || 'Invalid semester code.');
+    } finally { setJoiningSemester(false); }
   }
 
   function resetJoin() {
-    setJoinCourseCode(''); setJoinClassCode(''); setSearchQuery('');
-    setFormError(''); setJoinSuccess(null); setJoinTab('course');
+    setJoinSemesterCode('');
+    setFormError(''); setJoinSuccess(null);
   }
 
   async function handleCreateTopic(courseId: string) {
@@ -170,7 +160,7 @@ export function Sidebar({ onClose }: SidebarProps) {
     try {
       const course = courses.find((c) => c.id === courseId);
       const orderIndex = (course?.topics?.length ?? 0) + 1;
-      await createTopic(courseId, { title: topicForm.title.trim(), order_index: orderIndex });
+      const newTopic = await createTopic(courseId, { title: topicForm.title.trim(), order_index: orderIndex });
       setTopicForm({ title: '' });
       setShowAddTopic(null);
       setExpanded((prev) => {
@@ -178,8 +168,12 @@ export function Sidebar({ onClose }: SidebarProps) {
         localStorage.setItem(EXPANDED_KEY, JSON.stringify(next));
         return next;
       });
-    } catch (e: any) {
-      setFormError(e.message || 'Failed to create topic.');
+      const topicId = newTopic?.topic?.id ?? newTopic?.id;
+      if (topicId) {
+        navigate(`/courses/${courseId}/topics/${topicId}`);
+      }
+    } catch (e: unknown) {
+      setFormError((e as Error).message || 'Failed to create topic.');
     } finally {
       setSaving(false);
     }
@@ -254,60 +248,89 @@ export function Sidebar({ onClose }: SidebarProps) {
           <p className="px-1 text-[10px] font-semibold text-[#6b6762] uppercase tracking-widest">Courses</p>
         </div>
 
-        {/* Course list */}
-        <div className="flex-1 py-1 space-y-0.5 overflow-y-auto">
-          {courses.map((course) => {
-            const isExpanded = !!expanded[course.id];
-            const isLoadingThisCourse = !!loadingTopics[course.id];
+        {/* Course list — grouped by semester */}
+        <div className="flex-1 py-1 overflow-y-auto">
+          {(() => {
+            // Courses carry semester_id — use that to group
+            const ungrouped = courses.filter((c) => !c.semester_id);
+
+            function renderCourse(course: typeof courses[0]) {
+              const isExpanded = !!expanded[course.id];
+              const isLoadingThisCourse = !!loadingTopics[course.id];
+              return (
+                <div key={course.id}>
+                  <button
+                    onClick={() => toggleCourse(course.id)}
+                    className="w-full flex items-center gap-2 px-4 py-2 text-sm font-medium text-[#c8c4be] hover:text-white hover:bg-white/5 transition-colors text-left"
+                  >
+                    <ChevronRight className={`shrink-0 transition-transform duration-150 ${isExpanded ? 'rotate-90' : ''}`} />
+                    <span className="truncate flex-1">{course.code}</span>
+                    {isLoadingThisCourse && (
+                      <span className="h-3 w-3 rounded-full border border-white/30 border-t-white animate-spin shrink-0" />
+                    )}
+                  </button>
+                  {isExpanded && (
+                    <div className="ml-6 border-l border-white/10 pl-2 pb-1 space-y-0.5">
+                      {(course.topics ?? []).length === 0 && !isLoadingThisCourse && (
+                        <p className="px-3 py-1.5 text-xs text-[#6b6762] italic">No topics yet</p>
+                      )}
+                      {(course.topics ?? []).map((topic) => {
+                        const href = `/courses/${course.id}/topics/${topic.id}`;
+                        const active = pathname === href;
+                        return (
+                          <button
+                            key={topic.id}
+                            onClick={() => navigate(href)}
+                            className={`w-full text-left px-3 py-1.5 text-sm rounded-md truncate transition-colors ${
+                              active ? 'bg-white text-[#1a1917] font-medium' : 'text-[#9e9a94] hover:text-white hover:bg-white/5'
+                            }`}
+                          >
+                            {topic.title}
+                          </button>
+                        );
+                      })}
+                      <button
+                        onClick={() => { setShowAddTopic(course.id); setFormError(''); setTopicForm({ title: '' }); }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-[#6b6762] hover:text-[#9e9a94] transition-colors"
+                      >
+                        <PlusIcon /> New topic
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            }
 
             return (
-              <div key={course.id}>
-                <button
-                  onClick={() => toggleCourse(course.id)}
-                  className="w-full flex items-center gap-2 px-4 py-2 text-sm font-medium text-[#c8c4be] hover:text-white hover:bg-white/5 transition-colors text-left"
-                >
-                  <ChevronRight className={`shrink-0 transition-transform duration-150 ${isExpanded ? 'rotate-90' : ''}`} />
-                  <span className="truncate flex-1">{course.code}</span>
-                  {isLoadingThisCourse && (
-                    <span className="h-3 w-3 rounded-full border border-white/30 border-t-white animate-spin shrink-0" />
-                  )}
-                </button>
+              <div className="space-y-0.5">
+                {/* Semester groups */}
+                {semesters.map((semester) => {
+                  const semCourses = courses.filter((c) => c.semester_id === semester.id);
+                  if (semCourses.length === 0) return null;
+                  const isActive = activeSemesterId === semester.id;
+                  return (
+                    <div key={semester.id}>
+                      <div className="flex items-center gap-1.5 px-4 pt-2 pb-1">
+                        <p className={`text-[10px] font-semibold uppercase tracking-widest truncate ${isActive ? 'text-[#1a1917]' : 'text-[#4a4744]'}`}>
+                          {semester.name}
+                        </p>
+                        {isActive && (
+                          <span className="text-[9px] bg-[#1a1917] text-white px-1.5 py-0.5 rounded-full shrink-0">current</span>
+                        )}
+                      </div>
+                      {semCourses.map(renderCourse)}
+                    </div>
+                  );
+                })}
 
-                {isExpanded && (
-                  <div className="ml-6 border-l border-white/10 pl-2 pb-1 space-y-0.5">
-                    {(course.topics ?? []).length === 0 && !isLoadingThisCourse && (
-                      <p className="px-3 py-1.5 text-xs text-[#6b6762] italic">No topics yet</p>
-                    )}
-
-                    {(course.topics ?? []).map((topic) => {
-                      const href = `/courses/${course.id}/topics/${topic.id}`;
-                      const active = pathname === href;
-                      return (
-                        <button
-                          key={topic.id}
-                          onClick={() => navigate(href)}
-                          className={`w-full text-left px-3 py-1.5 text-sm rounded-md truncate transition-colors ${
-                            active
-                              ? 'bg-white text-[#1a1917] font-medium'
-                              : 'text-[#9e9a94] hover:text-white hover:bg-white/5'
-                          }`}
-                        >
-                          {topic.title}
-                        </button>
-                      );
-                    })}
-
-                    <button
-                      onClick={() => { setShowAddTopic(course.id); setFormError(''); setTopicForm({ title: '' }); }}
-                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-[#6b6762] hover:text-[#9e9a94] transition-colors"
-                    >
-                      <PlusIcon /> New topic
-                    </button>
-                  </div>
+                {/* Ungrouped courses */}
+                {ungrouped.length > 0 && semesters.length > 0 && (
+                  <p className="px-4 pt-2 pb-1 text-[10px] font-semibold text-[#4a4744] uppercase tracking-widest">Other</p>
                 )}
+                {ungrouped.map(renderCourse)}
               </div>
             );
-          })}
+          })()}
         </div>
 
         {/* Footer */}
@@ -325,7 +348,7 @@ export function Sidebar({ onClose }: SidebarProps) {
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
               <path d="M9 1H12a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9M5 10l4-4-4-4M9 7H1" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
-            Join Course / Class
+            Join Semester
           </button>
         </div>
       </nav>
@@ -355,95 +378,26 @@ export function Sidebar({ onClose }: SidebarProps) {
         </div>
       </Modal>
 
-      {/* Invite code after creation */}
-      {createdInviteCode && (
-        <Modal isOpen onClose={() => setCreatedInviteCode(null)} title="Course Created!">
-          <div className="space-y-4 text-center">
-            <p className="text-xs text-[#6b6762]">Share this code so classmates can join:</p>
-            <div className="flex items-center gap-2 bg-[#f0eeea] rounded-xl px-4 py-3">
-              <p className="flex-1 font-mono text-base font-semibold text-[#1a1917] tracking-widest">{createdInviteCode}</p>
-              <button
-                onClick={() => navigator.clipboard.writeText(createdInviteCode)}
-                className="text-xs text-[#6b6762] hover:text-[#1a1917] px-2 py-1 rounded-lg hover:bg-white transition-colors"
-              >
-                Copy
-              </button>
-            </div>
-            <Button size="sm" onClick={() => setCreatedInviteCode(null)}>Done</Button>
-          </div>
-        </Modal>
-      )}
-
-      {/* Join modal */}
-      <Modal isOpen={showJoinCourse} onClose={() => { setShowJoinCourse(false); resetJoin(); }} title="Join">
+      {/* Join Semester modal */}
+      <Modal isOpen={showJoinCourse} onClose={() => { setShowJoinCourse(false); resetJoin(); }} title="Join Semester">
         {joinSuccess ? (
           <div className="text-center space-y-3 py-2">
             <div className="text-3xl">✓</div>
-            {joinSuccess.type === 'course' ? (
-              <p className="text-sm font-medium text-[#1a1917]">Joined <strong>{joinSuccess.names[0]}</strong>!</p>
-            ) : (
-              <div>
-                <p className="text-sm font-medium text-[#1a1917]">Joined {joinSuccess.names.length} course{joinSuccess.names.length !== 1 ? 's' : ''}!</p>
-                <p className="text-xs text-[#6b6762] mt-1">{joinSuccess.names.join(', ')}</p>
-              </div>
-            )}
+            <p className="text-sm font-medium text-[#1a1917]">{joinSuccess}</p>
             <Button size="sm" onClick={() => { setShowJoinCourse(false); resetJoin(); }}>Done</Button>
           </div>
         ) : (
           <div className="space-y-4">
-            {/* Tabs */}
-            <div className="flex gap-1 bg-[#f0eeea] rounded-xl p-1">
-              {([['course', 'Course code'], ['class', 'Join class'], ['search', 'Search']] as const).map(([t, label]) => (
-                <button
-                  key={t}
-                  onClick={() => { setJoinTab(t); setFormError(''); }}
-                  className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                    joinTab === t ? 'bg-white text-[#1a1917] shadow-sm' : 'text-[#6b6762]'
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-
-            {joinTab === 'course' && (
-              <div className="space-y-3">
-                <Input
-                  label="Course invite code"
-                  value={joinCourseCode}
-                  onChange={(e) => setJoinCourseCode(e.target.value)}
-                  placeholder="e.g. BIO201-XK92"
-                />
-                {formError && <p className="text-sm text-[#dc2626]">{formError}</p>}
-                <Button loading={joiningCourse} onClick={handleJoinByCourseCode} className="w-full">Join Course</Button>
-              </div>
-            )}
-
-            {joinTab === 'class' && (
-              <div className="space-y-3">
-                <p className="text-xs text-[#6b6762]">Joining a class enrolls you in all courses from that classmate at once.</p>
-                <Input
-                  label="Class invite code"
-                  value={joinClassCode}
-                  onChange={(e) => setJoinClassCode(e.target.value)}
-                  placeholder="e.g. XK92-ABCD"
-                />
-                {formError && <p className="text-sm text-[#dc2626]">{formError}</p>}
-                <Button loading={joiningClass} onClick={handleJoinByClassCode} className="w-full">Join Class</Button>
-              </div>
-            )}
-
-            {joinTab === 'search' && (
-              <div className="space-y-3">
-                <Input
-                  label="Search by course name"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="e.g. Operating Systems"
-                />
-                <p className="text-xs text-[#9e9a94]">Search is coming soon. Use a course or class code instead.</p>
-              </div>
-            )}
+            <p className="text-xs text-[#6b6762]">Enter a semester invite code to join all courses within that semester.</p>
+            <Input
+              label="Semester invite code"
+              value={joinSemesterCode}
+              onChange={(e) => setJoinSemesterCode(e.target.value)}
+              placeholder="e.g. AB3C4D5E"
+              onKeyDown={(e) => e.key === 'Enter' && handleJoinBySemesterCode()}
+            />
+            {formError && <p className="text-sm text-[#dc2626]">{formError}</p>}
+            <Button loading={joiningSemester} onClick={handleJoinBySemesterCode} className="w-full">Join Semester</Button>
           </div>
         )}
       </Modal>

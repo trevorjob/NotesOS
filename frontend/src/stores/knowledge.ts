@@ -51,6 +51,9 @@ export const useKnowledgeStore = create<KnowledgeState>()((set, get) => ({
   isLoadingAudio: {},
 
   fetchKnowledge: async (topicId) => {
+    const existing = get().topicKnowledge[topicId];
+    // Skip if already loaded and stable (not mid-processing)
+    if (existing && existing.status !== 'processing' && existing.status !== 'pending') return;
     if (get().isLoadingKnowledge[topicId]) return;
     set((s) => ({ isLoadingKnowledge: { ...s.isLoadingKnowledge, [topicId]: true } }));
     try {
@@ -65,6 +68,9 @@ export const useKnowledgeStore = create<KnowledgeState>()((set, get) => ({
   },
 
   fetchAudio: async (topicId) => {
+    const existing = get().topicAudio[topicId];
+    // Skip if we already have a stable audio URL
+    if (existing && existing.status !== 'processing' && existing.status !== 'pending') return;
     if (get().isLoadingAudio[topicId]) return;
     set((s) => ({ isLoadingAudio: { ...s.isLoadingAudio, [topicId]: true } }));
     try {

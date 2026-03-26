@@ -20,219 +20,129 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # --- User: new columns ---
-    op.add_column("users", sa.Column("google_id", sa.String(255), nullable=True))
-    op.create_index("ix_users_google_id", "users", ["google_id"], unique=True)
+    conn = op.get_bind()
 
-    op.add_column(
-        "users",
-        sa.Column(
-            "preferences", postgresql.JSONB(astext_type=sa.Text()), nullable=True
-        ),
-    )
-    op.add_column(
-        "users",
-        sa.Column(
-            "personality_tags", postgresql.JSONB(astext_type=sa.Text()), nullable=True
-        ),
-    )
-    op.add_column(
-        "users", sa.Column("password_reset_token", sa.String(255), nullable=True)
-    )
-    op.add_column(
-        "users", sa.Column("password_reset_expires", sa.DateTime(), nullable=True)
-    )
+    # --- User: new columns ---
+    conn.execute(sa.text("ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id VARCHAR(255)"))
+    conn.execute(sa.text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_google_id ON users (google_id)"))
+    conn.execute(sa.text("ALTER TABLE users ADD COLUMN IF NOT EXISTS preferences JSONB"))
+    conn.execute(sa.text("ALTER TABLE users ADD COLUMN IF NOT EXISTS personality_tags JSONB"))
+    conn.execute(sa.text("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_token VARCHAR(255)"))
+    conn.execute(sa.text("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_expires TIMESTAMP"))
 
     # Make password_hash nullable for OAuth-only users
-    op.alter_column("users", "password_hash", nullable=True)
-
-    # --- Semesters table ---
-    op.create_table(
-        "semesters",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-        sa.Column(
-            "owner_id",
-            postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("users.id"),
-            nullable=False,
-        ),
-        sa.Column("name", sa.String(255), nullable=False),
-        sa.Column("start_date", sa.Date(), nullable=True),
-        sa.Column("end_date", sa.Date(), nullable=True),
-        sa.Column("invite_code", sa.String(20), nullable=False, unique=True),
-        sa.Column(
-            "created_at", sa.DateTime(), nullable=False, server_default=sa.text("now()")
-        ),
-        sa.Column(
-            "updated_at", sa.DateTime(), nullable=False, server_default=sa.text("now()")
-        ),
-    )
-    op.create_index("ix_semesters_owner_id", "semesters", ["owner_id"], unique=False)
-    op.create_index(
-        "ix_semesters_invite_code", "semesters", ["invite_code"], unique=True
-    )
+    conn.execute(sa.text("ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL"))
 
     # --- SemesterRole enum ---
-    semester_role_enum = postgresql.ENUM(
-        "OWNER", "MEMBER", name="semesterrole", create_type=True
-    )
-    semester_role_enum.create(op.get_bind(), checkfirst=True)
+    conn.execute(sa.text("CREATE TYPE IF NOT EXISTS semesterrole AS ENUM ('OWNER', 'MEMBER')"))
+
+    # --- Semesters table ---
+    conn.execute(sa.text("""
+        CREATE TABLE IF NOT EXISTS semesters (
+            id UUID PRIMARY KEY,
+            owner_id UUID NOT NULL REFERENCES users(id),
+            name VARCHAR(255) NOT NULL,
+            start_date DATE,
+            end_date DATE,
+            invite_code VARCHAR(20) NOT NULL UNIQUE,
+            created_at TIMESTAMP NOT NULL DEFAULT now(),
+            updated_at TIMESTAMP NOT NULL DEFAULT now()
+        )
+    """))
+    conn.execute(sa.text("CREATE INDEX IF NOT EXISTS ix_semesters_owner_id ON semesters (owner_id)"))
+    conn.execute(sa.text("CREATE UNIQUE INDEX IF NOT EXISTS ix_semesters_invite_code ON semesters (invite_code)"))
 
     # --- Semester members table ---
-    op.create_table(
-        "semester_members",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-        sa.Column(
-            "semester_id",
-            postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("semesters.id"),
-            nullable=False,
-        ),
-        sa.Column(
-            "user_id",
-            postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("users.id"),
-            nullable=False,
-        ),
-        sa.Column(
-            "joined_at", sa.DateTime(), nullable=False, server_default=sa.text("now()")
-        ),
-        sa.Column(
-            "role", sa.Enum("OWNER", "MEMBER", name="semesterrole"), nullable=False
-        ),
-        sa.UniqueConstraint("semester_id", "user_id", name="uq_semester_member"),
-    )
-    op.create_index(
-        "ix_semester_members_semester_id",
-        "semester_members",
-        ["semester_id"],
-        unique=False,
-    )
-    op.create_index(
-        "ix_semester_members_user_id", "semester_members", ["user_id"], unique=False
-    )
+    conn.execute(sa.text("""
+        CREATE TABLE IF NOT EXISTS semester_members (
+            id UUID PRIMARY KEY,
+            semester_id UUID NOT NULL REFERENCES semesters(id),
+            user_id UUID NOT NULL REFERENCES users(id),
+            joined_at TIMESTAMP NOT NULL DEFAULT now(),
+            role semesterrole NOT NULL,
+            CONSTRAINT uq_semester_member UNIQUE (semester_id, user_id)
+        )
+    """))
+    conn.execute(sa.text("CREATE INDEX IF NOT EXISTS ix_semester_members_semester_id ON semester_members (semester_id)"))
+    conn.execute(sa.text("CREATE INDEX IF NOT EXISTS ix_semester_members_user_id ON semester_members (user_id)"))
 
     # --- Courses: add semester_id FK ---
-    op.add_column(
-        "courses",
-        sa.Column("semester_id", postgresql.UUID(as_uuid=True), nullable=True),
-    )
-    op.create_foreign_key(
-        "fk_courses_semester_id",
-        "courses",
-        "semesters",
-        ["semester_id"],
-        ["id"],
-        ondelete="SET NULL",
-    )
-    op.create_index("ix_courses_semester_id", "courses", ["semester_id"], unique=False)
+    conn.execute(sa.text("ALTER TABLE courses ADD COLUMN IF NOT EXISTS semester_id UUID"))
+    conn.execute(sa.text("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint WHERE conname = 'fk_courses_semester_id'
+            ) THEN
+                ALTER TABLE courses ADD CONSTRAINT fk_courses_semester_id
+                    FOREIGN KEY (semester_id) REFERENCES semesters(id) ON DELETE SET NULL;
+            END IF;
+        END $$
+    """))
+    conn.execute(sa.text("CREATE INDEX IF NOT EXISTS ix_courses_semester_id ON courses (semester_id)"))
+
+    # --- AnswerStatus enum ---
+    conn.execute(sa.text("CREATE TYPE IF NOT EXISTS answerstatus AS ENUM ('CORRECT', 'PARTIAL', 'NEEDS_REVIEW')"))
 
     # --- TestAnswer: new columns ---
-    answer_status_enum = postgresql.ENUM(
-        "CORRECT", "PARTIAL", "NEEDS_REVIEW", name="answerstatus", create_type=True
-    )
-    answer_status_enum.create(op.get_bind(), checkfirst=True)
+    conn.execute(sa.text("ALTER TABLE test_answers ADD COLUMN IF NOT EXISTS status answerstatus"))
+    conn.execute(sa.text("ALTER TABLE test_answers ADD COLUMN IF NOT EXISTS key_points_covered JSONB"))
+    conn.execute(sa.text("ALTER TABLE test_answers ADD COLUMN IF NOT EXISTS key_points_missed JSONB"))
 
-    op.add_column(
-        "test_answers",
-        sa.Column(
-            "status",
-            sa.Enum("CORRECT", "PARTIAL", "NEEDS_REVIEW", name="answerstatus"),
-            nullable=True,
-        ),
-    )
-    op.add_column(
-        "test_answers",
-        sa.Column(
-            "key_points_covered", postgresql.JSONB(astext_type=sa.Text()), nullable=True
-        ),
-    )
-    op.add_column(
-        "test_answers",
-        sa.Column(
-            "key_points_missed", postgresql.JSONB(astext_type=sa.Text()), nullable=True
-        ),
-    )
+    # --- NotificationType enum ---
+    conn.execute(sa.text("CREATE TYPE IF NOT EXISTS notificationtype AS ENUM ('TEST_GRADED', 'AI_SUMMARY_READY', 'INVITE_ACCEPTED', 'GENERAL')"))
 
     # --- Notifications table ---
-    notification_type_enum = postgresql.ENUM(
-        "TEST_GRADED",
-        "AI_SUMMARY_READY",
-        "INVITE_ACCEPTED",
-        "GENERAL",
-        name="notificationtype",
-        create_type=True,
-    )
-    notification_type_enum.create(op.get_bind(), checkfirst=True)
-
-    op.create_table(
-        "notifications",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-        sa.Column(
-            "user_id",
-            postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("users.id"),
-            nullable=False,
-        ),
-        sa.Column(
-            "type",
-            sa.Enum(
-                "TEST_GRADED",
-                "AI_SUMMARY_READY",
-                "INVITE_ACCEPTED",
-                "GENERAL",
-                name="notificationtype",
-            ),
-            nullable=False,
-        ),
-        sa.Column("title", sa.String(255), nullable=False),
-        sa.Column("body", sa.Text(), nullable=False),
-        sa.Column(
-            "is_read", sa.Boolean(), nullable=False, server_default=sa.text("false")
-        ),
-        sa.Column("meta_data", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-        sa.Column(
-            "created_at", sa.DateTime(), nullable=False, server_default=sa.text("now()")
-        ),
-    )
-    op.create_index(
-        "ix_notifications_user_id", "notifications", ["user_id"], unique=False
-    )
+    conn.execute(sa.text("""
+        CREATE TABLE IF NOT EXISTS notifications (
+            id UUID PRIMARY KEY,
+            user_id UUID NOT NULL REFERENCES users(id),
+            type notificationtype NOT NULL,
+            title VARCHAR(255) NOT NULL,
+            body TEXT NOT NULL,
+            is_read BOOLEAN NOT NULL DEFAULT false,
+            meta_data JSONB,
+            created_at TIMESTAMP NOT NULL DEFAULT now()
+        )
+    """))
+    conn.execute(sa.text("CREATE INDEX IF NOT EXISTS ix_notifications_user_id ON notifications (user_id)"))
 
 
 def downgrade() -> None:
+    conn = op.get_bind()
+
     # --- Notifications ---
-    op.drop_index("ix_notifications_user_id", table_name="notifications")
-    op.drop_table("notifications")
-    op.execute("DROP TYPE IF EXISTS notificationtype")
+    conn.execute(sa.text("DROP INDEX IF EXISTS ix_notifications_user_id"))
+    conn.execute(sa.text("DROP TABLE IF EXISTS notifications"))
+    conn.execute(sa.text("DROP TYPE IF EXISTS notificationtype"))
 
     # --- TestAnswer columns ---
-    op.drop_column("test_answers", "key_points_missed")
-    op.drop_column("test_answers", "key_points_covered")
-    op.drop_column("test_answers", "status")
-    op.execute("DROP TYPE IF EXISTS answerstatus")
+    conn.execute(sa.text("ALTER TABLE test_answers DROP COLUMN IF EXISTS key_points_missed"))
+    conn.execute(sa.text("ALTER TABLE test_answers DROP COLUMN IF EXISTS key_points_covered"))
+    conn.execute(sa.text("ALTER TABLE test_answers DROP COLUMN IF EXISTS status"))
+    conn.execute(sa.text("DROP TYPE IF EXISTS answerstatus"))
 
     # --- Courses: semester_id ---
-    op.drop_index("ix_courses_semester_id", table_name="courses")
-    op.drop_constraint("fk_courses_semester_id", "courses", type_="foreignkey")
-    op.drop_column("courses", "semester_id")
+    conn.execute(sa.text("DROP INDEX IF EXISTS ix_courses_semester_id"))
+    conn.execute(sa.text("ALTER TABLE courses DROP CONSTRAINT IF EXISTS fk_courses_semester_id"))
+    conn.execute(sa.text("ALTER TABLE courses DROP COLUMN IF EXISTS semester_id"))
 
     # --- Semester members ---
-    op.drop_index("ix_semester_members_user_id", table_name="semester_members")
-    op.drop_index("ix_semester_members_semester_id", table_name="semester_members")
-    op.drop_table("semester_members")
-    op.execute("DROP TYPE IF EXISTS semesterrole")
+    conn.execute(sa.text("DROP INDEX IF EXISTS ix_semester_members_user_id"))
+    conn.execute(sa.text("DROP INDEX IF EXISTS ix_semester_members_semester_id"))
+    conn.execute(sa.text("DROP TABLE IF EXISTS semester_members"))
+    conn.execute(sa.text("DROP TYPE IF EXISTS semesterrole"))
 
     # --- Semesters ---
-    op.drop_index("ix_semesters_invite_code", table_name="semesters")
-    op.drop_index("ix_semesters_owner_id", table_name="semesters")
-    op.drop_table("semesters")
+    conn.execute(sa.text("DROP INDEX IF EXISTS ix_semesters_invite_code"))
+    conn.execute(sa.text("DROP INDEX IF EXISTS ix_semesters_owner_id"))
+    conn.execute(sa.text("DROP TABLE IF EXISTS semesters"))
 
     # --- User columns ---
-    op.alter_column("users", "password_hash", nullable=False)
-    op.drop_column("users", "password_reset_expires")
-    op.drop_column("users", "password_reset_token")
-    op.drop_column("users", "personality_tags")
-    op.drop_column("users", "preferences")
-    op.drop_index("ix_users_google_id", table_name="users")
-    op.drop_column("users", "google_id")
+    conn.execute(sa.text("ALTER TABLE users ALTER COLUMN password_hash SET NOT NULL"))
+    conn.execute(sa.text("ALTER TABLE users DROP COLUMN IF EXISTS password_reset_expires"))
+    conn.execute(sa.text("ALTER TABLE users DROP COLUMN IF EXISTS password_reset_token"))
+    conn.execute(sa.text("ALTER TABLE users DROP COLUMN IF EXISTS personality_tags"))
+    conn.execute(sa.text("ALTER TABLE users DROP COLUMN IF EXISTS preferences"))
+    conn.execute(sa.text("DROP INDEX IF EXISTS ix_users_google_id"))
+    conn.execute(sa.text("ALTER TABLE users DROP COLUMN IF EXISTS google_id"))

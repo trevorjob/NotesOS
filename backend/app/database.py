@@ -40,6 +40,10 @@ async_session_maker = async_sessionmaker(
 async def init_db():
     """Initialize database - create tables if they don't exist."""
     async with engine.begin() as conn:
+        # Enable pgvector extension before creating tables
+        from sqlalchemy import text
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+
         # Import all models to ensure they're registered
         from app.models import (
             user,

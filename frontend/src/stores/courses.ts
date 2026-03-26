@@ -21,7 +21,7 @@ interface Course {
     id: string;
     code: string;
     name: string;
-    semester?: string;
+    semester_id?: string | null;
     description?: string;
     member_count?: number;
     created_by: string;
@@ -43,7 +43,7 @@ interface CourseState {
         code: string;
         name: string;
         description?: string;
-        semester?: string;
+        semester_id?: string;
         is_public?: boolean;
     }) => Promise<Course>;
     joinCourse: (identifier: string) => Promise<void>;
