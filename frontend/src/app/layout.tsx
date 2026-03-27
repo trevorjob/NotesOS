@@ -1,43 +1,24 @@
-import type { Metadata } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
-import "./globals.css";
-import { ErrorBoundary } from "@/components/ErrorBoundary";
-
-const inter = Inter({
-  variable: "--font-sans",
-  subsets: ["latin"],
-  display: "swap",
-});
-
-const jetbrainsMono = JetBrains_Mono({
-  variable: "--font-mono",
-  subsets: ["latin"],
-  display: "swap",
-});
+import type { Metadata, Viewport } from 'next';
+import './globals.css';
+import { Providers } from '@/components/Providers';
 
 export const metadata: Metadata = {
-  title: "NotesOS — Your AI Study Companion",
-  description: "Study smarter, together. Your notes, your AI, your success.",
-  manifest: "/manifest.json",
-  themeColor: "#3D2E28",
-  viewport: {
-    width: "device-width",
-    initialScale: 1,
-    maximumScale: 1,
-  },
+  title: 'NotesOS',
+  description: 'Study smarter, together. Your notes, your AI, your success.',
+  manifest: '/manifest.json',
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+export const viewport: Viewport = {
+  themeColor: '#1a1917',
+  width: 'device-width',
+  initialScale: 1,
+};
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body
-        className={`${inter.variable} ${jetbrainsMono.variable} antialiased`}
-      >
-        <ErrorBoundary>{children}</ErrorBoundary>
+      <body>
+        <Providers>{children}</Providers>
       </body>
     </html>
   );

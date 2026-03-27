@@ -12,7 +12,9 @@ from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models import Course, CourseEnrollment, Topic, User
-from app.api.auth import get_current_user
+from app.models.semester import SemesterMember
+from app.models.progress import UserProgress
+from app.api.auth import get_current_user, verify_course_enrollment
 from app.services.cache import (
     cache,
     courses_list_key,
@@ -32,7 +34,7 @@ router = APIRouter()
 class CreateCourseRequest(BaseModel):
     code: str
     name: str
-    semester: Optional[str] = None
+    semester_id: Optional[str] = None
     description: Optional[str] = None
     is_public: bool = True
 
@@ -83,7 +85,7 @@ def generate_invite_code() -> str:
 async def list_courses(
     current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
-    """List all courses the user is enrolled in."""
+    """List all courses the user is enrolled in, with completion and last-studied data."""
     user_id = str(current_user.id)
     cache_key = courses_list_key(user_id)
 
@@ -91,7 +93,6 @@ async def list_courses(
     if cached is not None:
         return cached
 
-    # Single query — join enrollment counts in one go
     result = await db.execute(
         select(Course, CourseEnrollment.joined_at)
         .join(CourseEnrollment, CourseEnrollment.course_id == Course.id)
@@ -100,27 +101,73 @@ async def list_courses(
     )
     rows = result.all()
 
-    # Batch-fetch member counts for all returned courses in one query
     course_ids = [course.id for course, _ in rows]
-    if course_ids:
-        counts_result = await db.execute(
-            select(CourseEnrollment.course_id, func.count().label("cnt"))
-            .where(CourseEnrollment.course_id.in_(course_ids))
-            .group_by(CourseEnrollment.course_id)
+    if not course_ids:
+        payload = {"courses": []}
+        await cache.set(cache_key, payload, settings.CACHE_TTL_COURSES)
+        return payload
+
+    # Batch member counts
+    counts_result = await db.execute(
+        select(CourseEnrollment.course_id, func.count().label("cnt"))
+        .where(CourseEnrollment.course_id.in_(course_ids))
+        .group_by(CourseEnrollment.course_id)
+    )
+    member_counts = {str(row.course_id): row.cnt for row in counts_result}
+
+    # Batch completion percentages — average mastery_level per course for this user
+    progress_result = await db.execute(
+        select(
+            UserProgress.course_id,
+            func.avg(UserProgress.mastery_level).label("avg_mastery"),
         )
-        member_counts = {str(row.course_id): row.cnt for row in counts_result}
-    else:
-        member_counts = {}
+        .where(
+            UserProgress.user_id == current_user.id,
+            UserProgress.course_id.in_(course_ids),
+        )
+        .group_by(UserProgress.course_id)
+    )
+    completion_map = {
+        str(row.course_id): round(float(row.avg_mastery or 0) * 100, 1)
+        for row in progress_result
+    }
+
+    # Batch last-studied per course — most recent UserProgress.last_activity
+    last_studied_result = await db.execute(
+        select(
+            UserProgress.course_id,
+            UserProgress.topic_id,
+            Topic.title,
+            UserProgress.last_activity,
+        )
+        .join(Topic, Topic.id == UserProgress.topic_id)
+        .where(
+            UserProgress.user_id == current_user.id,
+            UserProgress.course_id.in_(course_ids),
+        )
+        .order_by(UserProgress.last_activity.desc())
+    )
+    last_studied_map: dict = {}
+    for row in last_studied_result:
+        cid = str(row.course_id)
+        if cid not in last_studied_map:
+            last_studied_map[cid] = {
+                "topic_id": str(row.topic_id),
+                "topic_name": row.title,
+                "studied_at": row.last_activity.isoformat(),
+            }
 
     courses = [
         {
             "id": str(course.id),
             "code": course.code,
             "name": course.name,
-            "semester": course.semester,
+            "semester_id": str(course.semester_id) if course.semester_id else None,
             "member_count": member_counts.get(str(course.id), 1),
             "created_by": str(course.created_by),
             "joined_at": joined_at.isoformat(),
+            "completion_percentage": completion_map.get(str(course.id), 0.0),
+            "last_studied": last_studied_map.get(str(course.id)),
         }
         for course, joined_at in rows
     ]
@@ -142,7 +189,7 @@ async def create_course(
     course = Course(
         code=request.code,
         name=request.name,
-        semester=request.semester,
+        semester_id=request.semester_id,
         description=request.description,
         is_public=request.is_public,
         invite_code=invite_code,
@@ -154,6 +201,16 @@ async def create_course(
     # Auto-enroll creator
     enrollment = CourseEnrollment(user_id=current_user.id, course_id=course.id)
     db.add(enrollment)
+
+    # Auto-enroll all existing semester members (other than creator)
+    if request.semester_id:
+        members_result = await db.execute(
+            select(SemesterMember).where(SemesterMember.semester_id == request.semester_id)
+        )
+        for member in members_result.scalars().all():
+            if str(member.user_id) != str(current_user.id):
+                db.add(CourseEnrollment(user_id=member.user_id, course_id=course.id))
+
     await db.commit()
     await db.refresh(course)
 
@@ -290,7 +347,7 @@ async def get_course(
             "code": course.code,
             "name": course.name,
             "description": course.description,
-            "semester": course.semester,
+            "semester_id": str(course.semester_id) if course.semester_id else None,
         },
         "topics": [
             {
@@ -344,6 +401,54 @@ async def create_topic(
             "title": topic.title,
             "week_number": topic.week_number,
         }
+    }
+
+
+@router.get("/{course_id}/summary")
+async def get_course_summary(
+    course_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get completion percentage and last studied topic for a course."""
+    import uuid as _uuid
+    await verify_course_enrollment(db, current_user.id, _uuid.UUID(course_id))
+
+    # Completion percentage
+    progress_result = await db.execute(
+        select(func.avg(UserProgress.mastery_level).label("avg_mastery"))
+        .where(
+            UserProgress.user_id == current_user.id,
+            UserProgress.course_id == course_id,
+        )
+    )
+    avg_mastery = progress_result.scalar_one_or_none() or 0
+    completion_percentage = round(float(avg_mastery) * 100, 1)
+
+    # Last studied topic
+    last_studied_result = await db.execute(
+        select(UserProgress, Topic)
+        .join(Topic, Topic.id == UserProgress.topic_id)
+        .where(
+            UserProgress.user_id == current_user.id,
+            UserProgress.course_id == course_id,
+        )
+        .order_by(UserProgress.last_activity.desc())
+        .limit(1)
+    )
+    row = last_studied_result.first()
+    last_studied_topic = None
+    if row:
+        progress, topic = row
+        last_studied_topic = {
+            "id": str(topic.id),
+            "name": topic.title,
+            "studied_at": progress.last_activity.isoformat(),
+        }
+
+    return {
+        "completion_percentage": completion_percentage,
+        "last_studied_topic": last_studied_topic,
     }
 
 

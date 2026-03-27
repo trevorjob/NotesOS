@@ -5,6 +5,7 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { AxiosError } from 'axios';
 import { api } from '@/lib/api';
 import { offlineDb } from '@/lib/offlineDb';
 
@@ -21,7 +22,7 @@ interface Course {
     id: string;
     code: string;
     name: string;
-    semester?: string;
+    semester_id?: string | null;
     description?: string;
     member_count?: number;
     created_by: string;
@@ -43,7 +44,7 @@ interface CourseState {
         code: string;
         name: string;
         description?: string;
-        semester?: string;
+        semester_id?: string;
         is_public?: boolean;
     }) => Promise<Course>;
     joinCourse: (identifier: string) => Promise<void>;
@@ -96,13 +97,13 @@ export const useCourseStore = create<CourseState>()(
                     const courses = response.data.courses || [];
                     set({ courses, isLoading: false, _isFetchingCourses: false });
                     offlineDb.putCourses(courses).catch(() => { });
-                } catch (error: any) {
+                } catch (error) {
                     const cached = await offlineDb.getCourses();
                     if (cached.length > 0) {
                         set({ courses: cached as Course[], isLoading: false, _isFetchingCourses: false });
                     } else {
                         const errorMessage =
-                            error.response?.data?.detail || 'Failed to fetch courses';
+                            (error as AxiosError<{ detail: string }>).response?.data?.detail || 'Failed to fetch courses';
                         set({ isLoading: false, error: errorMessage, _isFetchingCourses: false });
                     }
                 }
@@ -117,9 +118,9 @@ export const useCourseStore = create<CourseState>()(
                     await get().fetchCourses(true);
 
                     return newCourse;
-                } catch (error: any) {
+                } catch (error) {
                     const errorMessage =
-                        error.response?.data?.detail || 'Failed to create course';
+                        (error as AxiosError<{ detail: string }>).response?.data?.detail || 'Failed to create course';
                     set({ error: errorMessage });
                     throw new Error(errorMessage);
                 }
@@ -130,13 +131,13 @@ export const useCourseStore = create<CourseState>()(
                 try {
                     await api.courses.join({ invite_code: identifier });
                     await get().fetchCourses(true);
-                } catch (error: any) {
+                } catch (error) {
                     try {
                         await api.courses.join({ search: identifier });
                         await get().fetchCourses(true);
-                    } catch (searchError: any) {
+                    } catch (searchError) {
                         const errorMessage =
-                            searchError.response?.data?.detail || 'Failed to join course';
+                            (searchError as AxiosError<{ detail: string }>).response?.data?.detail || 'Failed to join course';
                         set({ error: errorMessage });
                         throw new Error(errorMessage);
                     }
@@ -178,13 +179,18 @@ export const useCourseStore = create<CourseState>()(
                     const topics = topicsResponse.data || [];
                     const course = { ...courseResponse.data.course, topics };
 
-                    set({ currentCourse: course, isLoading: false, _isSelectingCourse: false });
+                    set((state) => ({
+                        currentCourse: course,
+                        courses: state.courses.map((c) => c.id === courseId ? { ...c, topics } : c),
+                        isLoading: false,
+                        _isSelectingCourse: false,
+                    }));
 
                     offlineDb.putCourses([courseResponse.data.course]).catch(() => { });
                     offlineDb.putTopics(courseId, topics).catch(() => { });
-                } catch (error: any) {
+                } catch (error) {
                     const errorMessage =
-                        error.response?.data?.detail || 'Failed to load course';
+                        (error as AxiosError<{ detail: string }>).response?.data?.detail || 'Failed to load course';
                     set({ isLoading: false, error: errorMessage, _isSelectingCourse: false });
                 }
             },
@@ -200,9 +206,9 @@ export const useCourseStore = create<CourseState>()(
                     await get().selectCourse(courseId);
 
                     return newTopic;
-                } catch (error: any) {
+                } catch (error) {
                     const errorMessage =
-                        error.response?.data?.detail || 'Failed to create topic';
+                        (error as AxiosError<{ detail: string }>).response?.data?.detail || 'Failed to create topic';
                     set({ error: errorMessage });
                     throw new Error(errorMessage);
                 }
@@ -218,9 +224,9 @@ export const useCourseStore = create<CourseState>()(
                     await get().selectCourse(courseId);
 
                     return updatedTopic;
-                } catch (error: any) {
+                } catch (error) {
                     const errorMessage =
-                        error.response?.data?.detail || 'Failed to update topic';
+                        (error as AxiosError<{ detail: string }>).response?.data?.detail || 'Failed to update topic';
                     set({ error: errorMessage });
                     throw new Error(errorMessage);
                 }
@@ -233,9 +239,9 @@ export const useCourseStore = create<CourseState>()(
 
                     set({ currentCourse: null });
                     await get().selectCourse(courseId);
-                } catch (error: any) {
+                } catch (error) {
                     const errorMessage =
-                        error.response?.data?.detail || 'Failed to delete topic';
+                        (error as AxiosError<{ detail: string }>).response?.data?.detail || 'Failed to delete topic';
                     set({ error: errorMessage });
                     throw new Error(errorMessage);
                 }

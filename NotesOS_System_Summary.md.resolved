@@ -1,0 +1,334 @@
+# NotesOS — Complete System Workflow Summary
+
+> **Tagline:** *"Study smarter, together. Your notes, your AI, your success."*
+> **Status:** Active development · February 2026
+
+---
+
+## 1. What Is NotesOS?
+
+NotesOS is a **collaborative AI-powered study platform** for students. It combines:
+
+- **Notion** (shared note repo, organized by course → topic)
+- **ChatGPT** (contextual AI that really understands your material)
+- **A great study group** (everyone uploads, everyone benefits)
+
+The core insight: *one person uploads notes → every enrolled student can study, quiz, and get AI explanations from those notes.*
+
+---
+
+## 2. Core Value Propositions
+
+| Feature | Description |
+|---------|-------------|
+| **Shared Knowledge Pool** | One upload benefits the whole class. No more "can I get your notes?" at 2 AM |
+| **Auto-Organized Resources** | Courses → Topics → Resources, automatically structured |
+| **AI Study Partner** | Personalized AI with adjustable tone, emoji style, and explanation depth |
+| **Voice-First Studying** | Record spoken answers; AI transcribes and grades on *concept understanding*, not grammar |
+| **Built-in Fact Checker** | Automatically verifies factual claims in every uploaded note against web sources |
+| **Pre-Class Research** | AI generates topic primers before you attend the lecture |
+| **Progress Tracking** | Mastery levels, study streaks, time logged per topic |
+
+---
+
+## 3. Technology Stack
+
+### Frontend
+| Tool | Role |
+|------|------|
+| Next.js 14 (App Router) | React framework, SSR, routing |
+| Zustand | Lightweight state management |
+| TailwindCSS | Utility-first styling |
+| Custom UI (`GlassCard`, `GlassNav`, etc.) | Design system components |
+
+### Backend & AI
+| Tool | Role |
+|------|------|
+| Python FastAPI | Async REST API + WebSocket |
+| LangGraph | Multi-step AI agent orchestration |
+| LangChain | RAG tooling, tool calling |
+| Anthropic Claude Sonnet | Main AI brain (explanations, grading, fact-check) |
+| OpenAI Whisper | Voice-to-text transcription |
+| Voyage AI | Text embeddings for semantic search |
+| Serper API | Web search for fact-checking & research |
+
+### Data & Infrastructure
+| Tool | Role |
+|------|------|
+| PostgreSQL + pgvector | Relational DB + vector similarity search |
+| Redis | Background job queues, caching, rate limiting |
+| Cloudinary / Cloudflare R2 | File storage (PDFs, images, audio) |
+| Docker + Nginx | Containerised deployment with reverse proxy |
+
+---
+
+## 4. System Architecture
+
+```
+Browser (Next.js)
+  │
+  ├── REST API calls  ──────────────►  FastAPI Backend
+  ├── SSE streaming   ──────────────►    │
+  └── WebSocket       ──────────────►    ├── PostgreSQL (pgvector)
+                                         ├── Redis (job queues)
+                                         ├── Cloudinary / R2 (files)
+                                         └── LangGraph Agents
+                                               ├── Claude API
+                                               ├── Whisper API
+                                               └── Serper Search API
+```
+
+### Background Worker Architecture
+Three Redis-backed async workers:
+- **`chunking_worker`** — Splits resource text into chunks + generates embeddings (Voyage AI)
+- **`fact_check_worker`** — Runs the fact-check LangGraph workflow after upload
+- **`grading_worker`** — Transcribes voice answers (Whisper) + grades with Claude
+
+---
+
+## 5. Database Schema (18 Tables)
+
+```
+users ──────────────────────────────────────────────────────────────────┐
+  │                                                                      │
+  ├─► course_enrollments ◄── courses                                     │
+  │                               │                                      │
+  │                               ├─► course_outlines                   │
+  │                               └─► topics                            │
+  │                                       │                             │
+  │                                       ├─► pre_class_research        │
+  │                                       ├─► study_sessions ◄──────────┤
+  │                                       ├─► user_progress ◄───────────┤
+  │                                       ├─► ai_conversations ◄────────┤
+  │                                       │       └─► ai_messages       │
+  │                                       └─► resources ◄───────────────┘
+  │                                               ├─► resource_files
+  │                                               ├─► resource_chunks (vectors)
+  │                                               └─► fact_checks
+  │
+  └─► tests ──► test_questions
+  └─► test_attempts ──► test_answers
+```
+
+### Key Table Highlights
+
+| Table | Purpose |
+|-------|---------|
+| `users` | Auth + `study_personality` JSONB (tone, emoji, style) |
+| `resources` | Uploaded notes; types: TEXT, PDF, DOCX, IMAGE |
+| `resource_chunks` | 500–1000 char chunks with 1024-dim Voyage AI vectors |
+| `fact_checks` | Per-claim verification result (VERIFIED/DISPUTED/UNVERIFIED) |
+| `pre_class_research` | AI-generated topic primers with source citations |
+| `test_answers` | Both text and voice answers; stores transcription + AI feedback |
+| `user_progress` | Mastery (0.00–1.00), study time, streak, avg score per topic |
+
+---
+
+## 6. Complete User & System Workflows
+
+### 6.1 User Registration & Onboarding
+```
+/register → email + password + name
+  → Optional: AI personality setup (tone / emoji / explanation style)
+  → bcrypt hash → user record → JWT issued → /dashboard
+```
+
+### 6.2 Course Lifecycle
+```
+Create Course → auto-enrolled → share link or invite code
+Join Course   → search by code/name or paste invite → enrolled
+               → WebSocket notifies: "👋 [Name] just joined!"
+Upload Syllabus → LangGraph parses → extracts topics + weeks
+               → pre-class research queued per topic
+```
+
+### 6.3 Resource Upload Pipeline
+```
+User clicks "Add Notes"
+  ├── TEXT → stored directly
+  ├── PDF/DOCX → uploaded to Cloudinary → mammoth/pdfplumber extracts text
+  └── IMAGE(s) → uploaded → hybrid OCR (Tesseract + Google Vision) → combined text
+
+Resource saved to DB
+  → chunking_worker: split 500-1000 chars → Voyage AI embed → store in resource_chunks
+  → fact_check_worker: LangGraph fact-check workflow (async)
+  → WebSocket broadcast to all enrolled students: "Sarah shared notes on French Revolution!"
+```
+
+### 6.4 AI RAG Study Flow (Ask a Question)
+```
+User question
+  → Embed with Voyage AI (query mode)
+  → pgvector cosine similarity search on resource_chunks (top 10)
+  → Rerank (recency + diversity + score)
+  → Top 5 chunks assembled as context
+  → Claude generates answer personalised to user's study_personality
+  → Stream response with inline citations to classmates' notes
+  → Save to ai_conversations / ai_messages
+```
+
+### 6.5 Fact-Check Workflow (LangGraph Multi-Agent)
+```
+Trigger: resource uploaded or edited
+
+Agent 1 — Claim Extractor
+  → Claude identifies factual claims (dates, names, statistics, events)
+
+Agent 2 — Research Agent (per claim)
+  → Serper API web search
+  → Filter: .edu, .gov, .org, scholarly sources
+  → BeautifulSoup fetches top 3 pages, extracts relevant text
+
+Agent 3 — Verification Agent
+  → Claude: "Does this source support this claim?"
+  → Assigns confidence 0.00–1.00
+  → If unclear → loop back to Agent 2 for more sources
+
+Agent 4 — Report Generator
+  → Aggregates: ✅ VERIFIED / ⚠️ DISPUTED / ❌ UNVERIFIED
+  → Stores in fact_checks table with source JSONB array
+```
+
+### 6.6 Pre-Class Research (LangGraph)
+```
+Trigger: topic created from course outline
+
+Agent 1 — Topic Analyzer → extracts key terms
+Agent 2 — Research Agent → Serper search → fetch 5-7 sources
+Agent 3 — Synthesizer → Claude creates study primer:
+  • TL;DR summary
+  • Key terms / definitions
+  • Timeline cheat sheet
+  • Common misconceptions
+  • Citations
+Stored in pre_class_research → shown collapsible on topic page
+```
+
+### 6.7 Quiz Generation (LangGraph)
+```
+User: "Quiz me" → picks count + type (MCQ / short answer / essay)
+  → gather all topic resources from DB
+  → Agent generates questions covering all major concepts
+  → Quality check: diversity, coverage, no duplicates (score ≥ 0.75)
+  → If low quality → regenerate with feedback loop
+  → Save to tests + test_questions tables
+```
+
+### 6.8 Test-Taking & Voice Grading (LangGraph)
+```
+User starts test → test_attempt created
+  Per question:
+    ├── Type answer → text saved
+    └── Record voice → Web Audio API → upload to storage
+                    → Whisper transcription (grading_worker)
+
+Submission:
+  Step 1 — Transcribe (if voice): Whisper → save transcription
+  Step 2 — Grade: Claude evaluates concept understanding (70%), key points (20%), examples (10%)
+            "IMPORTANT: This is transcribed speech. Ignore filler words."
+  Step 3 — Encouragement: score-tiered messages
+            90-100%: "🔥 Crushing it!" | 70-89%: "💪 Solid!" | 50-69%: "Getting there!"
+  Step 4 — Update user_progress: mastery, streak, avg_score
+  Notification: "✅ Your test is graded!"
+```
+
+### 6.9 AI Personality System
+```
+user.study_personality = {
+  tone: "encouraging" | "direct" | "humorous",
+  emoji_usage: "none" | "moderate" | "heavy",
+  explanation_style: "concise" | "detailed" | "visual"
+}
+→ Injected into every Claude system prompt
+→ Changes tone, verbosity, emoji density of all AI responses
+```
+
+---
+
+## 7. Backend API Surface
+
+| Domain | Key Endpoints |
+|--------|--------------|
+| **Auth** | POST /register, /login, /refresh · GET /me · PATCH /me/personality |
+| **Courses** | GET, POST / · POST /join · POST /batch · GET /{id} |
+| **Topics** | CRUD on /courses/{id}/topics and /topics/{id} |
+| **Resources** | Upload (file/text), GET/PUT/DELETE, reprocess-OCR |
+| **AI** | Fact-check, pre-class research, study chat, test generate/submit/voice, attempt results |
+| **Progress** | Start/end session, course/topic progress, streak, recommendations |
+| **Invites** | Global class invites: create, join, list classmates |
+| **WebSocket** | `/ws/{course_id}?token=...` — real-time resource processing status |
+
+---
+
+## 8. Frontend Structure
+
+### Routes
+| Route | Page |
+|-------|------|
+| `/login` | Email + password login |
+| `/register` | Register + optional AI personality |
+| `/courses` | All enrolled courses |
+| `/courses/new` | Create course form |
+| `/courses/join` | Join by invite code |
+| `/courses/[courseId]` | Topic list with mastery bars |
+| `/courses/[courseId]/topics/[topicId]` | Pre-class research + resources + AI chat |
+
+### Zustand Stores
+| Store | Manages |
+|-------|---------|
+| `auth` | User, login/register/logout (persisted) |
+| `courses` | Course list, current course, topics |
+| `resources` | Resources, upload, fact-checks |
+| `aiChat` | Conversations, messages, RAG query |
+
+### Key Components
+- `GlassNav` — Navigation with course switcher, streak slot
+- `ResourceCard` — Renders content (markdown), images, fact-check panel, delete
+- `FileUpload` — Drag-and-drop with progress bar
+- `AIChat` / `AIChatOverlay` — Floating study chat with conversation history
+- `MarkdownRenderer` — Renders AI responses with proper formatting
+
+---
+
+## 9. Deployment & Infrastructure
+
+```
+VPS (Linux)
+  └── Docker Compose
+        ├── Next.js frontend (port 3000)
+        ├── FastAPI backend (port 8000, Uvicorn)
+        ├── PostgreSQL (pgvector extension)
+        └── Redis
+  └── Nginx reverse proxy → SSL, rate limiting
+Cloudinary — file storage (PDFs, images, voice)
+```
+
+---
+
+## 10. Implementation Status Matrix
+
+| Feature | Backend | Frontend API Client | Frontend UI |
+|---------|---------|---------------------|-------------|
+| Auth (register, login, me, personality) | ✅ | ✅ | ✅ / ❌ profile page |
+| Courses (CRUD, join) | ✅ | ✅ | ✅ |
+| Topics (CRUD) | ✅ | ✅ | ✅ / ❌ edit/delete |
+| Resources (upload, text, delete) | ✅ | ✅ | ✅ / ❌ edit |
+| Fact Check | ✅ | ✅ | ✅ |
+| Pre-Class Research | ✅ | ✅ | ✅ |
+| Study Chat (RAG) | ✅ | ✅ | ✅ |
+| Tests + Voice Answers | ✅ | ✅ | ❌ No UI |
+| Progress + Streak | ✅ | ✅ | ❌ No UI |
+| Global Class Invites | ✅ | ❌ | ❌ |
+| WebSocket (real-time) | ✅ | ❌ | ❌ |
+
+---
+
+## 11. Recommended Next Work Order (Frontend)
+
+1. **Root `/` + auth guard** — redirect unauthenticated users to `/login`
+2. **Progress UI** — streak in nav, mastery display from API
+3. **Tests / Quiz UI** — generate → take → results (text + voice)
+4. **Global Invites** — create/share class link, join by code
+5. **Profile/Settings** — edit name + study personality
+6. **WebSocket** — real-time "Processing…" / "Done" for resources
+7. **Polish** — topic edit/delete, resource edit, reprocess OCR button

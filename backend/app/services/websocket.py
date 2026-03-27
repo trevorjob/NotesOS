@@ -18,6 +18,9 @@ class ConnectionManager:
         # websocket -> user_id mapping
         self.connection_users: Dict[WebSocket, str] = {}
 
+        # user_id -> set of WebSocket connections (for personal notifications)
+        self.user_connections: Dict[str, Set[WebSocket]] = {}
+
     async def connect(self, websocket: WebSocket, course_id: str, user_id: str):
         """
         Accept a new WebSocket connection.
@@ -35,6 +38,11 @@ class ConnectionManager:
 
         self.active_connections[course_id].add(websocket)
         self.connection_users[websocket] = user_id
+
+        # Track per-user connections for personal notifications
+        if user_id not in self.user_connections:
+            self.user_connections[user_id] = set()
+        self.user_connections[user_id].add(websocket)
 
         # Notify others of new user
         await self.broadcast_to_course(
@@ -64,6 +72,12 @@ class ConnectionManager:
 
         # Get user ID before removing
         user_id = self.connection_users.pop(websocket, None)
+
+        # Remove from per-user tracking
+        if user_id and user_id in self.user_connections:
+            self.user_connections[user_id].discard(websocket)
+            if not self.user_connections[user_id]:
+                del self.user_connections[user_id]
 
         return user_id
 
@@ -136,16 +150,58 @@ class ConnectionManager:
 
         return users
 
+    async def send_to_user(self, user_id: str, message: dict):
+        """
+        Send a personal message to all WebSocket connections for a given user.
+
+        Args:
+            user_id: Target user ID string
+            message: Message dict
+        """
+        connections = self.user_connections.get(user_id, set()).copy()
+        dead = []
+        for ws in connections:
+            try:
+                await ws.send_text(json.dumps(message))
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            # Best-effort cleanup — find which course this belongs to
+            for course_id, conns in list(self.active_connections.items()):
+                if ws in conns:
+                    self.disconnect(ws, course_id)
+                    break
+
     async def start_redis_listener(self):
-        """Start listening for Redis messages to broadcast."""
+        """Start listening for Redis messages to broadcast (course + user channels)."""
+        import asyncio
+        from app.services.redis_client import redis_client
+
+        asyncio.create_task(self._listen_course_updates())
+        asyncio.create_task(self._listen_user_notifications())
+
+    async def _listen_course_updates(self):
+        """Listen for course-level broadcasts."""
         from app.services.redis_client import redis_client
 
         async for message in redis_client.subscribe("course_updates"):
             course_id = message.get("course_id")
             payload = message.get("message")
-
             if course_id and payload:
                 await self.broadcast_to_course(course_id, payload)
+
+    async def _listen_user_notifications(self):
+        """Listen for personal user notifications and forward via WebSocket."""
+        from app.services.redis_client import redis_client
+
+        async for message in redis_client.subscribe("user_notifications"):
+            user_id = message.get("user_id")
+            notification = message.get("notification")
+            if user_id and notification:
+                await self.send_to_user(
+                    user_id,
+                    {"type": "notification", "data": notification},
+                )
 
 
 # Singleton instance

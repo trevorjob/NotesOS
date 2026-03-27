@@ -67,12 +67,23 @@ class Settings(BaseSettings):
     ENABLE_FACT_CHECK: bool = True
     ENABLE_PRE_CLASS_RESEARCH: bool = True
     ENABLE_VOICE_GRADING: bool = True
+    ENABLE_KNOWLEDGE_SYNTHESIS: bool = True   # auto-synthesize after chunking
 
     # Cache (Redis read-through for GET endpoints)
     CACHE_ENABLED: bool = True
     CACHE_TTL_COURSES: int = 90  # seconds
     CACHE_TTL_TOPICS: int = 60
     CACHE_TTL_RESOURCES: int = 60
+
+    # Email (Resend)
+    RESEND_API_KEY: str = ""
+    EMAIL_FROM: str = "noreply@notesos.com"
+    PASSWORD_RESET_URL: str = "http://localhost:3000/reset-password"
+
+    # Google OAuth
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/auth/google/callback"
 
     # CORS — comma-separated in .env, e.g. https://example.com,https://other.com
     CORS_ORIGINS: str = "http://localhost:3000"

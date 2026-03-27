@@ -33,6 +33,12 @@ class QuestionType(str, Enum):
     ESSAY = "essay"
 
 
+class AnswerStatus(str, Enum):
+    CORRECT = "CORRECT"
+    PARTIAL = "PARTIAL"
+    NEEDS_REVIEW = "NEEDS_REVIEW"
+
+
 class Test(Base):
     """Test/quiz model."""
 
@@ -137,6 +143,9 @@ class TestAnswer(Base):
     score = Column(Numeric(5, 2), nullable=True)
     ai_feedback = Column(Text, nullable=True)
     encouragement = Column(Text, nullable=True)
+    status = Column(SQLEnum(AnswerStatus), nullable=True)
+    key_points_covered = Column(JSONB, nullable=True, default=[])
+    key_points_missed = Column(JSONB, nullable=True, default=[])
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 

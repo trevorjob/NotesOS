@@ -40,6 +40,9 @@ from app.models import (
     UserProgress,
     AIConversation,
     AIMessage,
+    Semester,
+    SemesterMember,
+    Notification,
 )
 
 # this is the Alembic Config object

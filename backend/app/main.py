@@ -18,12 +18,11 @@ async def lifespan(app: FastAPI):
     """Application lifecycle management."""
     # Startup
     await init_db()
-
-    # Start Redis listener for worker updates
-    # Import here to ensure connection_manager is initialized
+    print(settings.DATABASE_URL)
+    # Start Redis listeners for course updates and user notifications
     from app.services.websocket import connection_manager
 
-    asyncio.create_task(connection_manager.start_redis_listener())
+    await connection_manager.start_redis_listener()
 
     yield
     # Shutdown
@@ -73,6 +72,9 @@ from app.api.resources import router as resources_router
 from app.api.invites import router as invites_router
 from app.api.ai_features import router as ai_features_router
 from app.api.progress import router as progress_router
+from app.api.semesters import router as semesters_router
+from app.api.notifications import router as notifications_router
+from app.api.knowledge import router as knowledge_router
 from app.services.websocket import connection_manager
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
@@ -82,10 +84,14 @@ app.include_router(resources_router, prefix="/api", tags=["resources"])
 app.include_router(invites_router, prefix="/api/invites", tags=["invites"])
 app.include_router(ai_features_router, prefix="", tags=["AI Features"])
 app.include_router(progress_router, prefix="", tags=["Progress"])
+app.include_router(semesters_router, prefix="/api/semesters", tags=["semesters"])
+app.include_router(
+    notifications_router, prefix="/api/notifications", tags=["notifications"]
+)
+app.include_router(knowledge_router, prefix="/api", tags=["knowledge"])
 
 
 # WebSocket endpoint for real-time updates
-
 
 @app.websocket("/ws/{course_id}")
 async def websocket_endpoint(
@@ -97,20 +103,24 @@ async def websocket_endpoint(
     Query params:
         token: JWT authentication token
     """
-    # Authenticate via token
+    # Authenticate via token.
+    # Must accept() before close() — otherwise Starlette responds with HTTP 403
+    # instead of a proper WebSocket close code, causing the client to loop forever.
     try:
         payload = jwt.decode(
             token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM]
         )
         user_id: str = payload.get("sub")
         if user_id is None:
-            await websocket.close(code=1008)  # Policy violation
+            await websocket.accept()
+            await websocket.close(code=1008)
             return
     except JWTError:
+        await websocket.accept()
         await websocket.close(code=1008)
         return
 
-    # Connect
+    # Connect (connection_manager.connect calls websocket.accept() internally)
     await connection_manager.connect(websocket, course_id, user_id)
 
     try:

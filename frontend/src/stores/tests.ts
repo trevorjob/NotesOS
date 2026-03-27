@@ -24,6 +24,9 @@ export interface Test {
 }
 
 export interface GradedAnswer {
+    question_id: string;
+    question_text: string;
+    user_answer: string;
     score: number;
     feedback: string;
     encouragement: string;
@@ -127,31 +130,50 @@ export const useTestsStore = create<TestsState>()((set, get) => ({
     },
 
     listenForGrading: (attemptId, courseId, onComplete) => {
-        const ws = new WebSocketClient(courseId, {
-            onMessage: async (message) => {
-                if (message.type === 'grading:complete' && message.attempt_id === attemptId) {
+        let resolved = false;
+
+        async function tryResolve() {
+            if (resolved) return;
+            try {
+                const response = await api.ai.getTestResults(attemptId);
+                const results: TestResults = response.data;
+                // Only resolve when the attempt is actually complete
+                if (results.completed_at) {
+                    resolved = true;
+                    set({ results });
+                    clearInterval(pollInterval);
                     clearTimeout(timeout);
                     ws.disconnect();
-                    try {
-                        const response = await api.ai.getTestResults(attemptId);
-                        const results: TestResults = response.data;
-                        set({ results });
-                        onComplete(results);
-                    } catch {
-                        // Best-effort — page will show what's available
-                    }
+                    onComplete(results);
+                }
+            } catch {
+                // keep trying
+            }
+        }
+
+        const ws = new WebSocketClient(courseId, {
+            onMessage: (message) => {
+                if (message.type === 'grading:complete' && message.data?.attempt_id === attemptId) {
+                    tryResolve();
                 }
             },
         });
         ws.connect();
 
-        // Safety timeout: disconnect after 5 minutes if grading never completes
+        // Poll every 3s as a fallback — catches cases where the WS event arrives
+        // before the connection is established (common for fast MCQ-only tests).
+        const pollInterval = setInterval(tryResolve, 3000);
+
+        // Safety timeout: give up after 5 minutes
         const timeout = setTimeout(() => {
+            resolved = true;
+            clearInterval(pollInterval);
             ws.disconnect();
         }, 5 * 60 * 1000);
 
-        // Return cleanup function for useEffect
         return () => {
+            resolved = true;
+            clearInterval(pollInterval);
             clearTimeout(timeout);
             ws.disconnect();
         };

@@ -17,9 +17,12 @@ class User(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = Column(String(255), unique=True, nullable=False, index=True)
-    password_hash = Column(String(255), nullable=False)
+    password_hash = Column(String(255), nullable=True)  # nullable for OAuth-only users
     full_name = Column(String(255), nullable=False)
     avatar_url = Column(Text, nullable=True)
+
+    # Google OAuth
+    google_id = Column(String(255), unique=True, nullable=True, index=True)
 
     # AI personality preferences stored as JSONB
     # Example: {"tone": "encouraging", "emoji_usage": "moderate", "explanation_style": "detailed"}
@@ -32,6 +35,14 @@ class User(Base):
             "explanation_style": "detailed",
         },
     )
+
+    # User preferences and learning tags
+    preferences = Column(JSONB, nullable=True)
+    personality_tags = Column(JSONB, nullable=True)  # string[]
+
+    # Password reset
+    password_reset_token = Column(String(255), nullable=True)
+    password_reset_expires = Column(DateTime, nullable=True)
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

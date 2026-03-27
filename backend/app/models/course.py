@@ -20,11 +20,19 @@ class Course(Base):
     code = Column(String(50), nullable=False, index=True)
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
-    semester = Column(String(50), nullable=True)
+    semester = Column(String(50), nullable=True)  # free-text label, kept for display
 
     # Course creator (but no special permissions beyond deletion)
     created_by = Column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
+
+    # Optional grouping under a Semester (SET NULL on semester delete)
+    semester_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("semesters.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
 
     # Privacy
@@ -54,6 +62,7 @@ class Course(Base):
     ai_conversations = relationship(
         "AIConversation", back_populates="course", cascade="all, delete-orphan"
     )
+    semester_ref = relationship("Semester", back_populates="courses", foreign_keys=[semester_id])
 
 
 class CourseEnrollment(Base):
@@ -115,6 +124,12 @@ class Topic(Base):
     )
     ai_conversations = relationship(
         "AIConversation", back_populates="topic", cascade="all, delete-orphan"
+    )
+    knowledge = relationship(
+        "TopicKnowledge", back_populates="topic", uselist=False, cascade="all, delete-orphan"
+    )
+    audio_lessons = relationship(
+        "AudioLesson", back_populates="topic", cascade="all, delete-orphan"
     )
 
 

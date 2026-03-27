@@ -1,103 +1,72 @@
-/**
- * NotesOS - Login Page
- * Glass form with warm palette
- */
-
 'use client';
 
-import { useState, FormEvent } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth';
-import { GlassCard, Input, Button } from '@/components/ui';
+import { Input } from '@/components/ui/Input';
+import { Button } from '@/components/ui/Button';
 
 export default function LoginPage() {
-    const router = useRouter();
-    const { login, isLoading, error, clearError } = useAuthStore();
+  const router = useRouter();
+  const { login, isLoading, error, clearError } = useAuthStore();
 
-    const [email, setEmail] = useState('');
-    const [password, setPassword] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
 
-    const handleSubmit = async (e: FormEvent) => {
-        e.preventDefault();
-        clearError();
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    clearError();
+    try {
+      await login(email, password);
+      router.replace('/home');
+    } catch {
+      // error already in store
+    }
+  }
 
-        try {
-            await login(email, password);
-            router.push('/courses');
-        } catch (err) {
-            // Error is already set in store
-            console.error('Login failed:', err);
-        }
-    };
+  return (
+    <div className="min-h-screen bg-[#f0eeea] flex items-center justify-center p-4">
+      <div className="w-full max-w-sm bg-white rounded-2xl border border-[#dedad4] p-8 shadow-sm">
+        <h1 className="text-xl font-semibold text-[#1a1917] mb-1">Welcome back</h1>
+        <p className="text-sm text-[#6b6762] mb-6">Sign in to continue studying</p>
 
-    return (
-        <div className="min-h-screen bg-[var(--bg-base)] flex items-center justify-center px-4">
-            <div className="w-full max-w-md">
-                {/* Logo */}
-                <div className="flex items-center justify-center gap-3 mb-12">
-                    <div className="w-10 h-10 bg-[var(--accent-primary)] rounded-lg" />
-                    <span className="text-2xl font-semibold text-[var(--text-primary)]">
-                        NotesOS
-                    </span>
-                </div>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <Input
+            label="Email"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="you@example.com"
+            autoComplete="email"
+            required
+          />
+          <Input
+            label="Password"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="••••••••"
+            autoComplete="current-password"
+            required
+          />
 
-                {/* Login Form */}
-                <GlassCard>
-                    <div className="mb-8">
-                        <h1 className="text-2xl font-semibold text-[var(--text-primary)] mb-2">
-                            Welcome back
-                        </h1>
-                        <p className="text-sm text-[var(--text-tertiary)]">
-                            Sign in to continue studying
-                        </p>
-                    </div>
+          {error && (
+            <p className="text-sm text-[#dc2626]">{error}</p>
+          )}
 
-                    {error && (
-                        <div className="mb-6 px-4 py-3 bg-[var(--error)]/10 border border-[var(--error)]/20 rounded-lg">
-                            <p className="text-sm text-[var(--error)]">{error}</p>
-                        </div>
-                    )}
+          <Button type="submit" className="w-full" loading={isLoading}>
+            Sign in
+          </Button>
+        </form>
 
-                    <form onSubmit={handleSubmit} className="space-y-5">
-                        <Input
-                            label="Email"
-                            type="email"
-                            placeholder="you@university.edu"
-                            value={email}
-                            onChange={(e) => setEmail(e.target.value)}
-                            required
-                            autoComplete="email"
-                        />
-
-                        <Input
-                            label="Password"
-                            type="password"
-                            placeholder="••••••••"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            required
-                            autoComplete="current-password"
-                        />
-
-                        <Button
-                            type="submit"
-                            variant="primary"
-                            size="lg"
-                            className="w-full"
-                            disabled={isLoading}
-                        >
-                            {isLoading ? 'Signing in...' : 'Sign in'}
-                        </Button>
-                    </form>
-
-                </GlassCard>
-
-                {/* Footer */}
-                <p className="mt-8 text-center text-xs text-[var(--text-tertiary)]">
-                    Study smarter, together
-                </p>
-            </div>
-        </div>
-    );
+        <p className="mt-5 text-center text-sm text-[#6b6762]">
+          No account?{' '}
+          <Link href="/register" className="text-[#1a1917] font-medium underline underline-offset-2">
+            Create one
+          </Link>
+        </p>
+      </div>
+    </div>
+  );
 }

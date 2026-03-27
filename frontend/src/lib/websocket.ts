@@ -8,13 +8,16 @@ import { tokenManager } from './api';
 export type WebSocketMessage =
     | { type: 'processing_status'; resource_id: string; status: 'processing' | 'completed' | 'failed' }
     | { type: 'fact_check:complete'; data: { resource_id: string; topic_id: string; summary: string; stats: Record<string, number> } }
-    | { type: 'grading:complete'; answer_id: string; attempt_id: string; score: number; encouragement: string }
-    | { type: 'resource_created'; data: any }
-    | { type: 'resource_updated'; data: any }
+    | { type: 'grading:complete'; data: { answer_id: string; attempt_id: string; score: number; encouragement: string } }
+    | { type: 'knowledge_updated'; topic_id: string; knowledge_id: string }
+    | { type: 'knowledge_status'; topic_id: string; status: string }
+    | { type: 'notification'; data: { id: string; type: string; title: string; body: string; is_read: boolean; created_at: string; meta_data?: Record<string, string> } }
+    | { type: 'resource_created'; data: unknown }
+    | { type: 'resource_updated'; data: unknown }
     | { type: 'resource_deleted'; resource_id: string }
     | { type: 'user_joined'; user_id: string; timestamp: string | null }
     | { type: 'active_users'; users: string[] }
-    | { type: 'echo'; data: any };
+    | { type: 'echo'; data: unknown };
 
 export interface WebSocketCallbacks {
     onMessage?: (message: WebSocketMessage) => void;
@@ -81,9 +84,15 @@ export class WebSocketClient {
                 this.callbacks.onError?.(error);
             };
 
-            this.ws.onclose = () => {
-                console.log('[WebSocket] Disconnected');
+            this.ws.onclose = (event) => {
+                console.log('[WebSocket] Disconnected', event.code);
                 this.callbacks.onClose?.();
+
+                // 1008 = policy violation (auth failure) — don't retry, token won't fix itself
+                if (event.code === 1008) {
+                    console.error('[WebSocket] Auth rejected (1008), not reconnecting');
+                    return;
+                }
 
                 // Reconnect if not intentional close and haven't exceeded max attempts
                 if (!this.isIntentionalClose && this.reconnectAttempts < this.maxReconnectAttempts) {
@@ -115,7 +124,7 @@ export class WebSocketClient {
         }
     }
 
-    send(message: any): void {
+    send(message: WebSocketMessage): void {
         if (this.ws?.readyState === WebSocket.OPEN) {
             this.ws.send(JSON.stringify(message));
         } else {
