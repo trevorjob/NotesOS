@@ -16,6 +16,14 @@ interface ResourceFile {
     ocr_provider?: string;
 }
 
+interface FactCheck {
+    id: string;
+    claim: string;
+    verdict: 'verified' | 'disputed' | 'unverifiable';
+    evidence: string;
+    source?: string;
+}
+
 interface Resource {
     id: string;
     topic_id: string;
@@ -49,7 +57,7 @@ interface ResourcesState {
     total: number;
     page: number;
     pageSize: number;
-    factChecks: Record<string, any[]>; // resourceId -> fact checks
+    factChecks: Record<string, FactCheck[]>; // resourceId -> fact checks
     isLoadingFactChecks: Record<string, boolean>;
 
     // Actions
@@ -106,12 +114,12 @@ export const useResourcesStore = create<ResourcesState>()((set, get) => ({
             if (page === 1 && resources.length > 0) {
                 offlineDb.putResources(topicId, resources).catch(() => { });
             }
-        } catch (error: any) {
+        } catch (error) {
             const cached = await offlineDb.getResourcesByTopic(topicId);
             if (cached.length > 0) {
                 set({ resources: cached as unknown as Resource[], total: cached.length, page: 1, isLoading: false, _isFetchingResources: false });
             } else {
-                const errorMessage = error.response?.data?.detail || 'Failed to fetch resources';
+                const errorMessage = (error as Error & { response?: { data?: { detail?: string } } }).response?.data?.detail || 'Failed to fetch resources';
                 set({ isLoading: false, error: errorMessage, _isFetchingResources: false });
             }
         }
@@ -124,9 +132,9 @@ export const useResourcesStore = create<ResourcesState>()((set, get) => ({
 
             // Refresh resources list
             await get().fetchResources(topicId);
-        } catch (error: any) {
+        } catch (error) {
             const errorMessage =
-                error.response?.data?.detail || 'Failed to create resource';
+                (error as Error & { response?: { data?: { detail?: string } } }).response?.data?.detail || 'Failed to create resource';
             set({ error: errorMessage });
             throw new Error(errorMessage);
         }
@@ -148,9 +156,9 @@ export const useResourcesStore = create<ResourcesState>()((set, get) => ({
 
             // Refresh resources list
             await get().fetchResources(topicId);
-        } catch (error: any) {
+        } catch (error) {
             const errorMessage =
-                error.response?.data?.detail || error.message || 'Failed to upload files';
+                (error as Error & { response?: { data?: { detail?: string } } }).response?.data?.detail || (error as Error).message || 'Failed to upload files';
             set({ isUploading: false, uploadProgress: 0, error: errorMessage });
             throw new Error(errorMessage);
         }
@@ -169,9 +177,9 @@ export const useResourcesStore = create<ResourcesState>()((set, get) => ({
             if (currentTopicId) {
                 await get().fetchResources(currentTopicId);
             }
-        } catch (error: any) {
+        } catch (error) {
             const errorMessage =
-                error.response?.data?.detail || 'Failed to delete resource';
+                (error as Error & { response?: { data?: { detail?: string } } }).response?.data?.detail || 'Failed to delete resource';
             set({ error: errorMessage });
             throw new Error(errorMessage);
         }
@@ -183,9 +191,9 @@ export const useResourcesStore = create<ResourcesState>()((set, get) => ({
             await api.ai.verifyResource(resourceId);
             // Fact checking is async, will update via websocket (fact_check_complete event)
             // No need for setTimeout polling - WebSocket will notify us
-        } catch (error: any) {
+        } catch (error) {
             const errorMessage =
-                error.response?.data?.detail || 'Failed to start fact check';
+                (error as Error & { response?: { data?: { detail?: string } } }).response?.data?.detail || 'Failed to start fact check';
             set({ error: errorMessage });
             throw new Error(errorMessage);
         }
@@ -201,7 +209,7 @@ export const useResourcesStore = create<ResourcesState>()((set, get) => ({
         if (typeof navigator !== 'undefined' && !navigator.onLine) {
             const cached = await offlineDb.getFactChecks(resourceId);
             set((state) => ({
-                factChecks: { ...state.factChecks, [resourceId]: cached as any[] },
+                factChecks: { ...state.factChecks, [resourceId]: cached as FactCheck[] },
                 isLoadingFactChecks: { ...state.isLoadingFactChecks, [resourceId]: false },
             }));
             return;
@@ -218,11 +226,11 @@ export const useResourcesStore = create<ResourcesState>()((set, get) => ({
             if (checks.length > 0) {
                 offlineDb.putFactChecks(resourceId, checks).catch(() => { });
             }
-        } catch (error: any) {
+        } catch {
             // Network error — try IDB cache
             const cached = await offlineDb.getFactChecks(resourceId);
             set((state) => ({
-                factChecks: { ...state.factChecks, [resourceId]: cached as any[] },
+                factChecks: { ...state.factChecks, [resourceId]: cached as FactCheck[] },
                 isLoadingFactChecks: { ...state.isLoadingFactChecks, [resourceId]: false },
             }));
         }
@@ -250,9 +258,9 @@ export const useResourcesStore = create<ResourcesState>()((set, get) => ({
             if (currentTopicId) {
                 await get().fetchResources(currentTopicId);
             }
-        } catch (error: any) {
+        } catch (error) {
             const errorMessage =
-                error.response?.data?.detail || 'Failed to update resource';
+                (error as Error & { response?: { data?: { detail?: string } } }).response?.data?.detail || 'Failed to update resource';
             set({ error: errorMessage });
             throw new Error(errorMessage);
         }
@@ -270,9 +278,9 @@ export const useResourcesStore = create<ResourcesState>()((set, get) => ({
                         : r
                 ),
             }));
-        } catch (error: any) {
+        } catch (error) {
             const errorMessage =
-                error.response?.data?.detail || 'Failed to re-transcribe resource';
+                (error as Error & { response?: { data?: { detail?: string } } }).response?.data?.detail || 'Failed to re-transcribe resource';
             set({ error: errorMessage });
             throw new Error(errorMessage);
         }

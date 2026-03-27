@@ -21,17 +21,19 @@ export function ContinueStudyingCard() {
 
   // Resolve topic + course from store
   let topic: { id: string; title: string } | undefined;
-  let course: { id: string; code: string; name: string } | undefined;
+  let course = courses[0];
 
   if (lastTopicId && lastCourseId) {
-    course = courses.find((c) => c.id === lastCourseId);
-    topic = course?.topics?.find((t) => t.id === lastTopicId);
+    const foundCourse = courses.find((c) => c.id === lastCourseId);
+    if (foundCourse) {
+      course = foundCourse;
+      topic = foundCourse.topics?.find((t) => t.id === lastTopicId);
+    }
   }
 
   // Fallback: first topic of first course
-  if (!topic && courses.length > 0 && (courses[0].topics?.length ?? 0) > 0) {
-    course = courses[0];
-    topic = course.topics![0];
+  if (!topic && course?.topics?.length) {
+    topic = course.topics[0];
   }
 
   const courseId = course?.id;
@@ -55,10 +57,10 @@ export function ContinueStudyingCard() {
   const mastery = tp ? Math.round(tp.mastery_level * 100) : 0;
 
   return (
-    <div className="bg-white rounded-2xl border border-[#dedad4] p-6">
-      <p className="text-xs font-medium text-[#9e9a94] uppercase tracking-wide mb-1">Continue studying</p>
-      <h3 className="text-base font-semibold text-[#1a1917] mb-0.5">{topic.title}</h3>
-      <p className="text-sm text-[#6b6762] mb-4">{course.code} · {course.name}</p>
+    <div className="rounded-2xl border border-[#dedad4] bg-white p-6">
+      <p className="mb-1 text-xs font-medium tracking-wide text-[#9e9a94] uppercase">Continue studying</p>
+      <h3 className="mb-0.5 text-base font-semibold text-[#1a1917]">{topic.title}</h3>
+      <p className="mb-4 text-sm text-[#6b6762]">{course.code} · {course.name}</p>
 
       <ProgressBar value={mastery} size="sm" showLabel className="mb-4" />
 

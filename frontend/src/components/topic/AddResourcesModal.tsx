@@ -51,8 +51,9 @@ export function AddResourcesModal({ isOpen, topicId, courseId, onClose, onAdded 
     try {
       await api.resources.upload(topicId, courseId, files, fileTitle || undefined, false, setProgress);
       resetAndClose();
-    } catch (e: any) {
-      setError(e.response?.data?.detail || e.message || 'Upload failed.');
+    } catch (e: unknown) {
+      const error = e as { response?: { data?: { detail?: string } } } & Error;
+      setError(error.response?.data?.detail || error.message || 'Upload failed.');
     } finally { setUploading(false); }
   }
 
@@ -62,8 +63,9 @@ export function AddResourcesModal({ isOpen, topicId, courseId, onClose, onAdded 
     try {
       await api.resources.createText(topicId, { content: textContent.trim(), title: textTitle.trim() || undefined });
       resetAndClose();
-    } catch (e: any) {
-      setError(e.response?.data?.detail || 'Failed to save text.');
+    } catch (e: unknown) {
+      const error = e as { response?: { data?: { detail?: string } } } & Error;
+      setError(error.response?.data?.detail || 'Failed to save text.');
     } finally { setSavingText(false); }
   }
 

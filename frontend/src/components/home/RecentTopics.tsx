@@ -8,14 +8,14 @@ interface RecentEntry { topicId: string; courseId: string }
 
 export function RecentTopics() {
   const courses = useCourseStore((s) => s.courses);
-  const [recents, setRecents] = useState<RecentEntry[]>([]);
-
-  useEffect(() => {
+  const [recents] = useState<RecentEntry[]>(() => {
     try {
       const stored = localStorage.getItem('notesos-recent-topics');
-      if (stored) setRecents(JSON.parse(stored));
-    } catch { /* ignore */ }
-  }, []);
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  });
 
   // Resolve topic/course info from the store
   const resolved = recents
@@ -39,18 +39,18 @@ export function RecentTopics() {
 
   return (
     <div>
-      <h2 className="text-sm font-semibold text-[#6b6762] uppercase tracking-wide mb-3">
+      <h2 className="mb-3 text-sm font-semibold tracking-wide text-[#6b6762] uppercase">
         {resolved.length > 0 ? 'Recently Visited' : 'Recent Topics'}
       </h2>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         {items.map((t) => (
           <Link
             key={t.topicId}
             href={`/courses/${t.courseId}/topics/${t.topicId}`}
-            className="bg-white rounded-xl border border-[#dedad4] px-4 py-3 hover:border-[#9e9a94] transition-colors"
+            className="rounded-xl border border-[#dedad4] bg-white px-4 py-3 transition-colors hover:border-[#9e9a94]"
           >
-            <p className="text-sm font-medium text-[#1a1917] truncate">{t.title}</p>
-            <p className="text-xs text-[#9e9a94] mt-0.5">{t.courseCode}</p>
+            <p className="truncate text-sm font-medium text-[#1a1917]">{t.title}</p>
+            <p className="mt-0.5 text-xs text-[#9e9a94]">{t.courseCode}</p>
           </Link>
         ))}
       </div>

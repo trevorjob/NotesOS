@@ -125,8 +125,8 @@ export function Sidebar({ onClose }: SidebarProps) {
       await fetchCourses(true);
       setCourseForm({ code: '', name: '' });
       setShowAddCourse(false);
-    } catch (e: any) {
-      setFormError(e.response?.data?.detail || e.message || 'Failed to create course.');
+    } catch (e: unknown) {
+      setFormError((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || (e as Error).message || 'Failed to create course.');
     } finally {
       setSaving(false);
     }
@@ -138,7 +138,7 @@ export function Sidebar({ onClose }: SidebarProps) {
     try {
       const res = await joinSemester(joinSemesterCode.trim());
       await fetchCourses(true);
-      const count = (res?.courses_joined ?? []).length;
+      const count = (Array.isArray(res?.courses_joined) ? res.courses_joined : []).length;
       setJoinSuccess(`Joined semester — enrolled in ${count} course${count !== 1 ? 's' : ''}`);
     } catch (e: unknown) {
       setFormError((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || 'Invalid semester code.');
@@ -168,7 +168,7 @@ export function Sidebar({ onClose }: SidebarProps) {
         localStorage.setItem(EXPANDED_KEY, JSON.stringify(next));
         return next;
       });
-      const topicId = newTopic?.topic?.id ?? newTopic?.id;
+      const topicId = newTopic?.id;
       if (topicId) {
         navigate(`/courses/${courseId}/topics/${topicId}`);
       }

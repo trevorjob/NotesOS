@@ -4,6 +4,7 @@
  */
 
 import { create } from 'zustand';
+import { AxiosError } from 'axios';
 import { api } from '@/lib/api';
 import { offlineDb } from '@/lib/offlineDb';
 
@@ -80,16 +81,17 @@ export const useAIChatStore = create<AIChatState>()((set, get) => ({
             if (conversations.length > 0 && !currentConversationId) {
                 await get().loadConversation(conversations[0].id);
             }
-        } catch (error: any) {
+        } catch (error: unknown) {
             // Network error — try IDB cache
             const cached = await offlineDb.getConversationsByCourse(courseId);
+            const axiosError = error as AxiosError<{ detail?: string }>;
             if (cached.length > 0) {
                 set({ conversations: cached as Conversation[], isLoading: false });
                 if (!get().currentConversationId) {
                     await get().loadConversation(cached[0].id);
                 }
             } else {
-                const errorMessage = error.response?.data?.detail || 'Failed to fetch conversations';
+                const errorMessage = axiosError.response?.data?.detail || 'Failed to fetch conversations';
                 set({ isLoading: false, error: errorMessage });
             }
         }
@@ -113,13 +115,14 @@ export const useAIChatStore = create<AIChatState>()((set, get) => ({
             if (messages.length > 0) {
                 offlineDb.putMessages(conversationId, messages).catch(() => { });
             }
-        } catch (error: any) {
+        } catch (error: unknown) {
             // Network error — try IDB cache
             const cached = await offlineDb.getMessages(conversationId);
+            const axiosError = error as AxiosError<{ detail?: string }>;
             if (cached.length > 0) {
                 set({ messages: cached as Message[], isLoading: false });
             } else {
-                const errorMessage = error.response?.data?.detail || 'Failed to load conversation';
+                const errorMessage = axiosError.response?.data?.detail || 'Failed to load conversation';
                 set({ isLoading: false, error: errorMessage });
             }
         }
@@ -167,12 +170,13 @@ export const useAIChatStore = create<AIChatState>()((set, get) => ({
 
             // Refresh conversations list
             await get().fetchConversations(courseId);
-        } catch (error: any) {
+        } catch (error: unknown) {
             // Remove optimistic user message on error
+            const axiosError = error as AxiosError<{ detail?: string }>;
             set(state => ({
                 messages: state.messages.slice(0, -1),
                 isSending: false,
-                error: error.response?.data?.detail || 'Failed to send message',
+                error: axiosError.response?.data?.detail || 'Failed to send message',
             }));
         }
     },

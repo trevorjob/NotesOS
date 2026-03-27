@@ -124,7 +124,7 @@ export class WebSocketClient {
         }
     }
 
-    send(message: any): void {
+    send(message: WebSocketMessage): void {
         if (this.ws?.readyState === WebSocket.OPEN) {
             this.ws.send(JSON.stringify(message));
         } else {

@@ -5,6 +5,7 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { AxiosError } from 'axios';
 import { api, tokenManager } from '@/lib/api';
 
 interface User {
@@ -56,14 +57,16 @@ export const useAuthStore = create<AuthState>()(
           // Store tokens
           tokenManager.setTokens(access_token, refresh_token);
 
-          set({
+            set({
             user,
             isAuthenticated: true,
             isLoading: false,
-          });
-        } catch (error: any) {
+            });
+          } catch (error: unknown) {
           const errorMessage =
-            error.response?.data?.detail || 'Login failed. Please try again.';
+            error instanceof AxiosError
+              ? (error.response?.data as { detail?: string })?.detail || 'Login failed. Please try again.'
+              : 'Login failed. Please try again.';
           set({ isLoading: false, error: errorMessage });
           throw new Error(errorMessage);
         }
@@ -83,10 +86,11 @@ export const useAuthStore = create<AuthState>()(
             isAuthenticated: true,
             isLoading: false,
           });
-        } catch (error: any) {
+        } catch (error: unknown) {
           const errorMessage =
-            error.response?.data?.detail ||
-            'Registration failed. Please try again.';
+            error instanceof AxiosError
+              ? (error.response?.data as { detail?: string })?.detail || 'Registration failed. Please try again.'
+              : 'Registration failed. Please try again.';
           set({ isLoading: false, error: errorMessage });
           throw new Error(errorMessage);
         }
