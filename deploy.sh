@@ -336,8 +336,8 @@ cmd_deploy() {
 
     # Sync files
     info "Syncing files to ${APP_DIR}..."
-    rsync -a --exclude='.git' --exclude='node_modules' --exclude='venv' \
-        --exclude='.next' --exclude='__pycache__' --exclude='.env' \
+    rsync -a --delete --exclude='.git' --exclude='node_modules' --exclude='venv' \
+        --exclude='.next' --exclude='__pycache__' \
         "${SCRIPT_DIR}/" "${APP_DIR}/"
     chown -R "${APP_USER}:${APP_USER}" "$APP_DIR"
 
