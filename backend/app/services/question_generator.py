@@ -20,6 +20,7 @@ class QuestionGenState(TypedDict):
 
     test_id: str
     topic_ids: List[str]
+    topic_name: str
     resource_content: str
     question_count: int
     difficulty: str
@@ -43,10 +44,12 @@ class QuestionGenerator:
         course_id: str,
         user_id: str,
         topic_ids: List[str],
+        topic_name: str,
         question_count: int = 10,
         difficulty: str = "medium",
         question_types: List[str] = None,
         title: str = None,
+        
     ) -> Test:
         """
         Generate a complete test with questions.
@@ -90,6 +93,7 @@ class QuestionGenerator:
         initial_state = {
             "test_id": str(test.id),
             "topic_ids": topic_ids,
+            "topic_name": topic_name,
             "resource_content": resource_content,
             "question_count": question_count,
             "difficulty": difficulty,
@@ -161,42 +165,77 @@ class QuestionGenerator:
 
     async def _generate_questions(self, state: QuestionGenState) -> Dict[str, Any]:
         """Generate questions using DeepSeek."""
-        prompt = f"""Generate {state["question_count"]} practice test questions based on this course content.
+        prompt = f"""You are writing a quiz for a student studying {state["topic_name"]}.
+Your job is to write questions that actually test whether someone
+understands the material — not just whether they memorised keywords.
 
-Difficulty: {state["difficulty"]}
-Question Types: {", ".join(state["question_types"])}
+Good questions:
+- Test a concept, relationship, or application — not just a definition
+- Have wrong answers that are plausible (a student who half-understands 
+  could pick them)
+- Are specific enough that someone can answer them without guessing
+- Are not trick questions or gotchas
 
-Content:
-{state["resource_content"][:4000]}
+Bad questions (never write these):
+- "What is the definition of X?" when X was defined word-for-word in the notes
+- Questions with obviously wrong distractors
+- Questions testing trivial details that wouldn't appear on a real exam
+- Two questions that test essentially the same idea
 
-Requirements:
-1. Ensure all major concepts are covered
-2. Create diverse questions (don't repeat topics)
-3. For MCQ: provide 4 answer options with exactly one correct answer
-4. For short answer: provide a model answer (2-3 sentences)
-5. Make questions clear and unambiguous
+TOPIC: {state["topic_name"]}
+DIFFICULTY: {state["difficulty"]}
+NUMBER OF QUESTIONS: {state["question_count"]}
+QUESTION TYPES: {", ".join(state["question_types"])}
 
-Return JSON array of questions in this format:
+STUDY MATERIAL:
+{state["resource_content"]}
+
+DIFFICULTY GUIDE:
+- easy: recall of key facts and straightforward definitions
+- medium: application of concepts, cause-and-effect, compare-and-contrast
+- hard: synthesis, edge cases, explain why something works the way it does
+
+QUESTION TYPE RULES:
+
+For "mcq":
+- Write exactly 4 answer options
+- All 4 options must be plausible to someone who partially understands the topic
+- Wrong options should represent common misconceptions or close-but-wrong ideas
+- Never make the correct answer obviously longer or more detailed than the others
+- correct_answer must be the EXACT TEXT of one of the answer_options strings — 
+  not a label, not a paraphrase, the exact string copied
+
+For "short_answer":
+- The question should require 2–4 sentences to answer properly
+- correct_answer is a model answer showing the key points the student must hit
+- Format model answer as: "Key points: [point 1] / [point 2] / [point 3]" 
+  so the grader knows what to look for
+
+COVERAGE:
+- Spread questions across different concepts — don't cluster on one section
+- If {state["question_count"]} > 5, ensure no two questions test the same idea
+- Prioritise concepts that appear repeatedly in the material or seem central to the topic
+
+Return a JSON array:
 [
   {{
-    "question_text": "What was the primary cause of X?",
+    "question_text": "The question",
     "question_type": "mcq",
-    "answer_options": ["First plausible answer", "The actual correct answer", "Another wrong answer", "Another wrong answer"],
-    "correct_answer": "The actual correct answer",
+    "answer_options": ["Option A", "Option B", "Option C", "Option D"],
+    "correct_answer": "Option B",
+    "explanation": "Brief explanation of why this is correct and why the others are wrong. 1–2 sentences.",
     "points": 1
   }},
   {{
-    "question_text": "Explain...",
+    "question_text": "The question",
     "question_type": "short_answer",
-    "correct_answer": "Model answer here with key points the student should cover.",
+    "correct_answer": "Key points: [first thing they must say] / [second thing] / [third thing if applicable]",
+    "explanation": "What a strong answer looks like and what a weak answer misses.",
     "points": 2
   }}
 ]
 
-CRITICAL for MCQ: correct_answer MUST be the EXACT TEXT of one of the answer_options strings. Do NOT use labels like "Option A" or "Option B". The correct_answer field must copy the full text of the correct option exactly.
-
-Return ONLY valid JSON, no other text."""
-
+Return ONLY valid JSON. No preamble. No text outside the array."""
         response = await self._call_deepseek(prompt)
 
         try:

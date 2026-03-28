@@ -529,6 +529,7 @@ async def generate_test(
         difficulty=request.difficulty,
         question_types=request.question_types,
         title=title,
+        topic_name=topic_names,
     )
 
     # Refresh to get questions

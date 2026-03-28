@@ -305,6 +305,7 @@ async def get_topic_quiz(
             difficulty="medium",
             question_types=["mcq", "short_answer"],
             title=quiz_title,
+            topic_name=topic.title,
         )
         # Override test_type to SELF_TEST so this acts as the shared topic quiz
         test.test_type = TestType.SELF_TEST

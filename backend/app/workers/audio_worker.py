@@ -11,6 +11,7 @@ from datetime import datetime
 from sqlalchemy import select
 
 from app.database import async_session_maker
+from app.models.course import Topic
 from app.models.knowledge import AudioLesson, KnowledgeStatus, TopicKnowledge
 from app.services.audio_generator import audio_generator
 from app.services.redis_client import redis_client
@@ -34,6 +35,7 @@ async def process_audio_job(job_data: dict):
 
     lesson_id = None
     lesson_voice = "alloy"
+    topic_name = ""
     error = None
 
     # Phase 1: fetch knowledge and create lesson record — short-lived session
@@ -47,6 +49,12 @@ async def process_audio_job(job_data: dict):
             if not knowledge or knowledge.status != KnowledgeStatus.COMPLETED:
                 print(f"[AUDIO] Skipping: knowledge {knowledge_id} not ready")
                 return
+
+            topic_result = await db.execute(
+                select(Topic).where(Topic.id == topic_id)
+            )
+            topic_obj = topic_result.scalar_one_or_none()
+            topic_name = topic_obj.title if topic_obj else ""
 
             lesson = AudioLesson(
                 topic_id=topic_id,
@@ -69,7 +77,7 @@ async def process_audio_job(job_data: dict):
     audio_url = None
     duration = None
     try:
-        script = await audio_generator.generate_script(knowledge_content)
+        script = await audio_generator.generate_script(knowledge_content, topic_name=topic_name)
         audio_bytes = await audio_generator.generate_audio(script, voice=lesson_voice)
         audio_url, duration = await audio_generator.upload_audio(audio_bytes, topic_id)
     except Exception as e:

@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.models.course import Topic
 from app.models.knowledge import KnowledgeStatus, TopicKnowledge
 from app.models.resource import Resource, ResourceChunk
 
@@ -49,6 +50,13 @@ class KnowledgeSynthesizer:
         await db.refresh(knowledge)
 
         try:
+            # Fetch topic name for AI prompt
+            topic_result = await db.execute(
+                select(Topic).where(Topic.id == _uuid.UUID(topic_id))
+            )
+            topic_obj = topic_result.scalar_one_or_none()
+            topic_name = topic_obj.title if topic_obj else "this topic"
+
             # Fetch all resource chunks for this topic via explicit join
             chunks_result = await db.execute(
                 select(ResourceChunk)
@@ -76,7 +84,7 @@ class KnowledgeSynthesizer:
             context = self._build_context(chunks)
 
             # Call AI to synthesize
-            synthesis = await self._call_ai(context)
+            synthesis = await self._call_ai(context, topic_name)
 
             knowledge.consolidated_note = synthesis.get("consolidated_note", "")
             knowledge.key_points = synthesis.get("key_points", [])
@@ -114,28 +122,36 @@ class KnowledgeSynthesizer:
 
         return "\n\n---\n\n".join(parts)
 
-    async def _call_ai(self, context: str) -> Dict[str, Any]:
+    async def _call_ai(self, context: str, topic_name: str) -> Dict[str, Any]:
         """Call the AI to synthesize knowledge from chunk context."""
-        prompt = f"""You are an expert academic tutor. Synthesize the following study materials into a structured knowledge summary.
+        prompt = f"""You are a sharp, clear-thinking student who just went through 
+        all the class materials for this topic and is writing up your personal 
+        study notes. You write the way a top student takes notes — organised, 
+        direct, no filler, nothing copied verbatim from the source. You highlight 
+        what actually matters and explain it in plain language.
 
-STUDY MATERIALS:
-{context}
+        # TOPIC: {topic_name}
 
-Create a comprehensive synthesis. Return JSON with this exact structure:
-{{
-  "consolidated_note": "Full markdown-formatted summary. Use ## headings, bullet points, bold for key terms. 300-600 words.",
-  "key_points": ["Point 1", "Point 2", "Point 3", "Point 4", "Point 5"],
-  "concepts": [
-    {{"term": "Term name", "definition": "Clear, concise definition"}},
-    {{"term": "Another term", "definition": "Its definition"}}
-  ]
-}}
+        SOURCE MATERIALS:
+        {context}
 
-Rules:
-- consolidated_note: markdown, well-structured, exam-focused
-- key_points: 5-8 most important facts a student must know
-- concepts: 4-8 key vocabulary terms with clear definitions
-- Return ONLY valid JSON, no other text"""
+        Synthesise everything into study notes for this topic. 
+
+        Return JSON with this exact structure:
+        {{
+        "consolidated_note": "Markdown-formatted study notes. Lead with a 1–2 sentence plain-English explanation of what this topic is actually about. Then use ## subheadings to organise the key ideas. Use bullet points for lists of related facts. Bold the first mention of any important term. Write like you're explaining it to a classmate who missed class — clear, useful, no padding. Length should match the material: short if the content is simple, longer if it's complex. Do not copy sentences verbatim from the source.",
+        "key_points": ["5–8 single-sentence facts a student must know to pass an exam on this topic. Each point should be self-contained and specific — not vague summaries."],
+        "concepts": [
+            {{"term": "Key term", "definition": "One clear sentence. Plain English. No jargon unless explained."}}
+        ]
+        }}
+
+        Rules:
+        - consolidated_note: reads like smart student notes, not a textbook. Markdown only.
+        - key_points: 5–8 items. Specific and exam-ready. No point should repeat another.
+        - concepts: 4–10 terms. Only include terms that actually need defining — skip obvious ones.
+        - If the source material is thin or unclear, say so briefly in the consolidated_note rather than padding it out.
+        - Return ONLY valid JSON. No preamble, no explanation outside the JSON."""
 
         try:
             # Primary: DeepSeek (cost-optimised)
@@ -160,7 +176,7 @@ Rules:
                     "model": "deepseek-chat",
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.3,
-                    "max_tokens": 2000,
+                    "max_tokens": 4000,
                 },
                 timeout=60.0,
             )
@@ -180,7 +196,7 @@ Rules:
                 },
                 json={
                     "model": "claude-haiku-4-5-20251001",
-                    "max_tokens": 2000,
+                    "max_tokens": 4000,
                     "messages": [{"role": "user", "content": prompt}],
                 },
                 timeout=60.0,

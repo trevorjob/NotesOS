@@ -10,6 +10,7 @@ from sqlalchemy.orm import selectinload
 from datetime import datetime
 
 from app.database import worker_session
+from app.models.course import Topic
 from app.models.test import TestAnswer, TestAttempt, AnswerStatus
 from app.services.redis_client import redis_client
 from app.services.transcription import transcription_service
@@ -84,13 +85,25 @@ async def process_grading_job(job_data: dict):
                     await _broadcast_and_notify(db, attempt_id, course_id, user_id)
                 return
 
-            # 2. Grade the answer
+            # 2. Fetch topic name for grading context
+            topic_name = ""
+            test_topics = answer.attempt.test.topics if answer.attempt and answer.attempt.test else []
+            if test_topics:
+                topic_result = await db.execute(
+                    select(Topic).where(Topic.id == uuid.UUID(str(test_topics[0])))
+                )
+                topic_obj = topic_result.scalar_one_or_none()
+                topic_name = topic_obj.title if topic_obj else ""
+
+            # 3. Grade the answer
             print(f"[GRADING WORKER] Grading answer {answer_id}")
             grading_result = await grader.grade_answer(
                 question=question.question_text,
                 expected_answer=question.correct_answer or "",
                 student_answer=student_answer_text,
                 is_voice=is_voice,
+                question_type=question.question_type.value,
+                topic_name=topic_name,
             )
 
             # 3. Save grading results (grader returns 0–10, matching MCQ scale)

@@ -29,14 +29,23 @@ class AudioGenerator:
         self.anthropic_api_key = settings.ANTHROPIC_API_KEY
         self.openai_api_key = settings.OPENAI_API_KEY
 
-    async def generate_script(self, knowledge: TopicKnowledge) -> str:
+    async def generate_script(self, knowledge: TopicKnowledge, topic_name: str) -> str:
         """
         Convert a consolidated note into a spoken, conversational audio script.
 
         Format follows the memory-loop pattern:
           concept → explanation → example → question → pause → answer
         """
-        prompt = f"""You are creating an audio study lesson for a student. Convert the following study notes into a natural, spoken audio script.
+        prompt = f"""You are writing a spoken audio script that a student will listen to 
+while walking, commuting, or doing something else with their hands. 
+This is the only thing they're doing with their ears right now.
+
+Your voice is a sharp, unhurried person who knows this topic cold and 
+genuinely finds it interesting. Not a lecturer. Not a tutor. 
+The kind of person who, if you asked them to explain something at a 
+coffee shop, would make you feel like you finally got it.
+
+TOPIC: {topic_name}
 
 CONSOLIDATED NOTES:
 {knowledge.consolidated_note}
@@ -47,23 +56,100 @@ KEY POINTS:
 CONCEPTS:
 {json.dumps(knowledge.concepts or [], indent=2)}
 
-Write a spoken audio script that:
-1. Opens with a brief intro ("In this lesson, we'll cover...")
-2. Covers each key concept using this memory-loop format:
-   - State the concept
-   - Give a clear explanation
-   - Give a simple example
-   - Ask a recall question ("Quick question: ...")
-   - Pause cue: "[PAUSE 3 SECONDS]"
-   - Give the answer
-3. Closes with a summary of the 3 most important points
+═══════════════════════════════════════
+STRUCTURE — follow this arc:
+═══════════════════════════════════════
 
-Rules:
-- Write exactly as it would be spoken aloud (no markdown, no bullet symbols)
-- Use natural transitions ("Now let's look at...", "Moving on to...")
-- Keep it between 400-700 words total
-- Use [PAUSE 3 SECONDS] for recall pauses
-- Return ONLY the script text, no JSON, no extra formatting"""
+HOOK (30–45 seconds)
+Don't announce the topic. Don't say "in this lesson we'll cover."
+Open with something that makes the listener lean in — a surprising fact, 
+a question they can't immediately answer, a contradiction, a real-world 
+consequence of this topic. Make them want to know the answer before 
+you've explained anything.
+
+CORE CONTENT
+Work through the material using the memory-loop format — but vary the 
+execution so it doesn't feel like a template repeating itself:
+
+  The loop per concept:
+  1. State what the concept is — plainly, no jargon first
+  2. Explain it like you're thinking through it out loud
+  3. Ground it in something concrete: an analogy, an example, 
+     a real-world application, a comparison to something familiar
+  4. Ask a recall question — make it feel conversational, 
+     not like a quiz ("So here's something to sit with — ...")
+  5. [PAUSE]
+  6. Give the answer, then add one more thing they didn't know to ask
+
+  Vary the loop:
+  - Simple concepts: compress it — don't over-explain the obvious
+  - Hard concepts: slow down, use two examples, come back to it later
+  - Closely related concepts: contrast them against each other 
+    instead of explaining them separately
+  - The most important concept in the material: explain it twice — 
+    once near the start, once near the end, with different framing
+
+TRANSITIONS
+Never use structural transitions like "moving on to" or "next up" or 
+"now let's look at." Instead, connect concepts to each other:
+  - "This is why X matters — because without it, Y can't happen."
+  - "Here's where it gets interesting."
+  - "That was the setup. Here's the payoff."
+  - "Hold that thought — we'll come back to it."
+  - "If you got that, the next part will make a lot of sense."
+
+CLOSING (30–45 seconds)
+Don't say "to summarise" or "in conclusion."
+Land on the one thing — the single most important idea from everything 
+you just covered. Then give a final recall moment: ask a question that 
+ties together 2–3 concepts at once. [PAUSE]. Answer it. 
+End with something that makes the topic feel alive outside the classroom.
+
+═══════════════════════════════════════
+WRITING RULES:
+═══════════════════════════════════════
+
+Voice and rhythm:
+- Write exactly as it will be spoken — no markdown, no bullet symbols, 
+  no headers. Pure prose.
+- Vary sentence length deliberately. Short sentences hit hard. 
+  Longer sentences carry you through an explanation. Mix them.
+- Read every line aloud in your head before writing the next one. 
+  If it trips you up, rewrite it.
+- Never use a word you wouldn't say naturally in conversation.
+
+Pauses:
+- [PAUSE] after every recall question — give the listener time to 
+  actually think, not just hear the question.
+- [PAUSE] before introducing a genuinely complex idea — 
+  let the previous one settle.
+- [PAUSE] is a breath, not a quiz buzzer. Use it like one.
+
+Emphasis:
+- Use [EMPHASIS] before a word or phrase that must land: 
+  "The key word here is [EMPHASIS] gradient."
+- Use it sparingly — 2–4 times maximum. If everything is emphasised, 
+  nothing is.
+
+Length:
+- Target 900–1300 words. That's roughly 6–8 minutes at a natural 
+  speaking pace — long enough to cover material properly, 
+  short enough to finish on a commute.
+- If the material is genuinely simple, stop at 900. 
+  Do not pad to hit a word count.
+- If the material is complex and rich, go to 1300. 
+  Do not compress important ideas to hit a word count.
+
+What this script is NOT:
+- Not a podcast with two hosts
+- Not a lecture with slides
+- Not a summary of the notes read aloud
+- Not a quiz with answers
+- A single, clear voice working through material in a way that 
+  makes it stick
+
+Return ONLY the script. Start immediately with the hook. 
+No title, no label, no "here is the script." Just the words."""
 
         try:
             if self.deepseek_api_key:
