@@ -26,6 +26,8 @@ SERVICES=(
     notesos-worker-grading
     notesos-worker-factcheck
     notesos-worker-transcription
+    notesos-worker-knowledge
+    notesos-worker-audio
 )
 
 # ── Helpers ──────────────────────────────────────────────
