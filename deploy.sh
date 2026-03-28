@@ -370,9 +370,19 @@ cmd_deploy() {
     "
     ok "Frontend built"
 
+    # Sync and reload service files (picks up new or changed services)
+    info "Syncing systemd service files..."
+    for svc in "${SERVICES[@]}"; do
+        sed -e "s|__APP_DIR__|${APP_DIR}|g" \
+            -e "s|__APP_USER__|${APP_USER}|g" \
+            "${APP_DIR}/deploy/${svc}.service" > "/etc/systemd/system/${svc}.service"
+    done
+    systemctl daemon-reload
+
     # Restart services
     info "Restarting services..."
     for svc in "${SERVICES[@]}"; do
+        systemctl enable "$svc" 2>/dev/null || true
         systemctl restart "$svc"
     done
     ok "All services restarted"

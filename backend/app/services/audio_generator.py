@@ -162,34 +162,61 @@ No title, no label, no "here is the script." Just the words."""
     async def generate_audio(self, script: str, voice: str = "nova") -> bytes:
         """
         Convert script text to MP3 audio using OpenAI TTS.
+        Splits into ≤4096-char chunks at sentence boundaries to stay within the API limit.
 
         Args:
             script: Spoken script text
             voice: OpenAI TTS voice (alloy, echo, fable, onyx, nova, shimmer)
 
         Returns:
-            MP3 audio bytes
+            MP3 audio bytes (chunks concatenated)
         """
-        # Strip pause cues before sending to TTS
-        clean_script = script.replace("[PAUSE 3 SECONDS]", "...").strip()
+        clean_script = script.replace("[PAUSE 3 SECONDS]", "...").replace("[PAUSE]", "...").strip()
+        chunks = self._chunk_script(clean_script)
 
         async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "https://api.openai.com/v1/audio/speech",
-                headers={
-                    "Authorization": f"Bearer {self.openai_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "tts-1",
-                    "input": clean_script,
-                    "voice": voice,
-                    "response_format": "mp3",
-                },
-                timeout=120.0,
-            )
-            response.raise_for_status()
-            return response.content
+            parts = []
+            for chunk in chunks:
+                response = await client.post(
+                    "https://api.openai.com/v1/audio/speech",
+                    headers={
+                        "Authorization": f"Bearer {self.openai_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": "tts-1",
+                        "input": chunk,
+                        "voice": voice,
+                        "response_format": "mp3",
+                    },
+                    timeout=120.0,
+                )
+                response.raise_for_status()
+                parts.append(response.content)
+            return b"".join(parts)
+
+    @staticmethod
+    def _chunk_script(text: str, limit: int = 4000) -> list[str]:
+        """Split text into chunks ≤ limit chars, breaking at sentence boundaries."""
+        sentences = []
+        for sentence in text.replace("\n", " ").split(". "):
+            sentence = sentence.strip()
+            if sentence:
+                sentences.append(sentence if sentence.endswith(".") else sentence + ".")
+
+        chunks = []
+        current = ""
+        for sentence in sentences:
+            if len(current) + len(sentence) + 1 > limit:
+                if current:
+                    chunks.append(current.strip())
+                current = sentence
+            else:
+                current = (current + " " + sentence).strip() if current else sentence
+
+        if current:
+            chunks.append(current.strip())
+        return chunks
 
     async def upload_audio(
         self, audio_bytes: bytes, topic_id: str
