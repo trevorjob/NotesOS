@@ -1,29 +1,39 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth';
 import { useSemesterStore } from '@/stores/semesters';
 import { Button } from '@/components/ui/Button';
 
 export default function JoinPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-[#f0eeea] flex items-center justify-center">
+        <div className="w-5 h-5 border-2 border-[#1a1917] border-t-transparent rounded-full animate-spin" />
+      </div>
+    }>
+      <JoinPageInner />
+    </Suspense>
+  );
+}
+
+function JoinPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const code = searchParams.get('code');
 
-  const { isAuthenticated, hydrated } = useAuthStore();
+  const { isAuthenticated } = useAuthStore();
   const { joinSemester } = useSemesterStore();
 
-  const [joining, setJoining] = useState(false);
+  const joinAttempted = useRef(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    if (!hydrated) return;
     if (!code) { router.replace('/home'); return; }
-    if (!isAuthenticated) return;
+    if (!isAuthenticated || joinAttempted.current) return;
+    joinAttempted.current = true;
 
-    // Already logged in — auto-join immediately
-    setJoining(true);
     joinSemester(code)
       .then(() => router.replace('/home'))
       .catch((e: unknown) => {
@@ -32,12 +42,11 @@ export default function JoinPage() {
           router.replace('/home');
         } else {
           setError(detail || 'Invalid invite link.');
-          setJoining(false);
         }
       });
-  }, [hydrated, isAuthenticated, code, joinSemester, router]);
+  }, [isAuthenticated, code, joinSemester, router]);
 
-  if (!hydrated || (isAuthenticated && !error)) {
+  if (isAuthenticated && !error) {
     return (
       <div className="min-h-screen bg-[#f0eeea] flex items-center justify-center">
         <div className="w-5 h-5 border-2 border-[#1a1917] border-t-transparent rounded-full animate-spin" />
@@ -59,7 +68,7 @@ export default function JoinPage() {
           </svg>
         </div>
 
-        <h1 className="text-xl font-semibold text-[#1a1917] mb-1">You've been invited</h1>
+        <h1 className="text-xl font-semibold text-[#1a1917] mb-1">{"You've been invited"}</h1>
         <p className="text-sm text-[#6b6762] mb-6">Join a semester on NotesOS and get access to all its courses.</p>
 
         {error && <p className="text-sm text-[#dc2626] mb-4">{error}</p>}
