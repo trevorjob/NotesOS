@@ -18,7 +18,7 @@ type Tab = 'files' | 'text';
 type Phase = 'idle' | 'creating' | 'uploading';
 
 export function CreateTopicModal({ isOpen, courseId, onClose, onCreated }: CreateTopicModalProps) {
-  const { courses, createTopic } = useCourseStore();
+  const { courses } = useCourseStore();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [title, setTitle] = useState('');
@@ -73,17 +73,30 @@ export function CreateTopicModal({ isOpen, courseId, onClose, onCreated }: Creat
     const course = courses.find((c) => c.id === courseId);
     const orderIndex = (course?.topics?.length ?? 0) + 1;
 
+    // Step 1: Create the topic directly via API to get a reliable topicId
+    // (avoids the store's createTopic which runs selectCourse internally and
+    //  can mask errors before we have a valid topicId for the upload)
     setPhase('creating');
     let topicId: string;
     try {
-      const newTopic = await createTopic(courseId, { title: title.trim(), order_index: orderIndex });
-      topicId = newTopic.id;
+      const response = await api.topics.create(courseId, {
+        title: title.trim(),
+        order_index: orderIndex,
+      });
+      topicId = response.data?.id;
+      if (!topicId) throw new Error('Topic created but no ID returned');
+      // Invalidate the store so it re-fetches fresh data on navigation
+      useCourseStore.getState().clearCurrentCourse();
     } catch (e: unknown) {
       setPhase('idle');
-      setError((e as Error).message || 'Failed to create topic.');
+      const msg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+        || (e as Error)?.message
+        || 'Failed to create topic.';
+      setError(msg);
       return;
     }
 
+    // Step 2: Upload resources if provided
     if (hasResources) {
       setPhase('uploading');
       try {
@@ -98,7 +111,6 @@ export function CreateTopicModal({ isOpen, courseId, onClose, onCreated }: Creat
           || 'Upload failed. You can add resources from the topic page.';
         setError(msg);
         setPhase('idle');
-        // Navigate to the topic anyway so the user can retry from the topic page
         setTimeout(() => { reset(); onCreated(topicId); }, 3000);
         return;
       }

@@ -301,6 +301,9 @@ export const api = {
             isHandwritten?: boolean,
             onProgress?: (percent: number) => void
         ) => {
+            if (!topicId || !courseId) {
+                throw new Error('topicId and courseId are required for upload');
+            }
             const { uploadFilesToCloudinary } = await import('./cloudinaryUpload');
             const folder = `notesos/${courseId}/${topicId}`;
             const uploaded = await uploadFilesToCloudinary(files, folder, onProgress);
