@@ -83,7 +83,7 @@ export function CreateTopicModal({ isOpen, courseId, onClose, onCreated }: Creat
         title: title.trim(),
         order_index: orderIndex,
       });
-      topicId = response.data?.id;
+      topicId = (response.data?.topic ?? response.data)?.id;
       if (!topicId) throw new Error('Topic created but no ID returned');
       // Invalidate the store so it re-fetches fresh data on navigation
       useCourseStore.getState().clearCurrentCourse();

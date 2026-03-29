@@ -199,7 +199,7 @@ export const useCourseStore = create<CourseState>()(
                 set({ error: null });
                 try {
                     const response = await api.topics.create(courseId, data);
-                    const newTopic = response.data;
+                    const newTopic = response.data?.topic ?? response.data;
 
                     // Bust the selectCourse guard so the refreshed course is fetched
                     set({ currentCourse: null });
