@@ -120,19 +120,20 @@ async def process_chunking_job(job_data: dict):
 async def chunking_worker():
     """
     Main worker loop for chunking queue.
-    Polls Redis for jobs and processes them.
+    Uses reliable BRPOPLPUSH so jobs survive worker restarts.
     """
     print("🚀 Chunking worker started")
 
-    client = await redis_client.get_client()
+    recovered = await redis_client.recover_orphaned_jobs("chunking")
+    if recovered:
+        print(f"🔄 Chunking worker recovered {recovered} orphaned job(s)")
 
     while True:
+        job_json = None
         try:
-            # Blocking pop from queue (waits for job)
-            result = await client.brpop("queue:chunking", timeout=5)
+            job_json = await redis_client.reliable_dequeue("chunking", timeout=5)
 
-            if result:
-                queue_name, job_json = result
+            if job_json:
                 job = json.loads(job_json)
 
                 job_id = job["id"]
@@ -140,23 +141,22 @@ async def chunking_worker():
 
                 print(f"📝 Processing chunking job {job_id}")
 
-                # Update job status
                 await redis_client.update_job_status(job_id, "processing")
-
-                # Process the job
                 await process_chunking_job(job_data)
 
-                # Mark as completed
                 resource_id = job_data.get("resource_id") or job_data.get("note_id")
                 await redis_client.update_job_status(
                     job_id, "completed", result={"resource_id": resource_id}
                 )
+                await redis_client.ack_job("chunking", job_json)
 
         except asyncio.CancelledError:
             print("Chunking worker shutting down")
             break
         except Exception as e:
             print(f"Worker error: {str(e)}")
+            if job_json:
+                await redis_client.ack_job("chunking", job_json)
             await asyncio.sleep(1)
 
 

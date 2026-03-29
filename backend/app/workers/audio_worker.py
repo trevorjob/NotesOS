@@ -138,14 +138,16 @@ async def audio_worker():
     """
     print("🚀 Audio worker started")
 
-    client = await redis_client.get_client()
+    recovered = await redis_client.recover_orphaned_jobs("audio")
+    if recovered:
+        print(f"🔄 Audio worker recovered {recovered} orphaned job(s)")
 
     while True:
+        job_json = None
         try:
-            result = await client.brpop("queue:audio", timeout=5)
+            job_json = await redis_client.reliable_dequeue("audio", timeout=5)
 
-            if result:
-                _, job_json = result
+            if job_json:
                 job = json.loads(job_json)
 
                 job_id = job["id"]
@@ -158,12 +160,15 @@ async def audio_worker():
                 await redis_client.update_job_status(
                     job_id, "completed", result={"topic_id": job_data.get("topic_id")}
                 )
+                await redis_client.ack_job("audio", job_json)
 
         except asyncio.CancelledError:
             print("Audio worker shutting down")
             break
         except Exception as e:
             print(f"Audio worker error: {e}")
+            if job_json:
+                await redis_client.ack_job("audio", job_json)
             await asyncio.sleep(1)
 
 

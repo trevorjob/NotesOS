@@ -115,18 +115,20 @@ async def process_knowledge_job(job_data: dict):
 
 async def knowledge_worker():
     """
-    Main worker loop. Polls Redis queue:knowledge and processes jobs.
+    Main worker loop. Uses reliable BRPOPLPUSH so jobs survive worker restarts.
     """
     print("🚀 Knowledge worker started")
 
-    client = await redis_client.get_client()
+    recovered = await redis_client.recover_orphaned_jobs("knowledge")
+    if recovered:
+        print(f"🔄 Knowledge worker recovered {recovered} orphaned job(s)")
 
     while True:
+        job_json = None
         try:
-            result = await client.brpop("queue:knowledge", timeout=5)
+            job_json = await redis_client.reliable_dequeue("knowledge", timeout=5)
 
-            if result:
-                _, job_json = result
+            if job_json:
                 job = json.loads(job_json)
 
                 job_id = job["id"]
@@ -139,12 +141,15 @@ async def knowledge_worker():
                 await redis_client.update_job_status(
                     job_id, "completed", result={"topic_id": job_data.get("topic_id")}
                 )
+                await redis_client.ack_job("knowledge", job_json)
 
         except asyncio.CancelledError:
             print("Knowledge worker shutting down")
             break
         except Exception as e:
             print(f"Knowledge worker error: {e}")
+            if job_json:
+                await redis_client.ack_job("knowledge", job_json)
             await asyncio.sleep(1)
 
 
