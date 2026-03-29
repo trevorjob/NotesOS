@@ -92,8 +92,15 @@ export function CreateTopicModal({ isOpen, courseId, onClose, onCreated }: Creat
         } else {
           await api.resources.createText(topicId, { content: textContent.trim(), title: textTitle.trim() || undefined });
         }
-      } catch {
-        // Topic was created — navigate anyway, resources can be added later
+      } catch (e: unknown) {
+        const msg = (e as { response?: { data?: { detail?: string } }; message?: string })?.response?.data?.detail
+          || (e as Error)?.message
+          || 'Upload failed. You can add resources from the topic page.';
+        setError(msg);
+        setPhase('idle');
+        // Navigate to the topic anyway so the user can retry from the topic page
+        setTimeout(() => { reset(); onCreated(topicId); }, 3000);
+        return;
       }
     }
 
