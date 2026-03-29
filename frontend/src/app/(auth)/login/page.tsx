@@ -2,13 +2,15 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const redirect = searchParams.get('redirect');
   const { login, isLoading, error, clearError } = useAuthStore();
 
   const [email, setEmail] = useState('');
@@ -19,7 +21,8 @@ export default function LoginPage() {
     clearError();
     try {
       await login(email, password);
-      router.replace('/home');
+      const dest = redirect && redirect.startsWith('/') ? redirect : '/home';
+      router.replace(dest);
     } catch {
       // error already in store
     }

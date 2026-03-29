@@ -9,6 +9,7 @@ import { api } from '@/lib/api';
 import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
+import { CreateTopicModal } from '@/components/topic/CreateTopicModal';
 
 const EXPANDED_KEY = 'notesos-sidebar-expanded';
 
@@ -52,7 +53,7 @@ interface SidebarProps {
 export function Sidebar({ onClose }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const { courses, fetchCourses, selectCourse, createTopic } = useCourseStore();
+  const { courses, fetchCourses, selectCourse } = useCourseStore();
   const { semesters, activeSemesterId, fetchSemesters, joinSemester } = useSemesterStore();
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -62,7 +63,6 @@ export function Sidebar({ onClose }: SidebarProps) {
   const [showJoinCourse, setShowJoinCourse] = useState(false);
   const [showAddTopic, setShowAddTopic] = useState<string | null>(null);
   const [courseForm, setCourseForm] = useState({ code: '', name: '' });
-  const [topicForm, setTopicForm] = useState({ title: '' });
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
 
@@ -70,6 +70,14 @@ export function Sidebar({ onClose }: SidebarProps) {
   const [joinSemesterCode, setJoinSemesterCode] = useState('');
   const [joiningSemester, setJoiningSemester] = useState(false);
   const [joinSuccess, setJoinSuccess] = useState<string | null>(null);
+
+  const [copiedSemesterId, setCopiedSemesterId] = useState<string | null>(null);
+
+  function copyInviteLink(semesterId: string, inviteCode: string) {
+    navigator.clipboard.writeText(`${window.location.origin}/join?code=${inviteCode}`);
+    setCopiedSemesterId(semesterId);
+    setTimeout(() => setCopiedSemesterId(null), 2000);
+  }
 
   useEffect(() => {
     fetchCourses();
@@ -150,34 +158,6 @@ export function Sidebar({ onClose }: SidebarProps) {
     setFormError(''); setJoinSuccess(null);
   }
 
-  async function handleCreateTopic(courseId: string) {
-    if (!topicForm.title.trim()) {
-      setFormError('Topic title is required.');
-      return;
-    }
-    setSaving(true);
-    setFormError('');
-    try {
-      const course = courses.find((c) => c.id === courseId);
-      const orderIndex = (course?.topics?.length ?? 0) + 1;
-      const newTopic = await createTopic(courseId, { title: topicForm.title.trim(), order_index: orderIndex });
-      setTopicForm({ title: '' });
-      setShowAddTopic(null);
-      setExpanded((prev) => {
-        const next = { ...prev, [courseId]: true };
-        localStorage.setItem(EXPANDED_KEY, JSON.stringify(next));
-        return next;
-      });
-      const topicId = newTopic?.id;
-      if (topicId) {
-        navigate(`/courses/${courseId}/topics/${topicId}`);
-      }
-    } catch (e: unknown) {
-      setFormError((e as Error).message || 'Failed to create topic.');
-    } finally {
-      setSaving(false);
-    }
-  }
 
   const globalNavItems = [
     {
@@ -290,7 +270,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                         );
                       })}
                       <button
-                        onClick={() => { setShowAddTopic(course.id); setFormError(''); setTopicForm({ title: '' }); }}
+                        onClick={() => { setShowAddTopic(course.id); setFormError(''); }}
                         className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-[#6b6762] hover:text-[#9e9a94] transition-colors"
                       >
                         <PlusIcon /> New topic
@@ -316,6 +296,22 @@ export function Sidebar({ onClose }: SidebarProps) {
                         </p>
                         {isActive && (
                           <span className="text-[9px] bg-[#1a1917] text-white px-1.5 py-0.5 rounded-full shrink-0">current</span>
+                        )}
+                        {semester.invite_code && (
+                          <button
+                            onClick={() => copyInviteLink(semester.id, semester.invite_code!)}
+                            className="ml-auto shrink-0 text-[#4a4744] hover:text-[#9e9a94] transition-colors"
+                            title="Copy invite link"
+                          >
+                            {copiedSemesterId === semester.id ? (
+                              <span className="text-[9px] text-[#6b6762]">Copied!</span>
+                            ) : (
+                              <svg width="11" height="11" viewBox="0 0 14 14" fill="none">
+                                <rect x="4" y="4" width="8" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.3"/>
+                                <path d="M2 10V2h8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+                              </svg>
+                            )}
+                          </button>
                         )}
                       </div>
                       {semCourses.map(renderCourse)}
@@ -366,17 +362,21 @@ export function Sidebar({ onClose }: SidebarProps) {
         </div>
       </Modal>
 
-      {/* New Topic modal */}
-      <Modal isOpen={!!showAddTopic} onClose={() => setShowAddTopic(null)} title="New Topic">
-        <div className="space-y-3">
-          <Input label="Topic Title" value={topicForm.title} onChange={(e) => setTopicForm({ title: e.target.value })} placeholder="e.g. Week 4 — Memory Management" />
-          {formError && <p className="text-sm text-[#dc2626]">{formError}</p>}
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="ghost" size="sm" onClick={() => setShowAddTopic(null)}>Cancel</Button>
-            <Button size="sm" loading={saving} onClick={() => showAddTopic && handleCreateTopic(showAddTopic)}>Create</Button>
-          </div>
-        </div>
-      </Modal>
+      <CreateTopicModal
+        isOpen={!!showAddTopic}
+        courseId={showAddTopic ?? ''}
+        onClose={() => setShowAddTopic(null)}
+        onCreated={(topicId) => {
+          const courseId = showAddTopic!;
+          setShowAddTopic(null);
+          setExpanded((prev) => {
+            const next = { ...prev, [courseId]: true };
+            localStorage.setItem(EXPANDED_KEY, JSON.stringify(next));
+            return next;
+          });
+          navigate(`/courses/${courseId}/topics/${topicId}`);
+        }}
+      />
 
       {/* Join Semester modal */}
       <Modal isOpen={showJoinCourse} onClose={() => { setShowJoinCourse(false); resetJoin(); }} title="Join Semester">

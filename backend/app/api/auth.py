@@ -40,6 +40,7 @@ class RegisterRequest(BaseModel):
     password: str
     full_name: str
     study_personality: Optional[dict] = None
+    invite_code: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
@@ -222,6 +223,31 @@ async def register(request: RegisterRequest, db: AsyncSession = Depends(get_db))
         },
     )
     db.add(user)
+    await db.flush()
+
+    # Auto-join semester if invite code provided
+    if request.invite_code:
+        try:
+            from app.models.semester import Semester, SemesterMember, SemesterRole
+            from app.models.course import Course, CourseEnrollment
+            sem_result = await db.execute(
+                select(Semester).where(Semester.invite_code == request.invite_code)
+            )
+            semester = sem_result.scalar_one_or_none()
+            if semester:
+                db.add(SemesterMember(
+                    semester_id=semester.id,
+                    user_id=user.id,
+                    role=SemesterRole.MEMBER,
+                ))
+                courses_result = await db.execute(
+                    select(Course).where(Course.semester_id == semester.id, Course.is_active)
+                )
+                for course in courses_result.scalars().all():
+                    db.add(CourseEnrollment(user_id=user.id, course_id=course.id))
+        except Exception:
+            pass  # Never fail registration over an invite code issue
+
     await db.commit()
     await db.refresh(user)
 

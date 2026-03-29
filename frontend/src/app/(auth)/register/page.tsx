@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
@@ -59,6 +59,8 @@ function OptionCard<T extends string>({
 
 export default function RegisterPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const inviteCode = searchParams.get('code');
   const { register, updatePersonality, isLoading, error, clearError } = useAuthStore();
 
   const [step, setStep] = useState(1);
@@ -79,7 +81,7 @@ export default function RegisterPage() {
     e.preventDefault();
     clearError();
     try {
-      await register({ full_name: name, email, password });
+      await register({ full_name: name, email, password, ...(inviteCode ? { invite_code: inviteCode } : {}) });
       setStep(2);
     } catch {
       // error already in store
