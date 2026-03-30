@@ -184,3 +184,40 @@ alembic downgrade -1
 ### Global Workflow (from `~/.claude/CLAUDE.md`)
 
 The global config covers: TDD workflow, agent usage, git commit format (`feat/fix/refactor/...`), security checklist, and code quality standards. Refer to it for process — this file covers project-specific structure only.
+
+---
+
+## Design Context
+
+> Full design system details live in `.impeccable.md`. This section is the always-loaded summary.
+
+### Users
+Students (undergrads, self-directed learners) during active study sessions. They want to understand material, not just collect it. The interface competes with distraction — it must feel satisfying and personal.
+
+### Brand Personality
+**Creative, playful, bright.** Encouraging without being patronising. Speaks like a brilliant, slightly irreverent study partner. Short sentences. Light in tone. Active UI copy ("Let's see what you know" beats "Start quiz").
+
+**NOT:** edtech corporate, children's app, productivity minimalism, grunge/distressed.
+
+### Aesthetic Direction — Notebook
+The app feels like a creative student's physical notebook come to life. Texture and humanity on every surface. Half notebook, half polished app — the craft is the supporting character, content leads.
+
+**Key implementation details:**
+- **Background:** `#F5F3EE` warm cream + SVG noise/grain at 4–6% opacity. Never flat.
+- **Highlighter accent:** `rgba(217, 119, 6, 0.2)` semi-transparent amber — NOT flat amber. Used for active states, selected items, quiz correct answers.
+- **Caveat font** (Google Fonts, handwriting): small labels, annotations, metadata, breadcrumbs only. Never body text or headings.
+- **Notebook ruled lines:** 28px apart, 6% opacity, `#8B7355` — behind consolidated note sections only.
+- **Rough card borders:** SVG filter on consolidated note card and key points card only. Other cards stay clean.
+- **Hand-drawn SVG illustrations:** Empty states, section headers, loading states, focus mode margins. Ink-line / stipple style. Single colour (warm grey or amber).
+- **Focus mode margin doodles:** Static SVG doodles in left/right margins at viewport > 1100px.
+- **Dark mode — Night Journal:** Deep warm darks (`#1C1A17` base), same grain, amber accent glows slightly more vivid.
+
+### Design Principles
+1. **Texture before flatness** — every surface has weight and grain.
+2. **Playful restraint** — hand-drawn accents amplify content, never compete.
+3. **Study-forward** — delight is the retention mechanism, not decoration.
+4. **Notebook logic** — if it would exist in a well-loved student's notebook, it belongs here.
+5. **Both modes, same soul** — warm paper (light) and night journal (dark), same amber + grain constants.
+
+### Accessibility
+WCAG AA throughout. Grain never impedes text legibility. Illustrations are `aria-hidden`. Caveat font only for non-critical labels. Respect `prefers-reduced-motion`.

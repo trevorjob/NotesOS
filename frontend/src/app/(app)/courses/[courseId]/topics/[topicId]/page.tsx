@@ -129,13 +129,10 @@ export default function TopicPage() {
     fetchKnowledge(topicId);
   }, [topicId, courseId, selectCourse, fetchKnowledge, bump]);
 
-  // Fetch audio only if the topic has one or audio is already in store
+  // Fetch audio — always attempt so we don't miss it when the topic stub lacks has_audio
   useEffect(() => {
-    if (!topic) return;
-    if (topic.has_audio || topic.audio_status === 'completed' || topic.audio_status === 'processing') {
-      fetchAudio(topicId);
-    }
-  }, [topic, topicId, fetchAudio]);
+    fetchAudio(topicId);
+  }, [topicId, fetchAudio]);
 
   // Fetch resources if not already cached
   useEffect(() => {
