@@ -16,6 +16,7 @@ import { Sources, type Resource } from '@/components/topic/Sources';
 import { AIChatPanel } from '@/components/topic/AIChatPanel';
 import { FocusMode } from '@/components/topic/FocusMode';
 import { AddResourcesModal } from '@/components/topic/AddResourcesModal';
+import { topicsBeingPrepared } from '@/components/topic/CreateTopicModal';
 import { Button } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/Spinner';
 
@@ -33,6 +34,10 @@ interface TopicDetail {
 // Data stays until the user refreshes the page.
 const topicDetailCache = new Map<string, TopicDetail>();
 const resourceCache = new Map<string, Resource[]>();
+
+// Focus mode persists across topic navigation — only cleared by explicit user action.
+// Use an object so the property is mutable while the binding stays const.
+const _focusModeState = { active: false };
 
 export default function TopicPage() {
   const params = useParams<{ courseId: string; topicId: string }>();
@@ -73,9 +78,22 @@ export default function TopicPage() {
   const resourcesFetched = useRef(resourceCache.has(topicId));
 
   const [showChat, setShowChat] = useState(false);
-  const [focusMode, setFocusMode] = useState(false);
+  const [focusMode, setFocusModeRender] = useState(_focusModeState.active);
   const [showUpload, setShowUpload] = useState(false);
-  const [processingResources, setProcessingResources] = useState(false);
+
+  const setFocusMode = useCallback((v: boolean) => {
+    _focusModeState.active = v;
+    setFocusModeRender(v);
+  }, []);
+
+  // Initialise to true when this topic was just created with resources (module-level signal from CreateTopicModal)
+  const [processingResources, setProcessingResources] = useState(() => {
+    if (topicsBeingPrepared.has(topicId)) {
+      topicsBeingPrepared.delete(topicId);
+      return true;
+    }
+    return false;
+  });
 
   // ── Data fetching ───────────────────────────────────────────────────────
 
@@ -127,12 +145,16 @@ export default function TopicPage() {
     }
   }, [fetchResources]);
 
-  // Poll knowledge while processing
+  // Poll knowledge while processing/pending — also kick off immediately for freshly created topics.
+  // processingResources stays true until knowledge is done; we derive the banner separately.
   useEffect(() => {
-    if (knowledge?.status === 'processing') {
+    const needsPoll = knowledge?.status === 'processing'
+      || knowledge?.status === 'pending'
+      || (processingResources && knowledge?.status !== 'completed' && knowledge?.status !== 'failed');
+    if (needsPoll) {
       return startPollingKnowledge(topicId);
     }
-  }, [knowledge?.status, topicId, startPollingKnowledge]);
+  }, [knowledge?.status, processingResources, topicId, startPollingKnowledge]);
 
   // Poll audio while processing — only if we know audio exists
   useEffect(() => {
@@ -147,12 +169,12 @@ export default function TopicPage() {
       if ((e.key === 'f' || e.key === 'F') &&
         document.activeElement?.tagName !== 'INPUT' &&
         document.activeElement?.tagName !== 'TEXTAREA') {
-        setFocusMode((v) => !v);
+        setFocusMode(!_focusModeState.active);
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, []);
+  }, [setFocusMode]);
 
   // Save last visited topic + update recents list
   useEffect(() => {
@@ -241,8 +263,10 @@ export default function TopicPage() {
         </div>
       </div>
 
-      {/* Processing banner — shown after upload until knowledge synthesis completes */}
-      {(processingResources || knowledge?.status === 'processing') && (
+      {/* Processing banner — shown while workers are running or materials are freshly uploaded */}
+      {((processingResources && knowledge?.status !== 'completed' && knowledge?.status !== 'failed')
+        || knowledge?.status === 'processing'
+        || knowledge?.status === 'pending') && (
         <div className="flex items-center gap-3 bg-[#f0f9ff] border border-[#bae6fd] rounded-xl px-4 py-3">
           <span className="h-4 w-4 rounded-full border-2 border-[#0284c7] border-t-transparent animate-spin shrink-0" />
           <div className="flex-1 min-w-0">
@@ -274,8 +298,12 @@ export default function TopicPage() {
       {/* Sources */}
       <Sources resources={resources} />
 
-      {/* Empty state when no resources */}
-      {resources.length === 0 && (
+      {/* Empty state — hide while materials are being prepared/processed */}
+      {resources.length === 0
+        && !(processingResources && knowledge?.status !== 'completed' && knowledge?.status !== 'failed')
+        && knowledge?.status !== 'processing'
+        && knowledge?.status !== 'pending'
+        && (
         <div className="bg-white rounded-xl border border-[#dedad4] px-6 py-8 text-center">
           <p className="text-sm text-[#6b6762] mb-3">No materials uploaded yet.</p>
           <Button size="sm" onClick={() => setShowUpload(true)}>+ Add Materials</Button>
@@ -356,10 +384,6 @@ export default function TopicPage() {
           fetchResources();
           // Start polling immediately so we catch when the workers kick off
           startPollingKnowledge(topicId);
-          // Clear banner when knowledge synthesis completes
-          if (knowledge?.status === 'completed') {
-            setProcessingResources(false);
-          }
         }}
       />
     </>

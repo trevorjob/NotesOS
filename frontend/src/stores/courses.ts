@@ -37,6 +37,10 @@ interface CourseState {
     error: string | null;
     _isFetchingCourses: boolean;
     _isSelectingCourse: boolean;
+    // Session-level flags — NOT persisted. False after every page refresh so we
+    // always re-fetch from the backend on the first call of each session.
+    _sessionFetched: boolean;
+    _sessionSelectedCourseIds: string[];
 
     // Actions
     fetchCourses: (force?: boolean) => Promise<void>;
@@ -76,26 +80,29 @@ export const useCourseStore = create<CourseState>()(
             error: null,
             _isFetchingCourses: false,
             _isSelectingCourse: false,
+            _sessionFetched: false,
+            _sessionSelectedCourseIds: [],
 
             fetchCourses: async (force = false) => {
                 // Skip if already in-flight (dedup parallel calls e.g. GlassNav + page mounting together)
                 if (get()._isFetchingCourses) return;
-                // Skip if we already have data and caller hasn't forced a refresh
-                if (!force && get().courses.length > 0) return;
+                // Skip only if already fetched this session — not just if localStorage has data.
+                // _sessionFetched resets to false on every page refresh so we always get fresh data.
+                if (!force && get()._sessionFetched) return;
 
                 set({ _isFetchingCourses: true, isLoading: true, error: null });
 
                 // Offline: serve from IndexedDB
                 if (typeof navigator !== 'undefined' && !navigator.onLine) {
                     const cached = await offlineDb.getCourses();
-                    set({ courses: cached as Course[], isLoading: false, _isFetchingCourses: false });
+                    set({ courses: cached as Course[], isLoading: false, _isFetchingCourses: false, _sessionFetched: true });
                     return;
                 }
 
                 try {
                     const response = await api.courses.getAll();
                     const courses = response.data.courses || [];
-                    set({ courses, isLoading: false, _isFetchingCourses: false });
+                    set({ courses, isLoading: false, _isFetchingCourses: false, _sessionFetched: true });
                     offlineDb.putCourses(courses).catch(() => { });
                 } catch (error) {
                     const cached = await offlineDb.getCourses();
@@ -145,9 +152,13 @@ export const useCourseStore = create<CourseState>()(
             },
 
             selectCourse: async (courseId: string) => {
-                // Already loaded this course with topics — skip the network round-trip
-                const { currentCourse, _isSelectingCourse } = get();
+                const { currentCourse, _isSelectingCourse, _sessionSelectedCourseIds } = get();
+
+                // Skip if already fetched this course this session AND we still have the data.
+                // _sessionSelectedCourseIds resets to [] on every page refresh.
+                const fetchedThisSession = _sessionSelectedCourseIds.includes(courseId);
                 if (
+                    fetchedThisSession &&
                     currentCourse?.id === courseId &&
                     Array.isArray(currentCourse?.topics)
                 ) return;
@@ -184,6 +195,9 @@ export const useCourseStore = create<CourseState>()(
                         courses: state.courses.map((c) => c.id === courseId ? { ...c, topics } : c),
                         isLoading: false,
                         _isSelectingCourse: false,
+                        _sessionSelectedCourseIds: state._sessionSelectedCourseIds.includes(courseId)
+                            ? state._sessionSelectedCourseIds
+                            : [...state._sessionSelectedCourseIds, courseId],
                     }));
 
                     offlineDb.putCourses([courseResponse.data.course]).catch(() => { });
@@ -253,6 +267,8 @@ export const useCourseStore = create<CourseState>()(
         }),
         {
             name: 'notesos-courses',
+            // _sessionFetched and _sessionSelectedCourseIds are intentionally excluded —
+            // they must reset to false/[] on every page refresh so we always re-fetch.
             partialize: (state) => ({
                 currentCourse: state.currentCourse,
                 courses: state.courses,

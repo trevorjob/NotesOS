@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 
 interface ModalProps {
   isOpen: boolean;
@@ -14,7 +15,7 @@ const widths = { sm: 'max-w-sm', md: 'max-w-md', lg: 'max-w-lg' };
 
 export function Modal({ isOpen, onClose, title, children, maxWidth = 'md' }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
-
+  // Track client-side mount so createPortal only runs in the browser
   useEffect(() => {
     if (!isOpen) return;
     const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -26,9 +27,9 @@ export function Modal({ isOpen, onClose, title, children, maxWidth = 'md' }: Mod
     };
   }, [isOpen, onClose]);
 
-  if (!isOpen) return null;
+  if (!isOpen || typeof document === 'undefined') return null;
 
-  return (
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
       role="dialog"
@@ -65,6 +66,7 @@ export function Modal({ isOpen, onClose, title, children, maxWidth = 'md' }: Mod
         {/* Body */}
         <div className="px-6 py-5">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

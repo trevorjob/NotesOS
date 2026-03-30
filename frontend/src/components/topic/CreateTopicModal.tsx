@@ -7,6 +7,10 @@ import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 
+// Topics that were just created with resources — read by the topic page to show
+// the "preparing materials" banner immediately on navigation.
+export const topicsBeingPrepared = new Set<string>();
+
 interface CreateTopicModalProps {
   isOpen: boolean;
   courseId: string;
@@ -26,7 +30,6 @@ export function CreateTopicModal({ isOpen, courseId, onClose, onCreated }: Creat
 
   // File state
   const [files, setFiles] = useState<File[]>([]);
-  const [fileTitle, setFileTitle] = useState('');
 
   // Text state
   const [textTitle, setTextTitle] = useState('');
@@ -40,7 +43,7 @@ export function CreateTopicModal({ isOpen, courseId, onClose, onCreated }: Creat
 
   function reset() {
     setTitle(''); setTab('files');
-    setFiles([]); setFileTitle('');
+    setFiles([]);
     setTextTitle(''); setTextContent('');
     setPhase('idle'); setProgress(0); setError('');
   }
@@ -99,9 +102,10 @@ export function CreateTopicModal({ isOpen, courseId, onClose, onCreated }: Creat
     // Step 2: Upload resources if provided
     if (hasResources) {
       setPhase('uploading');
+      topicsBeingPrepared.add(topicId);
       try {
         if (tab === 'files') {
-          await api.resources.upload(topicId, courseId, files, fileTitle || undefined, false, setProgress);
+          await api.resources.upload(topicId, courseId, files, undefined, false, setProgress);
         } else {
           await api.resources.createText(topicId, { content: textContent.trim(), title: textTitle.trim() || undefined });
         }
@@ -179,16 +183,6 @@ export function CreateTopicModal({ isOpen, courseId, onClose, onCreated }: Creat
                 </ul>
               )}
 
-              <div>
-                <label className="block text-xs font-medium text-[#6b6762] mb-1">File title (optional)</label>
-                <input
-                  value={fileTitle}
-                  onChange={(e) => setFileTitle(e.target.value)}
-                  disabled={busy}
-                  placeholder="e.g. Lecture 4 slides"
-                  className="w-full bg-[#f0eeea] border border-[#dedad4] rounded-lg px-3 py-2 text-sm text-[#1a1917] placeholder-[#9e9a94] focus:outline-none focus:border-[#1a1917]"
-                />
-              </div>
             </div>
           )}
 
