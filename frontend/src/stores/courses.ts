@@ -9,10 +9,9 @@ import { AxiosError } from 'axios';
 import { api } from '@/lib/api';
 import { offlineDb } from '@/lib/offlineDb';
 
-// Lazy import to avoid circular deps — these caches live in the topic page module.
+// Lazy import to avoid circular deps — caches live in a shared lib module.
 function clearTopicPageCaches(topicId: string) {
-    // Dynamic import so the store doesn't depend on a page module at load time.
-    import('@/app/(app)/courses/[courseId]/topics/[topicId]/page').then((m) => {
+    import('@/lib/topicCache').then((m) => {
         m.topicDetailCache.delete(topicId);
         m.resourceCache.delete(topicId);
     }).catch(() => {});

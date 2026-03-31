@@ -17,6 +17,7 @@ import { AIChatPanel } from '@/components/topic/AIChatPanel';
 import { FocusMode } from '@/components/topic/FocusMode';
 import { AddResourcesModal } from '@/components/topic/AddResourcesModal';
 import { topicsBeingPrepared } from '@/components/topic/CreateTopicModal';
+import { topicDetailCache, resourceCache } from '@/lib/topicCache';
 import { Button } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/Spinner';
 
@@ -29,11 +30,6 @@ interface TopicDetail {
   audio_status?: string;
   has_audio?: boolean;
 }
-
-// Module-level caches — survive component re-mounts and back/forward navigation.
-// Data stays until the user refreshes the page.
-export const topicDetailCache = new Map<string, TopicDetail>();
-export const resourceCache = new Map<string, Resource[]>();
 
 // Focus mode persists across topic navigation — only cleared by explicit user action.
 // Use an object so the property is mutable while the binding stays const.
