@@ -19,7 +19,7 @@ from app.models.resource import Resource
 from app.models.test import Test, TestQuestion, TestType
 from app.api.auth import get_current_user
 from app.models.user import User
-from app.services.cache import cache, topics_list_key, topic_key, course_key
+from app.services.cache import cache, topics_list_key, topic_key, course_key, courses_list_key
 from app.services.question_generator import question_generator
 from app.config import settings
 
@@ -153,7 +153,7 @@ async def create_topic(
     await db.commit()
     await db.refresh(topic)
 
-    await _invalidate_topic_caches(course_id)
+    await _invalidate_topic_caches(course_id, db=db)
 
     return _topic_to_dict(topic)
 
@@ -244,7 +244,7 @@ async def update_topic(
     await db.commit()
     await db.refresh(topic)
 
-    await _invalidate_topic_caches(str(topic.course_id), topic_id)
+    await _invalidate_topic_caches(str(topic.course_id), topic_id, db=db)
 
     return _topic_to_dict(topic)
 
@@ -359,7 +359,7 @@ async def delete_topic(
     await db.delete(topic)
     await db.commit()
 
-    await _invalidate_topic_caches(course_id, topic_id)
+    await _invalidate_topic_caches(course_id, topic_id, db=db)
 
     return None
 
@@ -381,9 +381,23 @@ async def _assert_enrolled(db: AsyncSession, user_id, course_id: str) -> None:
         )
 
 
-async def _invalidate_topic_caches(course_id: str, topic_id: str | None = None) -> None:
-    """Invalidate list + course detail + optionally individual topic cache."""
+async def _invalidate_topic_caches(
+    course_id: str,
+    topic_id: str | None = None,
+    db: AsyncSession | None = None,
+) -> None:
+    """Invalidate list + course detail + optionally individual topic cache.
+    If db is provided, also busts the courses-list cache for all enrolled users
+    (topics are now embedded in that response)."""
     await cache.delete(topics_list_key(course_id))
     await cache.delete(course_key(course_id))
     if topic_id:
         await cache.delete(topic_key(topic_id))
+    if db is not None:
+        enrolled = await db.execute(
+            select(CourseEnrollment.user_id).where(
+                CourseEnrollment.course_id == uuid.UUID(course_id)
+            )
+        )
+        for (user_id,) in enrolled.all():
+            await cache.delete(courses_list_key(str(user_id)))

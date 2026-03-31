@@ -157,6 +157,25 @@ async def list_courses(
                 "studied_at": row.last_activity.isoformat(),
             }
 
+    # Batch topics for all courses — avoids N+1 and lets the frontend render
+    # the sidebar and home page without a separate selectCourse call per course.
+    topics_result = await db.execute(
+        select(Topic)
+        .where(Topic.course_id.in_(course_ids))
+        .order_by(Topic.order_index)
+    )
+    topics_by_course: dict = {}
+    for topic in topics_result.scalars().all():
+        cid = str(topic.course_id)
+        if cid not in topics_by_course:
+            topics_by_course[cid] = []
+        topics_by_course[cid].append({
+            "id": str(topic.id),
+            "title": topic.title,
+            "order_index": topic.order_index,
+            "week_number": topic.week_number,
+        })
+
     courses = [
         {
             "id": str(course.id),
@@ -168,6 +187,7 @@ async def list_courses(
             "joined_at": joined_at.isoformat(),
             "completion_percentage": completion_map.get(str(course.id), 0.0),
             "last_studied": last_studied_map.get(str(course.id)),
+            "topics": topics_by_course.get(str(course.id), []),
         }
         for course, joined_at in rows
     ]
@@ -391,9 +411,10 @@ async def create_topic(
     await db.commit()
     await db.refresh(topic)
 
-    # Invalidate course + topic list caches
+    # Invalidate course + topic list caches + the user's courses list (topics are now embedded)
     await cache.delete(course_key(course_id))
     await cache.delete(topics_list_key(course_id))
+    await cache.delete(courses_list_key(str(current_user.id)))
 
     return {
         "topic": {

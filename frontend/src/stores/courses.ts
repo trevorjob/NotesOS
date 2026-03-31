@@ -9,6 +9,15 @@ import { AxiosError } from 'axios';
 import { api } from '@/lib/api';
 import { offlineDb } from '@/lib/offlineDb';
 
+// Lazy import to avoid circular deps — these caches live in the topic page module.
+function clearTopicPageCaches(topicId: string) {
+    // Dynamic import so the store doesn't depend on a page module at load time.
+    import('@/app/(app)/courses/[courseId]/topics/[topicId]/page').then((m) => {
+        m.topicDetailCache.delete(topicId);
+        m.resourceCache.delete(topicId);
+    }).catch(() => {});
+}
+
 interface Topic {
     id: string;
     title: string;
@@ -102,7 +111,14 @@ export const useCourseStore = create<CourseState>()(
                 try {
                     const response = await api.courses.getAll();
                     const courses = response.data.courses || [];
-                    set({ courses, isLoading: false, _isFetchingCourses: false, _sessionFetched: true });
+                    set({
+                        courses,
+                        isLoading: false,
+                        _isFetchingCourses: false,
+                        _sessionFetched: true,
+                        // Mark all courses as session-fetched since topics are now embedded
+                        _sessionSelectedCourseIds: courses.map((c: { id: string }) => c.id),
+                    });
                     offlineDb.putCourses(courses).catch(() => { });
                 } catch (error) {
                     const cached = await offlineDb.getCourses();
@@ -234,6 +250,7 @@ export const useCourseStore = create<CourseState>()(
                     const response = await api.topics.update(topicId, data);
                     const updatedTopic = response.data as Topic;
 
+                    clearTopicPageCaches(topicId);
                     set({ currentCourse: null });
                     await get().selectCourse(courseId);
 
@@ -251,6 +268,7 @@ export const useCourseStore = create<CourseState>()(
                 try {
                     await api.topics.delete(topicId);
 
+                    clearTopicPageCaches(topicId);
                     set({ currentCourse: null });
                     await get().selectCourse(courseId);
                 } catch (error) {
@@ -261,7 +279,7 @@ export const useCourseStore = create<CourseState>()(
                 }
             },
 
-            clearCurrentCourse: () => set({ currentCourse: null }),
+            clearCurrentCourse: () => set({ currentCourse: null, _sessionFetched: false, _sessionSelectedCourseIds: [] }),
             setError: (error: string | null) => set({ error }),
             clearError: () => set({ error: null }),
         }),

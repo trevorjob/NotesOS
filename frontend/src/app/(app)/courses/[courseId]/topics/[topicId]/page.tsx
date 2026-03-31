@@ -32,8 +32,8 @@ interface TopicDetail {
 
 // Module-level caches — survive component re-mounts and back/forward navigation.
 // Data stays until the user refreshes the page.
-const topicDetailCache = new Map<string, TopicDetail>();
-const resourceCache = new Map<string, Resource[]>();
+export const topicDetailCache = new Map<string, TopicDetail>();
+export const resourceCache = new Map<string, Resource[]>();
 
 // Focus mode persists across topic navigation — only cleared by explicit user action.
 // Use an object so the property is mutable while the binding stays const.
