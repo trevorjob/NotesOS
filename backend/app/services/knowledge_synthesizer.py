@@ -17,6 +17,9 @@ from app.config import settings
 from app.models.course import Topic
 from app.models.knowledge import KnowledgeStatus, TopicKnowledge
 from app.models.resource import Resource, ResourceChunk
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class KnowledgeSynthesizer:
@@ -98,7 +101,7 @@ class KnowledgeSynthesizer:
             knowledge.status = KnowledgeStatus.FAILED
             knowledge.error_message = str(e)
             await db.commit()
-            print(f"[KNOWLEDGE] Synthesis failed for topic {topic_id}: {e}")
+            logger.error("Knowledge synthesis failed", exc_info=True, extra={"topic_id": str(topic_id)})
 
         return knowledge
 
@@ -159,8 +162,8 @@ class KnowledgeSynthesizer:
                 return await self._call_deepseek(prompt)
             # Fallback: Claude
             return await self._call_claude(prompt)
-        except Exception as e:
-            print(f"[KNOWLEDGE] AI call failed: {e}")
+        except Exception:
+            logger.error("Knowledge AI call failed", exc_info=True)
             raise
 
     async def _call_deepseek(self, prompt: str) -> Dict[str, Any]:
@@ -176,7 +179,7 @@ class KnowledgeSynthesizer:
                     "model": "deepseek-chat",
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.3,
-                    "max_tokens": 4000,
+                    "max_tokens": 8000,
                 },
                 timeout=60.0,
             )
@@ -196,7 +199,7 @@ class KnowledgeSynthesizer:
                 },
                 json={
                     "model": "claude-haiku-4-5-20251001",
-                    "max_tokens": 4000,
+                    "max_tokens": 8000,
                     "messages": [{"role": "user", "content": prompt}],
                 },
                 timeout=60.0,

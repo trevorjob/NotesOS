@@ -29,6 +29,7 @@ from app.services.vision_transcribe import vision_transcribe
 from app.services.redis_client import redis_client
 from app.services.cache import cache, resources_list_key, resource_key
 from app.config import settings
+from app.models.course import CourseEnrollment
 
 
 router = APIRouter()
@@ -262,6 +263,11 @@ async def create_text_resource(
         "chunking", {"resource_id": str(resource.id), "text": resource.content}
     )
 
+    # Notify other course members about the new resource
+    await _notify_course_members_resource_uploaded(
+        db, topic.course_id, current_user.id, current_user.full_name, title, topic_id
+    )
+
     # Invalidate resource list cache for this topic
     await cache.delete_pattern(f"notesos:v1:resources:topic:{topic_id}:")
 
@@ -435,6 +441,13 @@ async def upload_resources_from_urls(
         )
 
     await cache.delete_pattern(f"notesos:v1:resources:topic:{body.topic_id}:")
+
+    # Notify other course members about the new upload
+    upload_title = body.title or f"{len(responses)} file(s)"
+    await _notify_course_members_resource_uploaded(
+        db, topic.course_id, current_user.id, current_user.full_name, upload_title, body.topic_id
+    )
+
     return responses
 
 
@@ -926,3 +939,34 @@ async def retranscribe_resource(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Re-transcription failed: {str(e)}",
         )
+
+
+async def _notify_course_members_resource_uploaded(
+    db,
+    course_id,
+    uploader_id,
+    uploader_name: str,
+    resource_title: str,
+    topic_id: str,
+) -> None:
+    """Notify all enrolled course members (except the uploader) about a new resource."""
+    from app.services.notifications import create_and_push_notification
+    from app.models.notification import NotificationType
+
+    result = await db.execute(
+        select(CourseEnrollment.user_id).where(CourseEnrollment.course_id == course_id)
+    )
+    member_ids = [row[0] for row in result.fetchall() if row[0] != uploader_id]
+
+    for member_id in member_ids:
+        try:
+            await create_and_push_notification(
+                db=db,
+                user_id=member_id,
+                notif_type=NotificationType.RESOURCE_UPLOADED,
+                title=f"{uploader_name} added a resource",
+                body=resource_title,
+                meta_data={"topic_id": str(topic_id), "course_id": str(course_id)},
+            )
+        except Exception:
+            pass  # Non-fatal — don't fail the upload if a notification errors

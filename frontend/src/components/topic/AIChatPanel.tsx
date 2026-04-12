@@ -72,7 +72,7 @@ export function AIChatPanel({ topicId, courseId, onClose }: AIChatPanelProps) {
 
   async function send() {
     const text = input.trim();
-    if (!text || loading) return;
+    if (!text || loading || loadingHistory) return;
 
     const userMsg: Message = { id: Date.now().toString(), role: 'user', content: text };
     setMessages((prev) => [...prev, userMsg]);
@@ -208,7 +208,7 @@ export function AIChatPanel({ topicId, courseId, onClose }: AIChatPanelProps) {
             />
             <button
               onClick={send}
-              disabled={!input.trim() || loading}
+              disabled={!input.trim() || loading || loadingHistory}
               className="h-10 w-10 rounded-xl bg-[#1a1917] text-white flex items-center justify-center disabled:opacity-40 hover:opacity-90 transition-opacity shrink-0"
             >
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none">

@@ -6,6 +6,7 @@
 import { create } from 'zustand';
 import { api } from '@/lib/api';
 import { WebSocketClient } from '@/lib/websocket';
+import { useKnowledgeStore } from '@/stores/knowledge';
 
 export interface AppNotification {
     id: string;
@@ -18,7 +19,8 @@ export interface AppNotification {
 
 export interface Toast {
     id: string;
-    message: string;
+    title: string;
+    body?: string;
     variant: 'info' | 'success' | 'error';
 }
 
@@ -30,10 +32,12 @@ interface NotificationState {
 
     fetchUnreadCount: () => Promise<void>;
     fetchNotifications: () => Promise<void>;
-    addToast: (message: string, variant?: Toast['variant']) => void;
+    addToast: (title: string, variant?: Toast['variant'], body?: string) => void;
     dismissToast: (id: string) => void;
     markRead: (id: string) => Promise<void>;
     markAllRead: () => Promise<void>;
+    deleteNotification: (id: string) => Promise<void>;
+    clearAllNotifications: () => Promise<void>;
     initWebSocket: (courseId: string) => () => void;
     pushNotification: (n: AppNotification) => void;
 }
@@ -61,9 +65,9 @@ export const useNotificationStore = create<NotificationState>()((set, get) => ({
         } catch { /* ignore */ }
     },
 
-    addToast: (message, variant = 'info') => {
+    addToast: (title, variant = 'info', body?) => {
         const id = Math.random().toString(36).slice(2);
-        set((s) => ({ toasts: [...s.toasts.slice(-2), { id, message, variant }] }));
+        set((s) => ({ toasts: [...s.toasts.slice(-2), { id, title, body, variant }] }));
         setTimeout(() => get().dismissToast(id), 5000);
     },
 
@@ -91,6 +95,26 @@ export const useNotificationStore = create<NotificationState>()((set, get) => ({
         } catch { /* ignore */ }
     },
 
+    deleteNotification: async (id) => {
+        try {
+            await api.notifications.deleteOne(id);
+            set((s) => {
+                const removed = s.notifications.find((n) => n.id === id);
+                return {
+                    notifications: s.notifications.filter((n) => n.id !== id),
+                    unreadCount: removed && !removed.is_read ? Math.max(0, s.unreadCount - 1) : s.unreadCount,
+                };
+            });
+        } catch { /* ignore */ }
+    },
+
+    clearAllNotifications: async () => {
+        try {
+            await api.notifications.deleteAll();
+            set({ notifications: [], unreadCount: 0 });
+        } catch { /* ignore */ }
+    },
+
     pushNotification: (n) => {
         set((s) => ({
             notifications: [n, ...s.notifications.filter((x) => x.id !== n.id)],
@@ -107,22 +131,37 @@ export const useNotificationStore = create<NotificationState>()((set, get) => ({
                 const { addToast, pushNotification, fetchUnreadCount } = get();
 
                 if (msg.type === 'grading:complete') {
-                    // Fires once when the whole test is graded (backend guarantees this).
-                    // The test page handles navigation; we just update the bell count.
                     fetchUnreadCount();
+                    addToast('Test graded', 'success', 'Your answers have been reviewed. Check your results.');
                 } else if (msg.type === 'processing_status') {
                     if (msg.status === 'completed') {
-                        addToast('Resource processed and ready.', 'success');
+                        addToast('Resource ready', 'success', 'Your resource has been processed and is ready to use.');
                     } else if (msg.status === 'failed') {
-                        addToast('Resource processing failed.', 'error');
+                        addToast('Processing failed', 'error', 'We couldn\'t process this resource. Try re-uploading it.');
                     }
                 } else if (msg.type === 'fact_check:complete') {
-                    addToast('AI summary ready for your resource.', 'info');
+                    addToast('AI summary ready', 'info', 'AI analysis is ready for your resource.');
+                } else if (msg.type === 'knowledge_updated') {
+                    // Re-fetch knowledge for this topic so the store reflects the new synthesis,
+                    // then show a toast so the user knows their notes were updated.
+                    useKnowledgeStore.getState().forceRefetchKnowledge(msg.topic_id);
+                    addToast('Notes updated', 'success', 'Study notes have been regenerated with your new materials.');
+                } else if (msg.type === 'knowledge_status' && msg.status === 'processing') {
+                    // Worker has started synthesising — keep the UI in a processing state.
+                    const existing = useKnowledgeStore.getState().topicKnowledge[msg.topic_id];
+                    if (existing) {
+                        useKnowledgeStore.setState((s) => ({
+                            topicKnowledge: {
+                                ...s.topicKnowledge,
+                                [msg.topic_id]: { ...existing, status: 'processing' as const },
+                            },
+                        }));
+                    }
                 } else if (msg.type === 'notification') {
                     const n = msg.data as AppNotification;
                     if (n?.id) {
                         pushNotification(n);
-                        addToast(n.title, 'info');
+                        addToast(n.title, 'info', n.body || undefined);
                     }
                 }
             },

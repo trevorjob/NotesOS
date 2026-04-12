@@ -462,6 +462,10 @@ export const api = {
         markRead: (id: string) => apiClient.patch(`/api/notifications/${id}/read`),
 
         markAllRead: () => apiClient.patch('/api/notifications/read-all'),
+
+        deleteOne: (id: string) => apiClient.delete(`/api/notifications/${id}`),
+
+        deleteAll: () => apiClient.delete('/api/notifications'),
     },
 
     // Progress

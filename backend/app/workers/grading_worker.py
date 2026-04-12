@@ -15,6 +15,9 @@ from app.models.test import TestAnswer, TestAttempt, AnswerStatus
 from app.services.redis_client import redis_client
 from app.services.transcription import transcription_service
 from app.services.grader import grader
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 async def process_grading_job(job_data: dict):
@@ -29,10 +32,10 @@ async def process_grading_job(job_data: dict):
     is_voice = job_data.get("is_voice", False)
 
     if not answer_id:
-        print("[GRADING WORKER] Missing answer_id in job data")
+        logger.warning("Missing answer_id in grading job")
         return
 
-    print(f"[GRADING WORKER] Processing grading job for answer {answer_id}")
+    logger.info("Processing grading job", extra={"answer_id": answer_id})
 
     async with worker_session() as db:
         try:
@@ -49,7 +52,7 @@ async def process_grading_job(job_data: dict):
             answer = result.scalar_one_or_none()
 
             if not answer:
-                print(f"[GRADING WORKER] Answer {answer_id} not found")
+                logger.warning("Answer not found", extra={"answer_id": answer_id})
                 return
 
             # Save scalars before any commit (relationships expire after commit)
@@ -62,13 +65,13 @@ async def process_grading_job(job_data: dict):
 
             # 1. If voice answer, transcribe first
             if is_voice and answer.answer_audio_url:
-                print(f"[GRADING WORKER] Transcribing audio for answer {answer_id}")
+                logger.info("Transcribing audio", extra={"answer_id": answer_id})
                 transcription_result = await transcription_service.transcribe_audio(
                     answer.answer_audio_url
                 )
                 student_answer_text = transcription_result["text"]
                 answer.transcription = student_answer_text
-                print(f"[GRADING WORKER] Transcription: {student_answer_text[:100]}...")
+                logger.info("Transcription complete", extra={"answer_id": answer_id, "preview": student_answer_text[:100]})
 
             # 1b. Skip AI grading for blank/skipped answers — score 0 immediately
             if not student_answer_text.strip():
@@ -80,7 +83,7 @@ async def process_grading_job(job_data: dict):
                 answer.status = AnswerStatus.NEEDS_REVIEW
                 await db.commit()
                 all_done = await _update_attempt_score(db, attempt_id)
-                print(f"[GRADING WORKER] Blank answer — scored 0 without AI call")
+                logger.info("Blank answer scored 0", extra={"answer_id": answer_id})
                 if all_done:
                     await _broadcast_and_notify(db, attempt_id, course_id, user_id)
                 return
@@ -96,7 +99,7 @@ async def process_grading_job(job_data: dict):
                 topic_name = topic_obj.title if topic_obj else ""
 
             # 3. Grade the answer
-            print(f"[GRADING WORKER] Grading answer {answer_id}")
+            logger.info("Grading answer", extra={"answer_id": answer_id})
             grading_result = await grader.grade_answer(
                 question=question.question_text,
                 expected_answer=question.correct_answer or "",
@@ -124,8 +127,7 @@ async def process_grading_job(job_data: dict):
 
             await db.commit()
 
-            print(f"[GRADING WORKER] Score: {grading_result['score']}/10")
-            print(f"[GRADING WORKER] Encouragement: {grading_result['encouragement']}")
+            logger.info("Answer graded", extra={"answer_id": answer_id, "score": grading_result["score"]})
 
             # 4. Update test attempt total score; returns True if all answers are now graded
             all_done = await _update_attempt_score(db, attempt_id)
@@ -134,11 +136,8 @@ async def process_grading_job(job_data: dict):
             if all_done:
                 await _broadcast_and_notify(db, attempt_id, course_id, user_id)
 
-        except Exception as e:
-            print(f"[GRADING WORKER] Error processing job: {e}")
-            import traceback
-
-            traceback.print_exc()
+        except Exception:
+            logger.error("Grading job failed", exc_info=True, extra={"answer_id": answer_id})
             await db.rollback()
 
 
@@ -179,8 +178,8 @@ async def _broadcast_and_notify(db, attempt_id, course_id, user_id) -> None:
                 body=f"You scored {score_pct}% on your test.",
                 meta_data={"attempt_id": str(attempt_id), "course_id": course_id or ""},
             )
-        except Exception as notif_err:
-            print(f"[GRADING WORKER] Notification error: {notif_err}")
+        except Exception:
+            logger.error("Failed to send grading notification", exc_info=True)
 
 
 async def _update_attempt_score(db, attempt_id) -> bool:
@@ -206,16 +205,14 @@ async def _update_attempt_score(db, attempt_id) -> bool:
             attempt.completed_at = datetime.utcnow()
         await db.commit()
 
-        print(
-            f"[GRADING WORKER] Updated attempt {attempt_id} total score: {total_score}"
-        )
+        logger.info("Attempt score updated", extra={"attempt_id": str(attempt_id), "total_score": total_score})
 
     return bool(all_graded and attempt and (attempt.completed_at or now_completed))
 
 
 async def start_grading_worker():
     """Start the grading worker to process jobs from Redis."""
-    print("[GRADING WORKER] Starting grading worker...")
+    logger.info("Grading worker started")
 
     while True:
         try:
@@ -228,8 +225,8 @@ async def start_grading_worker():
                 # No jobs available, wait before polling again
                 await asyncio.sleep(1)
 
-        except Exception as e:
-            print(f"[GRADING WORKER] Worker error: {e}")
+        except Exception:
+            logger.error("Grading worker error", exc_info=True)
             await asyncio.sleep(5)
 
 

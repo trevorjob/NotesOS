@@ -251,6 +251,14 @@ async def register(request: RegisterRequest, db: AsyncSession = Depends(get_db))
     await db.commit()
     await db.refresh(user)
 
+    # Welcome email — fire-and-forget, never block registration
+    try:
+        import asyncio as _asyncio
+        from app.services.email import send_welcome_email
+        _asyncio.ensure_future(send_welcome_email(user.email, user.full_name))
+    except Exception:
+        pass
+
     # Generate tokens
     access_token = create_access_token(data={"sub": str(user.id)})
     refresh_token = await create_refresh_token(user.id, db)

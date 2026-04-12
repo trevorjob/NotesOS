@@ -16,6 +16,9 @@ from app.models.knowledge import AudioLesson, KnowledgeStatus, TopicKnowledge
 from app.services.audio_generator import audio_generator
 from app.services.redis_client import redis_client
 from app.services.websocket import connection_manager
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 AsyncSessionLocal = async_session_maker
 
@@ -47,7 +50,7 @@ async def process_audio_job(job_data: dict):
             knowledge = result.scalar_one_or_none()
 
             if not knowledge or knowledge.status != KnowledgeStatus.COMPLETED:
-                print(f"[AUDIO] Skipping: knowledge {knowledge_id} not ready")
+                logger.warning("Skipping audio job: knowledge not ready", extra={"knowledge_id": str(knowledge_id)})
                 return
 
             topic_result = await db.execute(
@@ -69,7 +72,7 @@ async def process_audio_job(job_data: dict):
             knowledge_content = knowledge  # still in-memory after session closes
 
     except Exception as e:
-        print(f"❌ Audio worker error (setup) for topic {topic_id}: {e}")
+        logger.error("Audio worker setup failed", exc_info=True, extra={"topic_id": str(topic_id)})
         return
 
     # Phase 2: heavy external work — no DB session held open
@@ -82,7 +85,7 @@ async def process_audio_job(job_data: dict):
         audio_url, duration = await audio_generator.upload_audio(audio_bytes, topic_id)
     except Exception as e:
         error = e
-        print(f"❌ Audio worker error (generation) for topic {topic_id}: {e}")
+        logger.error("Audio generation failed", exc_info=True, extra={"topic_id": str(topic_id)})
 
     # Phase 3: persist result — fresh session
     try:
@@ -107,7 +110,7 @@ async def process_audio_job(job_data: dict):
             await db.commit()
 
     except Exception as e:
-        print(f"❌ Audio worker error (save) for topic {topic_id}: {e}")
+        logger.error("Audio worker save failed", exc_info=True, extra={"topic_id": str(topic_id)})
 
     if error:
         if course_id:
@@ -117,7 +120,7 @@ async def process_audio_job(job_data: dict):
             )
         return
 
-    print(f"✅ Audio lesson generated for topic {topic_id} ({duration}s)")
+    logger.info("Audio lesson generated", extra={"topic_id": str(topic_id), "duration_seconds": duration})
 
     if course_id:
         await connection_manager.broadcast_to_course(
@@ -136,11 +139,11 @@ async def audio_worker():
     """
     Main worker loop. Polls Redis queue:audio and processes jobs.
     """
-    print("🚀 Audio worker started")
+    logger.info("Audio worker started")
 
     recovered = await redis_client.recover_orphaned_jobs("audio")
     if recovered:
-        print(f"🔄 Audio worker recovered {recovered} orphaned job(s)")
+        logger.info("Audio worker recovered orphaned jobs", extra={"count": recovered})
 
     while True:
         job_json = None
@@ -153,7 +156,7 @@ async def audio_worker():
                 job_id = job["id"]
                 job_data = job["data"]
 
-                print(f"🎧 Processing audio job {job_id} for topic {job_data.get('topic_id')}")
+                logger.info("Processing audio job", extra={"job_id": job_id, "topic_id": job_data.get("topic_id")})
 
                 await redis_client.update_job_status(job_id, "processing")
                 await process_audio_job(job_data)
@@ -163,10 +166,10 @@ async def audio_worker():
                 await redis_client.ack_job("audio", job_json)
 
         except asyncio.CancelledError:
-            print("Audio worker shutting down")
+            logger.info("Audio worker shutting down")
             break
         except Exception as e:
-            print(f"Audio worker error: {e}")
+            logger.error("Audio worker error", exc_info=True)
             if job_json:
                 await redis_client.ack_job("audio", job_json)
             await asyncio.sleep(1)

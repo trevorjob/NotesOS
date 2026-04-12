@@ -17,6 +17,8 @@ export type WebSocketMessage =
     | { type: 'resource_deleted'; resource_id: string }
     | { type: 'user_joined'; user_id: string; timestamp: string | null }
     | { type: 'active_users'; users: string[] }
+    | { type: 'ping' }
+    | { type: 'pong' }
     | { type: 'echo'; data: unknown };
 
 export interface WebSocketCallbacks {
@@ -38,6 +40,8 @@ export class WebSocketClient {
     private reconnectDelay = 1000;
     private reconnectTimer: NodeJS.Timeout | null = null;
     private isIntentionalClose = false;
+    private pingTimer: NodeJS.Timeout | null = null;
+    private pongTimer: NodeJS.Timeout | null = null;
 
     constructor(courseId: string, callbacks: WebSocketCallbacks) {
         this.courseId = courseId;
@@ -66,13 +70,18 @@ export class WebSocketClient {
             this.ws.onopen = () => {
                 console.log('[WebSocket] Connected');
                 this.reconnectAttempts = 0;
+                this._startHeartbeat();
                 this.callbacks.onOpen?.();
             };
 
             this.ws.onmessage = (event) => {
                 try {
                     const message = JSON.parse(event.data) as WebSocketMessage;
-                    console.log('[WebSocket] Message received:', message.type);
+                    if (message.type === 'pong') {
+                        // Clear the pong timeout — connection is alive
+                        if (this.pongTimer) { clearTimeout(this.pongTimer); this.pongTimer = null; }
+                        return;
+                    }
                     this.callbacks.onMessage?.(message);
                 } catch (err) {
                     console.error('[WebSocket] Failed to parse message:', err);
@@ -86,6 +95,7 @@ export class WebSocketClient {
 
             this.ws.onclose = (event) => {
                 console.log('[WebSocket] Disconnected', event.code);
+                this._stopHeartbeat();
                 this.callbacks.onClose?.();
 
                 // 1008 = policy violation (auth failure) — don't retry, token won't fix itself
@@ -112,8 +122,27 @@ export class WebSocketClient {
         }
     }
 
+    private _startHeartbeat(): void {
+        this._stopHeartbeat();
+        this.pingTimer = setInterval(() => {
+            if (this.ws?.readyState !== WebSocket.OPEN) return;
+            this.ws.send(JSON.stringify({ type: 'ping' }));
+            // If no pong arrives within 10s, treat connection as dead
+            this.pongTimer = setTimeout(() => {
+                console.warn('[WebSocket] Pong timeout — reconnecting');
+                this.ws?.close();
+            }, 10_000);
+        }, 30_000);
+    }
+
+    private _stopHeartbeat(): void {
+        if (this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null; }
+        if (this.pongTimer) { clearTimeout(this.pongTimer); this.pongTimer = null; }
+    }
+
     disconnect(): void {
         this.isIntentionalClose = true;
+        this._stopHeartbeat();
         if (this.reconnectTimer) {
             clearTimeout(this.reconnectTimer);
             this.reconnectTimer = null;

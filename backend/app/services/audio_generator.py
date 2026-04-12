@@ -14,6 +14,9 @@ import httpx
 from app.config import settings
 from app.models.knowledge import TopicKnowledge
 from app.services.storage import storage_service
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 # Average MP3 bitrate bytes-per-second for duration estimation (128kbps)
@@ -155,8 +158,8 @@ No title, no label, no "here is the script." Just the words."""
             if self.deepseek_api_key:
                 return await self._script_via_deepseek(prompt)
             return await self._script_via_claude(prompt)
-        except Exception as e:
-            print(f"[AUDIO] Script generation failed: {e}")
+        except Exception:
+            logger.error("Audio script generation failed", exc_info=True)
             raise
 
     async def generate_audio(self, script: str, voice: str = "nova") -> bytes:

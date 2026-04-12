@@ -77,6 +77,10 @@ export default function TopicPage() {
   const [focusMode, setFocusModeRender] = useState(_focusModeState.active);
   const [showUpload, setShowUpload] = useState(false);
 
+  // The generated_at value of the knowledge record that existed BEFORE a re-upload.
+  // undefined = not in a re-upload flow; null/string = waiting for a changed generated_at.
+  const prevGeneratedAtRef = useRef<string | null | undefined>(undefined);
+
   const setFocusMode = useCallback((v: boolean) => {
     _focusModeState.active = v;
     setFocusModeRender(v);
@@ -138,12 +142,25 @@ export default function TopicPage() {
     }
   }, [fetchResources]);
 
-  // Poll knowledge while processing/pending — also kick off immediately for freshly created topics.
-  // processingResources stays true until knowledge is done; we derive the banner separately.
+  // Clear processingResources once the knowledge record's generated_at changes
+  // (meaning a fresh synthesis landed). Only active during a re-upload flow.
+  useEffect(() => {
+    if (!processingResources || prevGeneratedAtRef.current === undefined) return;
+    if (knowledge?.status === 'completed' || knowledge?.status === 'failed') {
+      if (knowledge.generated_at !== prevGeneratedAtRef.current) {
+        prevGeneratedAtRef.current = undefined;
+        setTimeout(() => setProcessingResources(false), 0);
+      }
+    }
+  }, [knowledge?.status, knowledge?.generated_at, processingResources]);
+
+  // Poll knowledge while processing/pending — also kick off for freshly created topics.
+  // Re-upload polling is started directly in onAdded (with prevGeneratedAt) so this
+  // effect only handles the new-topic / backend-status-is-processing cases.
   useEffect(() => {
     const needsPoll = knowledge?.status === 'processing'
       || knowledge?.status === 'pending'
-      || (processingResources && knowledge?.status !== 'completed' && knowledge?.status !== 'failed');
+      || (processingResources && prevGeneratedAtRef.current === undefined && knowledge?.status !== 'completed' && knowledge?.status !== 'failed');
     if (needsPoll) {
       return startPollingKnowledge(topicId);
     }
@@ -256,8 +273,9 @@ export default function TopicPage() {
         </div>
       </div>
 
-      {/* Processing banner — shown while workers are running or materials are freshly uploaded */}
-      {((processingResources && knowledge?.status !== 'completed' && knowledge?.status !== 'failed')
+      {/* Processing banner — shown while workers are running or materials are freshly uploaded.
+          processingResources covers both new-topic creation and re-uploads to existing topics. */}
+      {(processingResources
         || knowledge?.status === 'processing'
         || knowledge?.status === 'pending') && (
         <div className="flex items-center gap-3 bg-[#f0f9ff] border border-[#bae6fd] rounded-xl px-4 py-3">
@@ -371,12 +389,16 @@ export default function TopicPage() {
         courseId={courseId}
         onClose={() => setShowUpload(false)}
         onAdded={() => {
+          // Snapshot the current generated_at so polling knows what "old" looks like.
+          const prev = knowledge?.generated_at ?? null;
+          prevGeneratedAtRef.current = prev;
           setProcessingResources(true);
-          resourceCache.delete(topicId); // invalidate cache so fresh data loads
+          resourceCache.delete(topicId);
           resourcesFetched.current = false;
           fetchResources();
-          // Start polling immediately so we catch when the workers kick off
-          startPollingKnowledge(topicId);
+          // Pass prevGeneratedAt so polling only stops when generated_at has *changed*,
+          // not just when status is completed (which it already is for existing topics).
+          startPollingKnowledge(topicId, prev);
         }}
       />
     </>

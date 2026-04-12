@@ -135,10 +135,10 @@ function RegisterPageInner() {
 
             <form onSubmit={handleStep1} className="space-y-4">
               <Input
-                label="Full Name"
+                label="Username"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="Jane Smith"
+                placeholder="Joker123"
                 autoComplete="name"
                 required
               />

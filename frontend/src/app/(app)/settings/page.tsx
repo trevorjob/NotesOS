@@ -108,6 +108,7 @@ export default function SettingsPage() {
   const [notifsOffset, setNotifsOffset] = useState(0);
   const [notifsHasMore, setNotifsHasMore] = useState(false);
   const [loadingMoreNotifs, setLoadingMoreNotifs] = useState(false);
+  const [notifFilter, setNotifFilter] = useState<'all' | 'unread'>('all');
 
   // Account
   const [loggingOut, setLoggingOut] = useState(false);
@@ -123,7 +124,6 @@ export default function SettingsPage() {
     // Load semesters via store (persists activeSemesterId)
     fetchSemesters();
 
-    // Load notifications (first page)
     api.notifications.getAll(20, 0)
       .then((r) => {
         setNotifications(r.data?.notifications ?? []);
@@ -255,9 +255,28 @@ export default function SettingsPage() {
     } catch { /* ignore */ }
   }
 
+  async function handleDeleteOne(id: string) {
+    try {
+      await api.notifications.deleteOne(id);
+      setNotifications((prev) => prev.filter((n) => n.id !== id));
+    } catch { /* ignore */ }
+  }
+
+  async function handleClearAll() {
+    try {
+      await api.notifications.deleteAll();
+      setNotifications([]);
+      setNotifsHasMore(false);
+    } catch { /* ignore */ }
+  }
+
+
   // ── Render ───────────────────────────────────────────────────────────────
 
   const unreadCount = notifications.filter((n) => !n.is_read).length;
+  const visibleNotifications = notifFilter === 'unread'
+    ? notifications.filter((n) => !n.is_read)
+    : notifications;
 
   return (
     <div className="min-h-full bg-[#f0eeea]">
@@ -313,7 +332,7 @@ export default function SettingsPage() {
               </div>
 
               <div className="space-y-3">
-                <Input label="Full name" value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Your name" />
+                <Input label="Username" value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Your Username or NickName" />
                 <p className="text-xs text-[#9e9a94]">Email: {user?.email} (cannot be changed)</p>
                 <div className="flex items-center gap-3">
                   <Button size="sm" loading={savingName} onClick={handleSaveName}>Save name</Button>
@@ -468,36 +487,70 @@ export default function SettingsPage() {
               subtitle={unreadCount > 0 ? `${unreadCount} unread` : undefined}>
               {loadingNotifs ? <div className="flex justify-center py-4"><Spinner size="sm" /></div> : (
                 <>
-                  {unreadCount > 0 && (
-                    <Button size="sm" variant="ghost" loading={markingAll} onClick={handleMarkAll}>Mark all read</Button>
-                  )}
-                  {notifications.length === 0 && (
-                    <p className="text-sm text-[#9e9a94] text-center py-6">No notifications yet.</p>
+                  {/* Filter tabs + actions */}
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex gap-1 bg-[#f0eeea] rounded-lg p-0.5">
+                      {(['all', 'unread'] as const).map((f) => (
+                        <button key={f} onClick={() => setNotifFilter(f)}
+                          className={`px-3 py-1 rounded-md text-xs font-medium transition-colors capitalize ${
+                            notifFilter === f ? 'bg-white text-[#1a1917] shadow-sm' : 'text-[#6b6762] hover:text-[#1a1917]'
+                          }`}>
+                          {f}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="flex gap-2">
+                      {unreadCount > 0 && (
+                        <Button size="sm" variant="ghost" loading={markingAll} onClick={handleMarkAll}>Mark all read</Button>
+                      )}
+                      {notifications.length > 0 && (
+                        <Button size="sm" variant="ghost" onClick={handleClearAll}
+                          className="text-[#9e9a94] hover:text-[#dc2626]">
+                          Clear all
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+
+                  {visibleNotifications.length === 0 && (
+                    <p className="text-sm text-[#9e9a94] text-center py-6">
+                      {notifFilter === 'unread' ? 'No unread notifications.' : 'No notifications yet.'}
+                    </p>
                   )}
                   <div className="space-y-2">
-                    {notifications.map((n) => (
-                      <button key={n.id} onClick={() => !n.is_read && handleMarkOne(n.id)}
+                    {visibleNotifications.map((n) => (
+                      <div key={n.id}
                         className={`w-full text-left p-4 rounded-xl border transition-colors ${
-                          n.is_read ? 'border-[#f0eeea] bg-[#f9f8f6]' : 'border-[#dedad4] bg-white hover:bg-[#f9f8f6]'
+                          n.is_read ? 'border-[#f0eeea] bg-[#f9f8f6]' : 'border-[#dedad4] bg-white'
                         }`}>
                         <div className="flex items-start gap-3">
-                          <div className={`h-2 w-2 rounded-full mt-1.5 shrink-0 ${n.is_read ? 'opacity-0' : 'bg-[#1a1917]'}`} />
-                          <div className="flex-1 min-w-0">
-                            <p className={`text-sm ${n.is_read ? 'text-[#6b6762]' : 'font-medium text-[#1a1917]'}`}>{n.title}</p>
-                            <p className="text-xs text-[#9e9a94] mt-0.5">{n.body}</p>
-                            <p className="text-xs text-[#9e9a94] mt-1">
-                              {new Date(n.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                            </p>
-                          </div>
+                          <button className="flex items-start gap-3 flex-1 min-w-0 text-left"
+                            onClick={() => !n.is_read && handleMarkOne(n.id)}>
+                            <div className={`h-2 w-2 rounded-full mt-1.5 shrink-0 ${n.is_read ? 'opacity-0' : 'bg-[#1a1917]'}`} />
+                            <div className="flex-1 min-w-0">
+                              <p className={`text-sm ${n.is_read ? 'text-[#6b6762]' : 'font-medium text-[#1a1917]'}`}>{n.title}</p>
+                              <p className="text-xs text-[#9e9a94] mt-0.5">{n.body}</p>
+                              <p className="text-xs text-[#9e9a94] mt-1">
+                                {new Date(n.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                              </p>
+                            </div>
+                          </button>
+                          <button onClick={() => handleDeleteOne(n.id)}
+                            className="shrink-0 p-1 rounded-md text-[#c4bfb9] hover:text-[#dc2626] hover:bg-[#f0eeea] transition-colors">
+                            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                              <path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                            </svg>
+                          </button>
                         </div>
-                      </button>
+                      </div>
                     ))}
                   </div>
-                  {notifsHasMore && (
+                  {notifsHasMore && notifFilter === 'all' && (
                     <Button size="sm" variant="ghost" loading={loadingMoreNotifs} onClick={handleLoadMoreNotifs}>
                       Load more
                     </Button>
                   )}
+
                 </>
               )}
             </Section>

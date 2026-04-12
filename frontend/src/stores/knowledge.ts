@@ -37,10 +37,11 @@ interface KnowledgeState {
   isLoadingAudio: Record<string, boolean>;
 
   fetchKnowledge: (topicId: string) => Promise<void>;
+  forceRefetchKnowledge: (topicId: string) => Promise<void>;
   fetchAudio: (topicId: string) => Promise<void>;
   triggerRegenerate: (topicId: string) => Promise<void>;
   triggerRegenerateAudio: (topicId: string) => Promise<void>;
-  startPollingKnowledge: (topicId: string) => () => void;
+  startPollingKnowledge: (topicId: string, prevGeneratedAt?: string | null) => () => void;
   startPollingAudio: (topicId: string) => () => void;
 }
 
@@ -65,6 +66,15 @@ export const useKnowledgeStore = create<KnowledgeState>()((set, get) => ({
     } catch {
       set((s) => ({ isLoadingKnowledge: { ...s.isLoadingKnowledge, [topicId]: false } }));
     }
+  },
+
+  forceRefetchKnowledge: async (topicId) => {
+    try {
+      const res = await api.knowledge.get(topicId);
+      set((s) => ({
+        topicKnowledge: { ...s.topicKnowledge, [topicId]: res.data },
+      }));
+    } catch { /* ignore */ }
   },
 
   fetchAudio: async (topicId) => {
@@ -105,20 +115,23 @@ export const useKnowledgeStore = create<KnowledgeState>()((set, get) => ({
     }));
   },
 
-  startPollingKnowledge: (topicId) => {
+  startPollingKnowledge: (topicId, prevGeneratedAt?) => {
+    // When prevGeneratedAt is provided (re-upload case): only stop when we see a
+    // completed/failed record whose generated_at differs from the one we recorded
+    // before the upload. Avoids clock-skew issues with timestamp comparisons.
+    const isChanged = (generatedAt: string | null) => {
+      if (prevGeneratedAt === undefined) return true; // no tracking — stop on any stable status
+      return generatedAt !== prevGeneratedAt;
+    };
+
     const interval = setInterval(async () => {
-      const current = get().topicKnowledge[topicId];
-      // Stop polling if completed or failed
-      if (current?.status === 'completed' || current?.status === 'failed') {
-        clearInterval(interval);
-        return;
-      }
       try {
         const res = await api.knowledge.get(topicId);
         set((s) => ({
           topicKnowledge: { ...s.topicKnowledge, [topicId]: res.data },
         }));
-        if (res.data.status === 'completed' || res.data.status === 'failed') {
+        const stable = res.data.status === 'completed' || res.data.status === 'failed';
+        if (stable && isChanged(res.data.generated_at)) {
           clearInterval(interval);
         }
       } catch {

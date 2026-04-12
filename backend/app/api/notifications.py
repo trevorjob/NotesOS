@@ -5,7 +5,7 @@ NotesOS API - Notifications Endpoints
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, func
+from sqlalchemy import select, update, delete, func
 
 from app.database import get_db
 from app.models.notification import Notification
@@ -112,3 +112,39 @@ async def mark_notification_read(
         "id": str(notification.id),
         "is_read": notification.is_read,
     }
+
+
+@router.delete("/{notification_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_notification(
+    notification_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a single notification (ownership enforced)."""
+    result = await db.execute(
+        select(Notification).where(Notification.id == uuid.UUID(notification_id))
+    )
+    notification = result.scalar_one_or_none()
+
+    if not notification:
+        raise HTTPException(status_code=404, detail="Notification not found.")
+
+    if notification.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied.")
+
+    await db.delete(notification)
+    await db.commit()
+
+
+@router.delete("", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_all_notifications(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete all notifications for the current user."""
+    await db.execute(
+        delete(Notification).where(Notification.user_id == current_user.id)
+    )
+    await db.commit()
+
+

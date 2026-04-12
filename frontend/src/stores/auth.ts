@@ -6,6 +6,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { AxiosError } from 'axios';
+import posthog from 'posthog-js';
 import { api, tokenManager } from '@/lib/api';
 
 interface User {
@@ -56,6 +57,7 @@ export const useAuthStore = create<AuthState>()(
 
           // Store tokens
           tokenManager.setTokens(access_token, refresh_token);
+          posthog.identify(user.id, { email: user.email, name: user.full_name });
 
             set({
             user,
@@ -80,6 +82,7 @@ export const useAuthStore = create<AuthState>()(
 
           // Store tokens
           tokenManager.setTokens(access_token, refresh_token);
+          posthog.identify(user.id, { email: user.email, name: user.full_name });
 
           set({
             user,
@@ -105,6 +108,7 @@ export const useAuthStore = create<AuthState>()(
         } finally {
           // Wipe all persisted client state (localStorage + IndexedDB)
           tokenManager.clearAll();
+          posthog.reset();
           set({
             user: null,
             isAuthenticated: false,

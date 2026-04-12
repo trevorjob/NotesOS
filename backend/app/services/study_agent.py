@@ -47,11 +47,11 @@ class StudyAgent:
                 - sources: List of source resources
                 - conversation_id: Conversation ID for follow-ups
         """
-        # 1. Get or create conversation
+        # 1. Get or create conversation — one per user per topic
         if conversation_id:
             conversation = await self._get_conversation(db, conversation_id, user_id)
         else:
-            conversation = await self._create_conversation(
+            conversation = await self._get_or_create_conversation(
                 db, user_id, course_id, topic_id
             )
 
@@ -105,15 +105,26 @@ class StudyAgent:
 
         return conversation
 
-    async def _create_conversation(
+    async def _get_or_create_conversation(
         self,
         db: AsyncSession,
         user_id: str,
         course_id: str,
         topic_id: Optional[str] = None,
     ) -> AIConversation:
-        """Create new conversation."""
+        """Return the existing conversation for this user+topic, or create one."""
         import uuid
+
+        if topic_id:
+            result = await db.execute(
+                select(AIConversation).where(
+                    AIConversation.user_id == uuid.UUID(user_id),
+                    AIConversation.topic_id == uuid.UUID(topic_id),
+                )
+            )
+            existing = result.scalar_one_or_none()
+            if existing:
+                return existing
 
         conversation = AIConversation(
             user_id=uuid.UUID(user_id),

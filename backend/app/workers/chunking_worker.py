@@ -16,6 +16,9 @@ from app.services.vector_store import vector_store
 from app.services.websocket import broadcast_processing_status
 from app.models.course import Topic
 from app.config import settings
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 # Use the centralized async engine and session maker
 AsyncSessionLocal = async_session_maker
@@ -43,7 +46,7 @@ async def process_chunking_job(job_data: dict):
             resource = result.scalar_one_or_none()
 
             if not resource:
-                print(f"Resource {resource_id} not found")
+                logger.warning("Resource not found, skipping", extra={"resource_id": str(resource_id)})
                 return
 
             # Get course_id for WebSocket broadcast
@@ -60,7 +63,7 @@ async def process_chunking_job(job_data: dict):
             chunks = chunking_service.chunk_text(text, resource_id=resource_id)
 
             if not chunks:
-                print(f"No chunks generated for resource {resource_id}")
+                logger.warning("No chunks generated for resource", extra={"resource_id": str(resource_id)})
                 resource.is_processed = True
                 await db.commit()
                 return
@@ -80,9 +83,7 @@ async def process_chunking_job(job_data: dict):
             resource.is_processed = True
             await db.commit()
 
-            print(
-                f"✅ Processed resource {resource_id}: {chunks_inserted} chunks indexed"
-            )
+            logger.info("Resource processed", extra={"resource_id": str(resource_id), "chunks_inserted": chunks_inserted})
 
             # Broadcast completion
             if course_id:
@@ -98,8 +99,8 @@ async def process_chunking_job(job_data: dict):
                     },
                 )
 
-        except Exception as e:
-            print(f"❌ Error processing resource {resource_id}: {str(e)}")
+        except Exception:
+            logger.error("Error processing resource", exc_info=True, extra={"resource_id": str(resource_id)})
 
             # Broadcast failure
             if course_id:
@@ -122,11 +123,11 @@ async def chunking_worker():
     Main worker loop for chunking queue.
     Uses reliable BRPOPLPUSH so jobs survive worker restarts.
     """
-    print("🚀 Chunking worker started")
+    logger.info("Chunking worker started")
 
     recovered = await redis_client.recover_orphaned_jobs("chunking")
     if recovered:
-        print(f"🔄 Chunking worker recovered {recovered} orphaned job(s)")
+        logger.info("Chunking worker recovered orphaned jobs", extra={"count": recovered})
 
     while True:
         job_json = None
@@ -139,7 +140,7 @@ async def chunking_worker():
                 job_id = job["id"]
                 job_data = job["data"]
 
-                print(f"📝 Processing chunking job {job_id}")
+                logger.info("Processing chunking job", extra={"job_id": job_id})
 
                 await redis_client.update_job_status(job_id, "processing")
                 await process_chunking_job(job_data)
@@ -151,10 +152,10 @@ async def chunking_worker():
                 await redis_client.ack_job("chunking", job_json)
 
         except asyncio.CancelledError:
-            print("Chunking worker shutting down")
+            logger.info("Chunking worker shutting down")
             break
-        except Exception as e:
-            print(f"Worker error: {str(e)}")
+        except Exception:
+            logger.error("Chunking worker error", exc_info=True)
             if job_json:
                 await redis_client.ack_job("chunking", job_json)
             await asyncio.sleep(1)

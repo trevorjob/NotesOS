@@ -314,6 +314,22 @@ async def join_course(
     await cache.delete(courses_list_key(str(current_user.id)))
     await cache.delete(course_key(str(course.id)))
 
+    # Notify the course owner that someone joined
+    if course.created_by and course.created_by != current_user.id:
+        try:
+            from app.services.notifications import create_and_push_notification
+            from app.models.notification import NotificationType
+            await create_and_push_notification(
+                db=db,
+                user_id=course.created_by,
+                notif_type=NotificationType.CLASSMATE_JOINED,
+                title=f"{current_user.full_name} joined {course.name}",
+                body=f"Your course now has {member_count} member{'s' if member_count != 1 else ''}.",
+                meta_data={"course_id": str(course.id)},
+            )
+        except Exception:
+            pass  # Non-fatal
+
     return {
         "message": f"Welcome to {course.name}! 👋",
         "course": {"id": str(course.id), "code": course.code, "name": course.name},

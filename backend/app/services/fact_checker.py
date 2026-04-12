@@ -9,6 +9,9 @@ from typing import TypedDict, List, Dict, Any
 from langgraph.graph import StateGraph, END
 
 from app.config import settings
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class FactCheckState(TypedDict):
@@ -111,8 +114,8 @@ Return ONLY the JSON array, no other text."""
             # Extract JSON from response
             claims = self._parse_json_response(response)
             return {"claims": claims if claims else []}
-        except Exception as e:
-            print(f"[FACT CHECK] Error extracting claims: {e}")
+        except Exception:
+            logger.error("Fact check: error extracting claims", exc_info=True)
             return {"claims": []}
 
     async def _search_claim(self, state: FactCheckState) -> Dict[str, Any]:
@@ -150,8 +153,8 @@ Return ONLY the JSON array, no other text."""
 
                 return {"search_results": sources}
 
-        except Exception as e:
-            print(f"[FACT CHECK] Error searching claim: {e}")
+        except Exception:
+            logger.error("Fact check: error searching claim", exc_info=True)
             return {"search_results": []}
 
     async def _verify_claim(self, state: FactCheckState) -> Dict[str, Any]:
@@ -204,8 +207,8 @@ Return ONLY valid JSON, no other text. Refer to sources in the explanation using
                 "verifications": new_verifications,
                 "current_claim_index": state["current_claim_index"] + 1,
             }
-        except Exception as e:
-            print(f"[FACT CHECK] Error verifying claim: {e}")
+        except Exception:
+            logger.error("Fact check: error verifying claim", exc_info=True)
             return {"current_claim_index": state["current_claim_index"] + 1}
 
     def _should_continue(self, state: FactCheckState) -> str:
