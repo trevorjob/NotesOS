@@ -288,7 +288,8 @@ Return ONLY valid JSON. No preamble. No text outside the array."""
 
     async def _call_deepseek(self, prompt: str) -> str:
         """Make API call to DeepSeek."""
-        async with httpx.AsyncClient() as client:
+        timeout = httpx.Timeout(connect=10.0, read=180.0, write=10.0, pool=5.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
                 f"{self.deepseek_base}/chat/completions",
                 headers={
@@ -301,7 +302,6 @@ Return ONLY valid JSON. No preamble. No text outside the array."""
                     "temperature": 0.6,
                     "max_tokens": 3000,
                 },
-                timeout=45.0,
             )
             response.raise_for_status()
             data = response.json()
