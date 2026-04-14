@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useEffect, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useCourseStore } from '@/stores/courses';
 import { api } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
@@ -13,12 +13,25 @@ type Difficulty = 'easy' | 'medium' | 'hard';
 const QUESTION_COUNT_PRESETS = [5, 10, 20, 50];
 
 export default function GenerateTestPage() {
+  return (
+    <Suspense fallback={<div className="flex justify-center items-center min-h-[50vh]"><Spinner /></div>}>
+      <GenerateTestPageInner />
+    </Suspense>
+  );
+}
+
+function GenerateTestPageInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const paramCourseId = searchParams.get('courseId') ?? '';
+  const paramTopicId = searchParams.get('topicId') ?? '';
   const { courses, fetchCourses, selectCourse } = useCourseStore();
 
-  const [selectedCourseId, setSelectedCourseId] = useState('');
+  const [selectedCourseId, setSelectedCourseId] = useState(paramCourseId);
   const [topics, setTopics] = useState<Array<{ id: string; title: string }>>([]);
-  const [selectedTopicIds, setSelectedTopicIds] = useState<Set<string>>(new Set());
+  const [selectedTopicIds, setSelectedTopicIds] = useState<Set<string>>(
+    paramTopicId ? new Set([paramTopicId]) : new Set()
+  );
   const [loadingTopics, setLoadingTopics] = useState(false);
 
   const [questionCount, setQuestionCount] = useState(10);
@@ -32,6 +45,7 @@ export default function GenerateTestPage() {
 
   const [pastTests, setPastTests] = useState<Array<{ id: string; title: string; question_count: number; created_at: string }>>([]);
   const [loadingPastTests, setLoadingPastTests] = useState(false);
+  const [copiedTestId, setCopiedTestId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchCourses();
@@ -39,13 +53,13 @@ export default function GenerateTestPage() {
 
   useEffect(() => {
     if (courses.length > 0 && !selectedCourseId) {
-      setSelectedCourseId(courses[0].id);
+      setSelectedCourseId(paramCourseId || courses[0].id);
     }
-  }, [courses, selectedCourseId]);
+  }, [courses, selectedCourseId, paramCourseId]);
 
   useEffect(() => {
     if (!selectedCourseId) return;
-    loadTopics(selectedCourseId);
+    loadTopics(selectedCourseId, !!paramTopicId);
     // Load shared tests for this course
     setLoadingPastTests(true);
     api.ai.listTests(selectedCourseId)
@@ -54,15 +68,15 @@ export default function GenerateTestPage() {
       .finally(() => setLoadingPastTests(false));
   }, [selectedCourseId]);
 
-  async function loadTopics(courseId: string) {
+  async function loadTopics(courseId: string, keepSelection = false) {
     setLoadingTopics(true);
-    setSelectedTopicIds(new Set());
+    if (!keepSelection) setSelectedTopicIds(new Set());
     try {
       await selectCourse(courseId);
       const course = useCourseStore.getState().courses.find((c) => c.id === courseId);
       const t = course?.topics ?? [];
       setTopics(t);
-      setSelectedTopicIds(new Set(t.map((x) => x.id)));
+      if (!keepSelection) setSelectedTopicIds(new Set(t.map((x) => x.id)));
     } catch { /* ignore */ }
     finally { setLoadingTopics(false); }
   }
@@ -77,6 +91,13 @@ export default function GenerateTestPage() {
 
   function selectAll() { setSelectedTopicIds(new Set(topics.map((t) => t.id))); }
   function deselectAll() { setSelectedTopicIds(new Set()); }
+
+  function shareTest(testId: string) {
+    const url = `${window.location.origin}/tests/${testId}`;
+    navigator.clipboard.writeText(url);
+    setCopiedTestId(testId);
+    setTimeout(() => setCopiedTestId(null), 2000);
+  }
 
   const finalCount = useCustom ? (parseInt(customCount) || 10) : questionCount;
 
@@ -286,9 +307,18 @@ export default function GenerateTestPage() {
                     {new Date(t.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                   </p>
                 </div>
-                <Button size="sm" variant="ghost" onClick={() => router.push(`/tests/${t.id}`)}>
-                  Take
-                </Button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => shareTest(t.id)}
+                    className="text-xs text-[#9e9a94] hover:text-[#1a1917] transition-colors px-2 py-1 rounded-lg hover:bg-[#f0eeea]"
+                    title="Copy link"
+                  >
+                    {copiedTestId === t.id ? 'Copied!' : 'Share'}
+                  </button>
+                  <Button size="sm" variant="ghost" onClick={() => router.push(`/tests/${t.id}`)}>
+                    Take
+                  </Button>
+                </div>
               </div>
             ))}
           </div>

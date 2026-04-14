@@ -170,7 +170,10 @@ function RegisterPageInner() {
 
             <p className="mt-5 text-center text-sm text-[#6b6762]">
               Already have an account?{' '}
-              <a href="/login" className="text-[#1a1917] font-medium underline underline-offset-2">
+              <a
+                href={inviteCode ? `/login?redirect=${encodeURIComponent(`/join?code=${inviteCode}`)}` : '/login'}
+                className="text-[#1a1917] font-medium underline underline-offset-2"
+              >
                 Sign in
               </a>
             </p>

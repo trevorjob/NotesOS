@@ -300,7 +300,7 @@ export default function TopicPage() {
       {/* Quiz me */}
       {knowledge?.status === 'completed' && (
         <div className="pt-2">
-          <Button onClick={() => router.push(`/courses/${courseId}/topics/${topicId}/quiz`)}>
+          <Button onClick={() => router.push(`/generate-test?courseId=${courseId}&topicId=${topicId}`)}>
             ❓ Quiz me
           </Button>
         </div>

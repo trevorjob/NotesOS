@@ -128,6 +128,13 @@ export default function TestPage() {
 
   const title = meta?.title ?? 'Practice Test';
   const progress = questions.length > 0 ? Math.round(((questionIndex) / questions.length) * 100) : 0;
+  const [copied, setCopied] = useState(false);
+
+  function shareTest() {
+    navigator.clipboard.writeText(window.location.href);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
 
   return (
     <div className="min-h-full bg-[#f0eeea]">
@@ -140,10 +147,19 @@ export default function TestPage() {
           Generate Test
         </Link>
         <span className="text-sm font-medium text-[#1a1917] truncate max-w-[40%]">{title}</span>
-        {phase === 'questions' && questions.length > 0 && (
-          <span className="text-xs text-[#6b6762]">{questionIndex + 1} / {questions.length}</span>
-        )}
-        {phase !== 'questions' && <div className="w-16" />}
+        <div className="flex items-center gap-3 min-w-[64px] justify-end">
+          {phase === 'questions' && questions.length > 0 && (
+            <span className="text-xs text-[#6b6762]">{questionIndex + 1} / {questions.length}</span>
+          )}
+          {phase !== 'loading' && meta && (
+            <button
+              onClick={shareTest}
+              className="text-xs text-[#9e9a94] hover:text-[#1a1917] transition-colors px-2 py-1 rounded-lg hover:bg-[#f0eeea]"
+            >
+              {copied ? 'Copied!' : 'Share'}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Progress bar */}

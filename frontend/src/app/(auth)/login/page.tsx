@@ -77,7 +77,13 @@ function LoginPageInner() {
 
         <p className="mt-5 text-center text-sm text-[#6b6762]">
           No account?{' '}
-          <Link href="/register" className="text-[#1a1917] font-medium underline underline-offset-2">
+          <Link
+            href={(() => {
+              const joinMatch = redirect?.match(/\/join\?code=([^&]+)/);
+              return joinMatch ? `/register?code=${joinMatch[1]}` : '/register';
+            })()}
+            className="text-[#1a1917] font-medium underline underline-offset-2"
+          >
             Create one
           </Link>
         </p>
