@@ -190,8 +190,8 @@ Bad questions (never write these):
 
 TOPIC: {state["topic_name"]}
 DIFFICULTY: {state["difficulty"]}
-NUMBER OF QUESTIONS: {batch_count}
-QUESTION TYPES: {", ".join(state["question_types"])}
+NUMBER OF QUESTIONS: {batch_count} (generate EXACTLY this many, no more, no fewer)
+QUESTION TYPES ALLOWED: {", ".join(state["question_types"])} — use ONLY these types, no others
 BATCH: {batch_index + 1} of {total_batches} — cover a DIFFERENT section of the material than other batches
 
 STUDY MATERIAL:
@@ -223,7 +223,7 @@ COVERAGE:
 - Ensure no two questions test the same idea
 - Prioritise concepts that appear repeatedly in the material or seem central to the topic
 
-Return a JSON array of exactly {batch_count} questions:
+CRITICAL: Return a JSON array of EXACTLY {batch_count} question(s). Not more, not fewer. If {batch_count} is 1, return an array with 1 element. If {batch_count} is 2, return exactly 2 elements.
 [
   {{
     "question_text": "The question",
@@ -247,11 +247,13 @@ Return ONLY valid JSON. No preamble. No text outside the array."""
     async def _generate_batch(self, state: QuestionGenState, batch_count: int, batch_index: int, total_batches: int) -> List[Dict[str, Any]]:
         """Generate a single batch of questions."""
         prompt = self._build_prompt(state, batch_count, batch_index, total_batches)
-        # Scale max_tokens: ~150 tokens per question + 500 overhead
-        max_tokens = min(500 + batch_count * 160, 4000)
+        # ~350 tokens per question (question + options + explanation + JSON overhead) + 500 base
+        max_tokens = min(500 + batch_count * 350, 8000)
         try:
             response = await self._call_deepseek(prompt, max_tokens=max_tokens)
-            return self._parse_json_response(response)
+            questions = self._parse_json_response(response)
+            # Trim to exact count in case the model over-generates
+            return questions[:batch_count]
         except Exception as e:
             logger.error(f"[QUESTION GEN] Batch {batch_index + 1} failed: {e}")
             return []
