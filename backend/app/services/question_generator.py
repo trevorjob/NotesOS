@@ -3,12 +3,16 @@ NotesOS - Question Generator Service
 LangGraph-based test question generation with quality loop.
 """
 
+import asyncio
 import json
+import logging
 import httpx
 from typing import TypedDict, List, Dict, Any
 from langgraph.graph import StateGraph, END
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+
+logger = logging.getLogger(__name__)
 
 from app.config import settings
 from app.models.resource import Resource
@@ -28,6 +32,9 @@ class QuestionGenState(TypedDict):
     generated_questions: List[Dict[str, Any]]
     quality_score: float
     retry_count: int
+
+
+BATCH_SIZE = 12  # Questions per parallel API call
 
 
 class QuestionGenerator:
@@ -163,15 +170,14 @@ class QuestionGenerator:
 
         return "\n\n".join(content_parts)
 
-    async def _generate_questions(self, state: QuestionGenState) -> Dict[str, Any]:
-        """Generate questions using DeepSeek."""
-        prompt = f"""You are writing a quiz for a student studying {state["topic_name"]}.
+    def _build_prompt(self, state: QuestionGenState, batch_count: int, batch_index: int, total_batches: int) -> str:
+        return f"""You are writing a quiz for a student studying {state["topic_name"]}.
 Your job is to write questions that actually test whether someone
 understands the material — not just whether they memorised keywords.
 
 Good questions:
 - Test a concept, relationship, or application — not just a definition
-- Have wrong answers that are plausible (a student who half-understands 
+- Have wrong answers that are plausible (a student who half-understands
   could pick them)
 - Are specific enough that someone can answer them without guessing
 - Are not trick questions or gotchas
@@ -184,8 +190,9 @@ Bad questions (never write these):
 
 TOPIC: {state["topic_name"]}
 DIFFICULTY: {state["difficulty"]}
-NUMBER OF QUESTIONS: {state["question_count"]}
+NUMBER OF QUESTIONS: {batch_count}
 QUESTION TYPES: {", ".join(state["question_types"])}
+BATCH: {batch_index + 1} of {total_batches} — cover a DIFFERENT section of the material than other batches
 
 STUDY MATERIAL:
 {state["resource_content"]}
@@ -202,21 +209,21 @@ For "mcq":
 - All 4 options must be plausible to someone who partially understands the topic
 - Wrong options should represent common misconceptions or close-but-wrong ideas
 - Never make the correct answer obviously longer or more detailed than the others
-- correct_answer must be the EXACT TEXT of one of the answer_options strings — 
+- correct_answer must be the EXACT TEXT of one of the answer_options strings —
   not a label, not a paraphrase, the exact string copied
 
 For "short_answer":
 - The question should require 2–4 sentences to answer properly
 - correct_answer is a model answer showing the key points the student must hit
-- Format model answer as: "Key points: [point 1] / [point 2] / [point 3]" 
+- Format model answer as: "Key points: [point 1] / [point 2] / [point 3]"
   so the grader knows what to look for
 
 COVERAGE:
 - Spread questions across different concepts — don't cluster on one section
-- If {state["question_count"]} > 5, ensure no two questions test the same idea
+- Ensure no two questions test the same idea
 - Prioritise concepts that appear repeatedly in the material or seem central to the topic
 
-Return a JSON array:
+Return a JSON array of exactly {batch_count} questions:
 [
   {{
     "question_text": "The question",
@@ -236,14 +243,40 @@ Return a JSON array:
 ]
 
 Return ONLY valid JSON. No preamble. No text outside the array."""
-        response = await self._call_deepseek(prompt)
 
+    async def _generate_batch(self, state: QuestionGenState, batch_count: int, batch_index: int, total_batches: int) -> List[Dict[str, Any]]:
+        """Generate a single batch of questions."""
+        prompt = self._build_prompt(state, batch_count, batch_index, total_batches)
+        # Scale max_tokens: ~150 tokens per question + 500 overhead
+        max_tokens = min(500 + batch_count * 160, 4000)
         try:
-            questions = self._parse_json_response(response)
-            return {"generated_questions": questions}
+            response = await self._call_deepseek(prompt, max_tokens=max_tokens)
+            return self._parse_json_response(response)
         except Exception as e:
-            print(f"[QUESTION GEN] Error parsing questions: {e}")
-            return {"generated_questions": []}
+            logger.error(f"[QUESTION GEN] Batch {batch_index + 1} failed: {e}")
+            return []
+
+    async def _generate_questions(self, state: QuestionGenState) -> Dict[str, Any]:
+        """Generate questions using parallel batches."""
+        total = state["question_count"]
+        total_batches = (total + BATCH_SIZE - 1) // BATCH_SIZE
+
+        # Build batch sizes (last batch may be smaller)
+        batches = []
+        remaining = total
+        for i in range(total_batches):
+            batch_count = min(BATCH_SIZE, remaining)
+            batches.append((batch_count, i, total_batches))
+            remaining -= batch_count
+
+        results = await asyncio.gather(*[
+            self._generate_batch(state, count, idx, total_batches)
+            for count, idx, total in batches
+        ])
+
+        all_questions = [q for batch in results for q in batch]
+        logger.info(f"[QUESTION GEN] Generated {len(all_questions)} / {total} questions across {total_batches} batches")
+        return {"generated_questions": all_questions}
 
     async def _quality_check(self, state: QuestionGenState) -> Dict[str, Any]:
         """Check quality of generated questions."""
@@ -286,7 +319,7 @@ Return ONLY valid JSON. No preamble. No text outside the array."""
         """Provide feedback and increment retry counter."""
         return {"retry_count": state["retry_count"] + 1}
 
-    async def _call_deepseek(self, prompt: str) -> str:
+    async def _call_deepseek(self, prompt: str, max_tokens: int = 3000) -> str:
         """Make API call to DeepSeek."""
         timeout = httpx.Timeout(connect=10.0, read=180.0, write=10.0, pool=5.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -300,7 +333,7 @@ Return ONLY valid JSON. No preamble. No text outside the array."""
                     "model": "deepseek-chat",
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.6,
-                    "max_tokens": 3000,
+                    "max_tokens": max_tokens,
                 },
             )
             response.raise_for_status()
