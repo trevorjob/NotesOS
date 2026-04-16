@@ -75,7 +75,13 @@ function LoginPageInner() {
           </Button>
         </form>
 
-        <p className="mt-5 text-center text-sm text-[#6b6762]">
+        <p className="mt-4 text-center text-sm">
+          <Link href="/forgot-password" className="text-[#6b6762] hover:text-[#1a1917] underline underline-offset-2 transition-colors">
+            Forgot your password?
+          </Link>
+        </p>
+
+        <p className="mt-3 text-center text-sm text-[#6b6762]">
           No account?{' '}
           <Link
             href={(() => {

@@ -77,7 +77,7 @@ class Settings(BaseSettings):
 
     # Email (Resend)
     RESEND_API_KEY: str = ""
-    EMAIL_FROM: str = "noreply@notesos.com"
+    EMAIL_FROM: str = "NotesOS <onboarding@resend.dev>"
     PASSWORD_RESET_URL: str = "http://localhost:3000/reset-password"
 
     # Google OAuth

@@ -216,6 +216,12 @@ export const api = {
 
         changePassword: (data: { current_password: string; new_password: string }) =>
             apiClient.post('/api/auth/me/change-password', data),
+
+        forgotPassword: (email: string) =>
+            apiClient.post('/api/auth/forgot-password', { email }),
+
+        resetPassword: (token: string, new_password: string) =>
+            apiClient.post('/api/auth/reset-password', { token, new_password }),
     },
 
     // Courses

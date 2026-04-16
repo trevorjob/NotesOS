@@ -7,7 +7,7 @@ import secrets
 from datetime import datetime, timedelta
 from typing import Optional
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
@@ -201,7 +201,7 @@ async def verify_course_enrollment(
 @router.post(
     "/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED
 )
-async def register(request: RegisterRequest, db: AsyncSession = Depends(get_db)):
+async def register(request: RegisterRequest, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
     """Register a new user account."""
     # Check if email already exists
     result = await db.execute(select(User).where(User.email == request.email))
@@ -251,13 +251,9 @@ async def register(request: RegisterRequest, db: AsyncSession = Depends(get_db))
     await db.commit()
     await db.refresh(user)
 
-    # Welcome email — fire-and-forget, never block registration
-    try:
-        import asyncio as _asyncio
-        from app.services.email import send_welcome_email
-        _asyncio.ensure_future(send_welcome_email(user.email, user.full_name))
-    except Exception:
-        pass
+    # Welcome email — runs after response is sent, never blocks registration
+    from app.services.email import send_welcome_email
+    background_tasks.add_task(send_welcome_email, user.email, user.full_name)
 
     # Generate tokens
     access_token = create_access_token(data={"sub": str(user.id)})
