@@ -211,7 +211,7 @@ export const api = {
             explanation_style?: string;
         }) => apiClient.patch('/api/auth/me/personality', prefs),
 
-        updateProfile: (data: { full_name?: string }) =>
+        updateProfile: (data: { full_name?: string; university?: string }) =>
             apiClient.patch('/api/auth/me', data),
 
         changePassword: (data: { current_password: string; new_password: string }) =>
@@ -393,6 +393,9 @@ export const api = {
 
         getTest: (testId: string) =>
             apiClient.get(`/api/tests/${testId}`),
+
+        getTestStatus: (testId: string) =>
+            apiClient.get(`/api/tests/${testId}/status`),
 
         listTests: (courseId: string) =>
             apiClient.get('/api/tests', { params: { course_id: courseId } }),

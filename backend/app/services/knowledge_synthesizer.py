@@ -9,14 +9,13 @@ import uuid as _uuid
 from datetime import datetime
 from typing import Any, Dict, List
 
-import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.models.course import Topic
 from app.models.knowledge import KnowledgeStatus, TopicKnowledge
 from app.models.resource import Resource, ResourceChunk
+from app.services.llm import call_llm
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -24,11 +23,6 @@ logger = get_logger(__name__)
 
 class KnowledgeSynthesizer:
     """Synthesize topic resources into structured knowledge."""
-
-    def __init__(self):
-        self.deepseek_api_key = settings.DEEPSEEK_API_KEY
-        self.deepseek_base = "https://api.deepseek.com/v1"
-        self.anthropic_api_key = settings.ANTHROPIC_API_KEY
 
     async def synthesize(self, topic_id: str, db: AsyncSession) -> TopicKnowledge:
         """
@@ -106,107 +100,114 @@ class KnowledgeSynthesizer:
         return knowledge
 
     def _build_context(self, chunks: List[ResourceChunk]) -> str:
-        """Build a context string from resource chunks (max ~12k chars)."""
-        MAX_CHARS = 12000
+        """Build a context string from resource chunks, grouped by source.
+
+        Raises the cap to 80k chars (~20k tokens input) so that multi-source
+        topics aren't silently truncated. gpt-4o-mini supports 128k context.
+        We group chunks by resource so the AI can see which source each came from.
+        """
+        MAX_CHARS = 80_000
+
+        # Group chunks by resource_id preserving insertion order
+        by_resource: dict[str, list[str]] = {}
+        for chunk in chunks:
+            rid = str(chunk.resource_id)
+            if rid not in by_resource:
+                by_resource[rid] = []
+            text = chunk.chunk_text.strip()
+            if text:
+                by_resource[rid].append(text)
+
         parts = []
         total = 0
-
-        for chunk in chunks:
-            text = chunk.chunk_text.strip()
-            if not text:
-                continue
-            if total + len(text) > MAX_CHARS:
+        for i, (rid, texts) in enumerate(by_resource.items(), 1):
+            source_header = f"=== SOURCE {i} ==="
+            body = "\n\n".join(texts)
+            block = f"{source_header}\n{body}"
+            if total + len(block) > MAX_CHARS:
                 remaining = MAX_CHARS - total
-                if remaining > 200:
-                    parts.append(text[:remaining] + "…")
+                if remaining > 500:
+                    parts.append(block[:remaining] + "\n[truncated — source too long]")
                 break
-            parts.append(text)
-            total += len(text)
+            parts.append(block)
+            total += len(block)
 
-        return "\n\n---\n\n".join(parts)
+        return "\n\n".join(parts)
 
     async def _call_ai(self, context: str, topic_name: str) -> Dict[str, Any]:
-        """Call the AI to synthesize knowledge from chunk context."""
-        prompt = f"""You are a sharp, clear-thinking student who just went through 
-        all the class materials for this topic and is writing up your personal 
-        study notes. You write the way a top student takes notes — organised, 
-        direct, no filler, nothing copied verbatim from the source. You highlight 
-        what actually matters and explain it in plain language.
+        """Call the AI to consolidate all source material into one authoritative document."""
+        source_count = context.count("=== SOURCE ")
+        source_note = (
+            f"There are {source_count} source(s) above. "
+            "Where sources overlap or contradict each other, reconcile them — "
+            "don't just repeat each one. Where they complement each other, merge "
+            "their explanations into a single complete picture."
+            if source_count > 1 else ""
+        )
 
-        # TOPIC: {topic_name}
+        prompt = f"""You are consolidating all class materials for a topic into one definitive knowledge document.
 
-        SOURCE MATERIALS:
-        {context}
+This is NOT a summary. A summary compresses. This consolidates — it takes everything
+across all sources and produces a single document that covers the topic completely,
+resolving overlaps and merging complementary explanations. A student should be able to
+study ONLY this document and have everything they need.
 
-        Synthesise everything into study notes for this topic. 
+TOPIC: {topic_name}
 
-        Return JSON with this exact structure:
-        {{
-        "consolidated_note": "Markdown-formatted study notes. Lead with a 1–2 sentence plain-English explanation of what this topic is actually about. Then use ## subheadings to organise the key ideas. Use bullet points for lists of related facts. Bold the first mention of any important term. Write like you're explaining it to a classmate who missed class — clear, useful, no padding. Length should match the material: short if the content is simple, longer if it's complex. Do not copy sentences verbatim from the source.",
-        "key_points": ["5–8 single-sentence facts a student must know to pass an exam on this topic. Each point should be self-contained and specific — not vague summaries."],
-        "concepts": [
-            {{"term": "Key term", "definition": "One clear sentence. Plain English. No jargon unless explained."}}
-        ]
-        }}
+SOURCE MATERIALS:
+{context}
 
-        Rules:
-        - consolidated_note: reads like smart student notes, not a textbook. Markdown only.
-        - key_points: 5–8 items. Specific and exam-ready. No point should repeat another.
-        - concepts: 4–10 terms. Only include terms that actually need defining — skip obvious ones.
-        - If the source material is thin or unclear, say so briefly in the consolidated_note rather than padding it out.
-        - Return ONLY valid JSON. No preamble, no explanation outside the JSON."""
+{source_note}
+
+Your job:
+1. Read everything across all sources.
+2. Identify every distinct concept, mechanism, definition, example, and relationship covered.
+3. Write a consolidated document that covers ALL of it — organised by idea, not by source.
+4. Do not omit material just because it appears in only one source.
+5. Do not pad — every sentence must earn its place. But do not compress either.
+
+CONSOLIDATED_NOTE format rules:
+- Open with 1–2 sentences that answer: "What is this topic actually about, in plain English?"
+- Use ## subheadings to organise by concept/theme (not by source)
+- Bold the first mention of every important term
+- Use bullet points for lists; use prose for explanations that need flow
+- Include examples if the sources give them — they help
+- Length must match the material. A topic with 3 dense sources should produce a long document.
+  Do not artificially shorten. If the material is rich, the output should be rich.
+
+KEY_POINTS: The facts a student must know cold to pass an exam.
+- 5–10 items (more if the material warrants it)
+- Each point is one specific, self-contained sentence — no vague generalisations
+- Cover different aspects — don't cluster on one sub-topic
+
+CONCEPTS: Terms that need defining.
+- 4–12 terms depending on the material
+- Only include terms a student might not already know
+- One clear sentence per definition, plain English
+
+Return JSON:
+{{
+  "consolidated_note": "full markdown document — complete, not compressed",
+  "key_points": ["specific exam-ready fact", "..."],
+  "concepts": [
+    {{"term": "Term", "definition": "One clear sentence."}}
+  ]
+}}
+
+Return ONLY valid JSON. No preamble. No text outside the JSON."""
 
         try:
-            # Primary: DeepSeek (cost-optimised)
-            if self.deepseek_api_key:
-                return await self._call_deepseek(prompt)
-            # Fallback: Claude
-            return await self._call_claude(prompt)
+            content = await call_llm(
+                prompt,
+                task="knowledge_synthesis",
+                temperature=0.3,
+                max_tokens=16000,
+                timeout=120.0,
+            )
+            return self._parse_json(content)
         except Exception:
             logger.error("Knowledge AI call failed", exc_info=True)
             raise
-
-    async def _call_deepseek(self, prompt: str) -> Dict[str, Any]:
-        """Call DeepSeek API."""
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{self.deepseek_base}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.deepseek_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "deepseek-chat",
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.3,
-                    "max_tokens": 8000,
-                },
-                timeout=60.0,
-            )
-            response.raise_for_status()
-            content = response.json()["choices"][0]["message"]["content"]
-            return self._parse_json(content)
-
-    async def _call_claude(self, prompt: str) -> Dict[str, Any]:
-        """Call Anthropic Claude API as fallback."""
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": self.anthropic_api_key,
-                    "anthropic-version": "2023-06-01",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "claude-haiku-4-5-20251001",
-                    "max_tokens": 8000,
-                    "messages": [{"role": "user", "content": prompt}],
-                },
-                timeout=60.0,
-            )
-            response.raise_for_status()
-            content = response.json()["content"][0]["text"]
-            return self._parse_json(content)
 
     def _parse_json(self, text: str) -> Dict[str, Any]:
         """Extract and parse JSON from AI response."""

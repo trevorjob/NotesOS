@@ -3,11 +3,12 @@
 import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCourseStore } from '@/stores/courses';
+import { useTestsStore } from '@/stores/tests';
 import { api } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/Spinner';
 
-type QuestionType = 'mixed' | 'mcq' | 'short_answer';
+type QuestionType = 'mixed' | 'mcq' | 'short_answer' | 'essay';
 type Difficulty = 'easy' | 'medium' | 'hard';
 
 const QUESTION_COUNT_PRESETS = [5, 10, 20, 50];
@@ -103,24 +104,28 @@ function GenerateTestPageInner() {
 
   async function handleGenerate() {
     if (selectedTopicIds.size === 0) { setError('Select at least one topic.'); return; }
-    if (finalCount < 1 || finalCount > 100) { setError('Question count must be between 1 and 100.'); return; }
+    if (questionType !== 'essay' && (finalCount < 1 || finalCount > 100)) { setError('Question count must be between 1 and 100.'); return; }
     setGenerating(true); setError('');
 
     const typeMap: Record<QuestionType, string[]> = {
       mixed: ['mcq', 'short_answer'],
       mcq: ['mcq'],
       short_answer: ['short_answer'],
+      essay: ['essay'],
     };
 
+    const count = questionType === 'essay' ? 1 : finalCount;
+
     try {
-      const res = await api.ai.generateTest(selectedCourseId, {
-        topic_ids: Array.from(selectedTopicIds),
-        question_count: finalCount,
+      const { testId } = await useTestsStore.getState().generateTest(
+        selectedCourseId,
+        Array.from(selectedTopicIds),
+        count,
         difficulty,
-        question_types: typeMap[questionType],
-      });
-      const test = res.data?.test ?? res.data;
-      router.push(`/tests/${test.id}`);
+        typeMap[questionType],
+      );
+      // Navigate immediately — the test page handles progressive reveal
+      router.push(`/tests/${testId}`);
     } catch (e: unknown) {
       const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(detail || 'Failed to generate test. Please try again.');
@@ -196,54 +201,56 @@ function GenerateTestPageInner() {
         )}
       </div>
 
-      {/* Question count */}
-      <div className="bg-white rounded-2xl border border-[#dedad4] p-5 space-y-3">
-        <label className="text-xs font-semibold text-[#6b6762] uppercase tracking-wide">Number of questions</label>
-        <div className="flex flex-wrap gap-2">
-          {QUESTION_COUNT_PRESETS.map((n) => (
-            <button
-              key={n}
-              onClick={() => { setQuestionCount(n); setUseCustom(false); }}
-              className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors border ${
-                !useCustom && questionCount === n
-                  ? 'bg-[#1a1917] text-white border-[#1a1917]'
-                  : 'border-[#dedad4] text-[#1a1917] hover:border-[#9e9a94]'
-              }`}
-            >
-              {n}
-            </button>
-          ))}
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setUseCustom(true)}
-              className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors border ${
-                useCustom ? 'bg-[#1a1917] text-white border-[#1a1917]' : 'border-[#dedad4] text-[#1a1917] hover:border-[#9e9a94]'
-              }`}
-            >
-              Custom
-            </button>
-            {useCustom && (
-              <input
-                autoFocus
-                type="number"
-                min={1}
-                max={100}
-                value={customCount}
-                onChange={(e) => setCustomCount(e.target.value)}
-                placeholder="e.g. 30"
-                className="w-20 border border-[#dedad4] rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#1a1917]"
-              />
-            )}
+      {/* Question count — hidden for essay */}
+      {questionType !== 'essay' && (
+        <div className="bg-white rounded-2xl border border-[#dedad4] p-5 space-y-3">
+          <label className="text-xs font-semibold text-[#6b6762] uppercase tracking-wide">Number of questions</label>
+          <div className="flex flex-wrap gap-2">
+            {QUESTION_COUNT_PRESETS.map((n) => (
+              <button
+                key={n}
+                onClick={() => { setQuestionCount(n); setUseCustom(false); }}
+                className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors border ${
+                  !useCustom && questionCount === n
+                    ? 'bg-[#1a1917] text-white border-[#1a1917]'
+                    : 'border-[#dedad4] text-[#1a1917] hover:border-[#9e9a94]'
+                }`}
+              >
+                {n}
+              </button>
+            ))}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setUseCustom(true)}
+                className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors border ${
+                  useCustom ? 'bg-[#1a1917] text-white border-[#1a1917]' : 'border-[#dedad4] text-[#1a1917] hover:border-[#9e9a94]'
+                }`}
+              >
+                Custom
+              </button>
+              {useCustom && (
+                <input
+                  autoFocus
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={customCount}
+                  onChange={(e) => setCustomCount(e.target.value)}
+                  placeholder="e.g. 30"
+                  className="w-20 border border-[#dedad4] rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#1a1917]"
+                />
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Question type + difficulty */}
       <div className="grid grid-cols-2 gap-4">
         <div className="bg-white rounded-2xl border border-[#dedad4] p-5 space-y-3">
           <label className="text-xs font-semibold text-[#6b6762] uppercase tracking-wide">Type</label>
           <div className="space-y-1.5">
-            {([['mixed', 'Mixed'], ['mcq', 'MCQ only'], ['short_answer', 'Short answer only']] as const).map(([v, l]) => (
+            {([['mixed', 'Mixed'], ['mcq', 'MCQ only'], ['short_answer', 'Short answer only'], ['essay', 'Essay']] as const).map(([v, l]) => (
               <label key={v} className="flex items-center gap-2.5 cursor-pointer">
                 <div onClick={() => setQuestionType(v)} className={`h-4 w-4 rounded-full border-2 flex items-center justify-center ${questionType === v ? 'border-[#1a1917]' : 'border-[#dedad4]'}`}>
                   {questionType === v && <div className="h-2 w-2 rounded-full bg-[#1a1917]" />}
@@ -252,6 +259,9 @@ function GenerateTestPageInner() {
               </label>
             ))}
           </div>
+          {questionType === 'essay' && (
+            <p className="text-xs text-[#9e9a94] pt-1">One deep question — tests your ability to argue, synthesise, and explain.</p>
+          )}
         </div>
 
         <div className="bg-white rounded-2xl border border-[#dedad4] p-5 space-y-3">
@@ -277,12 +287,12 @@ function GenerateTestPageInner() {
         onClick={handleGenerate}
         disabled={selectedTopicIds.size === 0 || generating}
       >
-        {generating ? 'Generating…' : `Generate ${useCustom ? (parseInt(customCount) || '?') : questionCount}-question test`}
+        {generating ? 'Generating…' : questionType === 'essay' ? 'Generate essay question' : `Generate ${useCustom ? (parseInt(customCount) || '?') : questionCount}-question test`}
       </Button>
 
       {generating && (
         <p className="text-xs text-center text-[#9e9a94]">
-          Generating questions using your materials… this may take 10–20 seconds.
+          Setting up your test… taking you there now.
         </p>
       )}
 

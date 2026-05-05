@@ -32,9 +32,18 @@ class Settings(BaseSettings):
     SERPER_API_KEY: str = ""
     VISION_MODEL: str = "gpt-4o"  # Model used for image transcription
 
-    # Cost-Optimized AI Provider
-    PRIMARY_AI_PROVIDER: str = "deepseek"  # or "claude" for upgrade
+    # AI Provider Keys
     DEEPSEEK_API_KEY: str = ""
+
+    # Per-task LLM provider overrides (openai | deepseek).
+    # Defaults are set in app/services/llm.py. Set these in .env to override.
+    LLM_QUESTION_GEN: str = ""
+    LLM_GRADING: str = ""
+    LLM_STUDY_CHAT: str = ""
+    LLM_KNOWLEDGE_SYNTHESIS: str = ""
+    LLM_FACT_CHECK: str = ""
+    LLM_RESEARCH: str = ""
+    LLM_OCR_CLEAN: str = ""
 
     # File Storage (Cloudinary)
     CLOUDINARY_CLOUD_NAME: str = ""

@@ -65,6 +65,7 @@ class UserResponse(BaseModel):
     full_name: str
     avatar_url: Optional[str]
     study_personality: Optional[dict]
+    university: Optional[str] = None
 
 
 class PersonalityUpdate(BaseModel):
@@ -93,6 +94,7 @@ class PreferencesUpdate(BaseModel):
 
 class ProfileUpdate(BaseModel):
     full_name: Optional[str] = None
+    university: Optional[str] = None
 
 
 class ChangePasswordRequest(BaseModel):
@@ -387,6 +389,7 @@ async def get_me(current_user: User = Depends(get_current_user)):
         "full_name": current_user.full_name,
         "avatar_url": current_user.avatar_url,
         "study_personality": current_user.study_personality,
+        "university": current_user.university,
     }
 
 
@@ -417,9 +420,11 @@ async def update_profile(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update user profile fields (e.g. full_name)."""
+    """Update user profile fields (full_name, university)."""
     if data.full_name is not None:
         current_user.full_name = data.full_name.strip()
+    if data.university is not None:
+        current_user.university = data.university.strip() or None
     await db.commit()
     return {
         "id": str(current_user.id),
@@ -427,6 +432,7 @@ async def update_profile(
         "full_name": current_user.full_name,
         "avatar_url": current_user.avatar_url,
         "study_personality": current_user.study_personality,
+        "university": current_user.university,
     }
 
 

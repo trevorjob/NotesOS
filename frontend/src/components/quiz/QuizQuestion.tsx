@@ -26,11 +26,13 @@ interface QuizQuestionProps {
 }
 
 const MCQ_TYPES = ['mcq', 'multiple_choice', 'multiple-choice'];
+const ESSAY_TYPES = ['essay'];
 
 export function QuizQuestion({ question, index, total, onSubmit, onSkip, onPrevious, defaultAnswer, defaultIsVoice, loading }: QuizQuestionProps) {
   const normalizedType = question.question_type?.toLowerCase() ?? '';
   const options = question.answer_options ?? question.options ?? [];
   const isMCQ = MCQ_TYPES.includes(normalizedType) && options.length > 0;
+  const isEssay = ESSAY_TYPES.includes(normalizedType);
 
   // If previously answered by voice, don't pre-fill textarea with '[voice answer]'
   const [answer, setAnswer] = useState(isMCQ ? '' : (defaultIsVoice ? '' : (defaultAnswer ?? '')));
@@ -96,15 +98,17 @@ export function QuizQuestion({ question, index, total, onSubmit, onSkip, onPrevi
 
   return (
     <div className="space-y-5">
-      {/* Progress */}
-      <div className="flex items-center gap-3">
-        <ProgressBar value={progress} size="sm" className="flex-1" />
-        <span className="text-xs text-[#9e9a94] shrink-0">{index + 1} / {total}</span>
-      </div>
+      {/* Progress — hidden for single-question essay */}
+      {!isEssay && (
+        <div className="flex items-center gap-3">
+          <ProgressBar value={progress} size="sm" className="flex-1" />
+          <span className="text-xs text-[#9e9a94] shrink-0">{index + 1} / {total}</span>
+        </div>
+      )}
 
       {/* Type badge */}
       <Badge variant="muted">
-        {isMCQ ? 'Multiple Choice' : normalizedType.replace(/_/g, ' ')}
+        {isMCQ ? 'Multiple Choice' : isEssay ? 'Essay' : normalizedType.replace(/_/g, ' ')}
       </Badge>
 
       {/* Question text */}
@@ -129,8 +133,62 @@ export function QuizQuestion({ question, index, total, onSubmit, onSkip, onPrevi
         </div>
       )}
 
-      {/* Free-text / voice — non-MCQ only */}
-      {!isMCQ && (
+      {/* Essay — large textarea + word count + voice */}
+      {isEssay && (
+        <div className="space-y-3">
+          {defaultIsVoice && !audioBlob && (
+            <div className="flex items-center gap-2 px-3 py-2 bg-[#f0fdf4] border border-[#86efac] rounded-lg">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="text-[#16a34a] shrink-0">
+                <rect x="9" y="2" width="6" height="12" rx="3" fill="currentColor"/>
+                <path d="M5 10v2a7 7 0 0014 0v-2" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                <line x1="12" y1="19" x2="12" y2="22" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+              </svg>
+              <span className="text-xs text-[#16a34a] font-medium">Voice answer already recorded</span>
+              <span className="text-xs text-[#6b6762] ml-1">— record again or type to replace</span>
+            </div>
+          )}
+          <div className="relative">
+            <textarea
+              value={answer}
+              onChange={(e) => { setAnswer(e.target.value); setAudioBlob(null); }}
+              placeholder={audioBlob ? 'Voice answer recorded — or type to override' : 'Write your essay answer here. Aim for 3–5 paragraphs — argue your point, explain your reasoning, use examples.'}
+              rows={12}
+              disabled={!!audioBlob}
+              className="w-full resize-y bg-[#f0eeea] border border-[#dedad4] rounded-xl px-4 py-3 text-sm text-[#1a1917] placeholder-[#9e9a94] focus:outline-none focus:border-[#1a1917] disabled:opacity-60 leading-relaxed"
+            />
+            <span className="absolute bottom-3 right-3 text-xs text-[#9e9a94] pointer-events-none">
+              {answer.trim() ? answer.trim().split(/\s+/).length : 0} words
+            </span>
+          </div>
+          <div className="flex items-center gap-3">
+            {!recording && !audioBlob && (
+              <button onClick={startRecording} className="flex items-center gap-1.5 text-xs text-[#6b6762] hover:text-[#1a1917] transition-colors">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                  <rect x="9" y="2" width="6" height="12" rx="3" fill="currentColor"/>
+                  <path d="M5 10v2a7 7 0 0014 0v-2" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                  <line x1="12" y1="19" x2="12" y2="22" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                </svg>
+                Answer by voice instead
+              </button>
+            )}
+            {recording && (
+              <button onClick={stopRecording} className="flex items-center gap-1.5 text-xs text-[#dc2626] animate-pulse">
+                <span className="h-2 w-2 rounded-full bg-[#dc2626]" />
+                Recording… tap to stop
+              </button>
+            )}
+            {audioBlob && !recording && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-[#16a34a]">✓ Voice answer ready</span>
+                <button onClick={() => setAudioBlob(null)} className="text-xs text-[#9e9a94] hover:text-[#dc2626] transition-colors">Remove</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Free-text / voice — short answer only */}
+      {!isMCQ && !isEssay && (
         <div className="space-y-3">
           {/* Previously recorded voice answer indicator (shown when navigating back) */}
           {defaultIsVoice && !audioBlob && (
@@ -200,12 +258,14 @@ export function QuizQuestion({ question, index, total, onSubmit, onSkip, onPrevi
               ← Previous
             </Button>
           )}
-          <Button variant="ghost" size="sm" onClick={onSkip}>
-            {index + 1 === total ? 'Skip & finish' : 'Skip'}
-          </Button>
+          {!isEssay && (
+            <Button variant="ghost" size="sm" onClick={onSkip}>
+              {index + 1 === total ? 'Skip & finish' : 'Skip'}
+            </Button>
+          )}
         </div>
         <Button size="sm" loading={loading} onClick={handleSubmit} disabled={!canSubmit}>
-          {index + 1 === total ? 'Submit quiz' : 'Next →'}
+          {isEssay ? 'Submit essay' : index + 1 === total ? 'Submit quiz' : 'Next →'}
         </Button>
       </div>
     </div>

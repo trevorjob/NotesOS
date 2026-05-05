@@ -127,7 +127,51 @@ app.include_router(
 app.include_router(knowledge_router, prefix="/api", tags=["knowledge"])
 
 
-# WebSocket endpoint for real-time updates
+# WebSocket endpoint for user-scoped events (test generation, personal notifications)
+# IMPORTANT: must be defined BEFORE /ws/{course_id} to avoid route shadowing.
+
+@app.websocket("/ws/user/{user_id}")
+async def websocket_user_endpoint(
+    websocket: WebSocket, user_id: str, token: str = Query(...)
+):
+    """
+    User-scoped WebSocket for personal events (test generation progress, etc.).
+    Unlike /ws/{course_id}, this is not broadcast to a room — events are sent
+    only to the authenticated user.
+    """
+    try:
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+        token_user_id: str = payload.get("sub")
+        if token_user_id is None or token_user_id != user_id:
+            await websocket.accept()
+            await websocket.close(code=1008)
+            return
+    except JWTError:
+        await websocket.accept()
+        await websocket.close(code=1008)
+        return
+
+    # Reuse the same connection_manager — send_to_user already works per user_id.
+    # We register this connection under a synthetic "course_id" of __user__{user_id}
+    # so the manager's room bookkeeping doesn't clash with real course rooms.
+    virtual_room = f"__user__{user_id}"
+    await connection_manager.connect(websocket, virtual_room, user_id)
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+            try:
+                import json as _json
+                msg = _json.loads(data)
+                if msg.get("type") == "ping":
+                    await connection_manager.send_personal_message(websocket, {"type": "pong"})
+            except Exception:
+                pass
+    except WebSocketDisconnect:
+        connection_manager.disconnect(websocket, virtual_room)
+
+
+# WebSocket endpoint for real-time course updates
 
 @app.websocket("/ws/{course_id}")
 async def websocket_endpoint(

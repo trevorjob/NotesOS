@@ -197,11 +197,12 @@ class ConnectionManager:
         async for message in redis_client.subscribe("user_notifications"):
             user_id = message.get("user_id")
             notification = message.get("notification")
-            if user_id and notification:
-                await self.send_to_user(
-                    user_id,
-                    {"type": "notification", "data": notification},
-                )
+            if not user_id or not notification:
+                continue
+            if message.get("raw"):
+                await self.send_to_user(user_id, notification)
+            else:
+                await self.send_to_user(user_id, {"type": "notification", "data": notification})
 
 
 # Singleton instance

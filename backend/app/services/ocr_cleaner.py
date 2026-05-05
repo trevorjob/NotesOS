@@ -4,10 +4,10 @@ Uses DeepSeek AI to clean OCR errors in handwritten notes.
 """
 
 import json
-import httpx
 from typing import List, Dict
 
 from app.config import settings
+from app.services.llm import call_llm
 
 
 class OCRCleaner:
@@ -20,12 +20,6 @@ class OCRCleaner:
     - Missing/incorrect punctuation
     - Contextual corrections
     """
-
-    def __init__(self):
-        """Initialize DeepSeek API client."""
-        self.api_key = settings.DEEPSEEK_API_KEY
-        self.api_base = "https://api.deepseek.com/v1"
-        self.model = "deepseek-chat"
 
     async def clean_ocr_text(
         self,
@@ -66,7 +60,7 @@ class OCRCleaner:
 
         try:
             prompt = self._build_cleaning_prompt(raw_text, aggressive)
-            response = await self._call_deepseek(prompt)
+            response = await self._call_llm(prompt)
             result = self._parse_response(response)
 
             return {
@@ -123,29 +117,8 @@ Return JSON in this format:
 
 RESPOND ONLY WITH VALID JSON, NO OTHER TEXT."""
 
-    async def _call_deepseek(self, prompt: str) -> str:
-        """Make API call to DeepSeek."""
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{self.api_base}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": self.model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.3,  # Low temperature for consistent corrections
-                    "max_tokens": 4000,
-                    "stream": False,
-                },
-                timeout=30.0,
-            )
-
-            response.raise_for_status()
-            data = response.json()
-
-            return data["choices"][0]["message"]["content"]
+    async def _call_llm(self, prompt: str) -> str:
+        return await call_llm(prompt, task="ocr_clean", temperature=0.3, max_tokens=4000, timeout=30.0)
 
     def _parse_response(self, response: str) -> dict:
         """Parse DeepSeek JSON response."""
