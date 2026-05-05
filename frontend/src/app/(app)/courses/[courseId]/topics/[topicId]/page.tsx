@@ -275,7 +275,7 @@ export default function TopicPage() {
 
       {/* Processing banner — shown while workers are running or materials are freshly uploaded.
           processingResources covers both new-topic creation and re-uploads to existing topics. */}
-      {(processingResources
+      {/* {(processingResources
         || knowledge?.status === 'processing'
         || knowledge?.status === 'pending') && (
         <div className="flex items-center gap-3 bg-[#f0f9ff] border border-[#bae6fd] rounded-xl px-4 py-3">
@@ -287,7 +287,7 @@ export default function TopicPage() {
             </p>
           </div>
         </div>
-      )}
+      )} */}
 
       {/* Audio player */}
       {showAudioPlayer && <AudioPlayer topicId={topicId} />}
@@ -371,7 +371,7 @@ export default function TopicPage() {
       {!showChat && (
         <button
           onClick={() => setShowChat(true)}
-          className="fixed bottom-6 right-6 flex items-center gap-2 bg-[#1a1917] text-white px-4 py-2.5 rounded-full shadow-lg hover:opacity-90 transition-opacity text-sm font-medium z-30"
+          className="fixed bottom-10 right-6 flex items-center gap-2 bg-[#1a1917] text-white px-4 py-2.5 rounded-full shadow-lg hover:opacity-90 transition-opacity text-sm font-medium z-30"
         >
           💬 Ask AI
         </button>

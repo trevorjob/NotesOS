@@ -21,26 +21,27 @@ export function FocusMode({ onExit, prevTopicHref, nextTopicHref, children }: Fo
   }, [onExit]);
 
   return (
-    <div className="fixed inset-0 bg-[#f0eeea] z-50 overflow-y-auto">
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-[#f0eeea]">
       {/* Exit bar */}
-      <div className="sticky top-0 flex justify-between items-center px-6 py-3 bg-[#f0eeea] border-b border-[#dedad4]">
+      <div className="sticky top-0 flex items-center justify-between border-b border-[#dedad4] bg-[#f0eeea] px-6 py-3">
         <button
           onClick={onExit}
-          className="text-sm text-[#6b6762] hover:text-[#1a1917] transition-colors flex items-center gap-1.5"
+          className="flex items-center gap-1.5 text-sm text-[#6b6762] transition-colors hover:text-[#1a1917]"
         >
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
             <path d="M9 2L4 7l5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
           </svg>
-          Exit focus mode <kbd className="ml-1 text-xs px-1 bg-[#e8e5e0] rounded">F</kbd>
+          Exit focus mode <kbd className="ml-1 rounded bg-[#e8e5e0] px-1 text-xs">F</kbd>
         </button>
       </div>
 
       {/* Content */}
-      <div className="max-w-[720px] mx-auto px-6 py-8">
+      <div className="mx-auto max-w-[720px] px-6 py-8">
         {children}
       </div>
 
       {/* Prev / Next navigation */}
+      {/* 
       {(prevTopicHref || nextTopicHref) && (
         <div className="max-w-[720px] mx-auto px-6 pb-12 flex justify-between">
           {prevTopicHref ? (
@@ -66,7 +67,7 @@ export function FocusMode({ onExit, prevTopicHref, nextTopicHref, children }: Fo
             </Link>
           )}
         </div>
-      )}
+      )} */}
     </div>
   );
 }

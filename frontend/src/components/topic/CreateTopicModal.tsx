@@ -189,7 +189,7 @@ export function CreateTopicModal({ isOpen, courseId, onClose, onCreated }: Creat
           {/* Text tab */}
           {tab === 'text' && (
             <div className="space-y-3">
-              <div>
+              {/* <div>
                 <label className="block text-xs font-medium text-[#6b6762] mb-1">Title (optional)</label>
                 <input
                   value={textTitle}
@@ -198,7 +198,7 @@ export function CreateTopicModal({ isOpen, courseId, onClose, onCreated }: Creat
                   placeholder="e.g. Week 3 lecture notes"
                   className="w-full bg-[#f0eeea] border border-[#dedad4] rounded-lg px-3 py-2 text-sm text-[#1a1917] placeholder-[#9e9a94] focus:outline-none focus:border-[#1a1917]"
                 />
-              </div>
+              </div> */}
               <div>
                 <label className="block text-xs font-medium text-[#6b6762] mb-1">Content</label>
                 <textarea

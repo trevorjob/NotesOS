@@ -28,6 +28,7 @@ SERVICES=(
     notesos-worker-transcription
     notesos-worker-knowledge
     notesos-worker-audio
+    notesos-worker-test-generation
 )
 
 # ── Helpers ──────────────────────────────────────────────
