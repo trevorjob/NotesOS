@@ -35,6 +35,7 @@ from app.models.progress import (
 )
 from app.models.classmate import Class, Classmate
 from app.models.notification import Notification, NotificationType
+from app.models.knowledge import TopicKnowledge, AudioLesson, KnowledgeStatus
 
 
 __all__ = [
@@ -80,4 +81,8 @@ __all__ = [
     # Notifications
     "Notification",
     "NotificationType",
+    # Knowledge
+    "TopicKnowledge",
+    "AudioLesson",
+    "KnowledgeStatus",
 ]

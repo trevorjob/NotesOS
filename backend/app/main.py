@@ -11,6 +11,9 @@ from jose import jwt, JWTError
 
 from app.config import settings
 from app.database import init_db
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 @asynccontextmanager
@@ -18,7 +21,7 @@ async def lifespan(app: FastAPI):
     """Application lifecycle management."""
     # Startup
     await init_db()
-    print(settings.DATABASE_URL)
+    logger.info("Database initialised")
     # Start Redis listeners for course updates and user notifications
     from app.services.websocket import connection_manager
 
@@ -48,6 +51,10 @@ app.add_middleware(
 # Compress JSON / text responses ≥ 1 KB
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
+# Request/response logging + X-Request-ID header
+from app.middleware.logging import RequestLoggingMiddleware
+app.add_middleware(RequestLoggingMiddleware)
+
 
 @app.get("/")
 async def root():
@@ -57,12 +64,41 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Detailed health check."""
-    return {
-        "status": "healthy",
-        "database": "connected",
-        "redis": "connected",
-    }
+    """Detailed health check — actually verifies DB and Redis connectivity."""
+    import time
+    from sqlalchemy import text
+    from app.database import async_session_maker
+    from app.services.redis_client import redis_client
+
+    checks: dict = {}
+    overall = "healthy"
+
+    # Database
+    t0 = time.monotonic()
+    try:
+        async with async_session_maker() as session:
+            await session.execute(text("SELECT 1"))
+        checks["database"] = {"status": "ok", "latency_ms": round((time.monotonic() - t0) * 1000, 1)}
+    except Exception as e:
+        checks["database"] = {"status": "error", "error": str(e)}
+        overall = "degraded"
+
+    # Redis
+    t0 = time.monotonic()
+    try:
+        r = await redis_client.get_client()
+        await r.ping()
+        checks["redis"] = {"status": "ok", "latency_ms": round((time.monotonic() - t0) * 1000, 1)}
+    except Exception as e:
+        checks["redis"] = {"status": "error", "error": str(e)}
+        overall = "degraded"
+
+    status_code = 200 if overall == "healthy" else 503
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=status_code,
+        content={"status": overall, "checks": checks},
+    )
 
 
 # Import and include routers
@@ -74,6 +110,7 @@ from app.api.ai_features import router as ai_features_router
 from app.api.progress import router as progress_router
 from app.api.semesters import router as semesters_router
 from app.api.notifications import router as notifications_router
+from app.api.knowledge import router as knowledge_router
 from app.services.websocket import connection_manager
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
@@ -87,10 +124,10 @@ app.include_router(semesters_router, prefix="/api/semesters", tags=["semesters"]
 app.include_router(
     notifications_router, prefix="/api/notifications", tags=["notifications"]
 )
+app.include_router(knowledge_router, prefix="/api", tags=["knowledge"])
 
 
 # WebSocket endpoint for real-time updates
-
 
 @app.websocket("/ws/{course_id}")
 async def websocket_endpoint(
@@ -102,20 +139,24 @@ async def websocket_endpoint(
     Query params:
         token: JWT authentication token
     """
-    # Authenticate via token
+    # Authenticate via token.
+    # Must accept() before close() — otherwise Starlette responds with HTTP 403
+    # instead of a proper WebSocket close code, causing the client to loop forever.
     try:
         payload = jwt.decode(
             token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM]
         )
         user_id: str = payload.get("sub")
         if user_id is None:
-            await websocket.close(code=1008)  # Policy violation
+            await websocket.accept()
+            await websocket.close(code=1008)
             return
     except JWTError:
+        await websocket.accept()
         await websocket.close(code=1008)
         return
 
-    # Connect
+    # Connect (connection_manager.connect calls websocket.accept() internally)
     await connection_manager.connect(websocket, course_id, user_id)
 
     try:
@@ -128,10 +169,15 @@ async def websocket_endpoint(
         # Keep connection alive and listen for messages
         while True:
             data = await websocket.receive_text()
-            # Echo back for now (can add more logic later)
-            await connection_manager.send_personal_message(
-                websocket, {"type": "echo", "data": data}
-            )
+            try:
+                import json as _json
+                msg = _json.loads(data)
+                if msg.get("type") == "ping":
+                    await connection_manager.send_personal_message(websocket, {"type": "pong"})
+                else:
+                    await connection_manager.send_personal_message(websocket, {"type": "echo", "data": data})
+            except Exception:
+                pass
 
     except WebSocketDisconnect:
         user_id = connection_manager.disconnect(websocket, course_id)

@@ -14,6 +14,7 @@ from app.database import get_db
 from app.models import User, Course, CourseEnrollment
 from app.models.semester import Semester, SemesterMember, SemesterRole
 from app.api.auth import get_current_user
+from app.services.cache import cache, courses_list_key
 
 router = APIRouter()
 
@@ -182,6 +183,8 @@ async def list_semesters(
                 "start_date": s.start_date.isoformat() if s.start_date else None,
                 "end_date": s.end_date.isoformat() if s.end_date else None,
                 "role": membership_map[s.id].role.value,
+                # Only expose invite_code to the owner so they can share it
+                "invite_code": s.invite_code if membership_map[s.id].role == SemesterRole.OWNER else None,
                 "member_count": member_counts.get(s.id, 0),
                 "course_count": course_counts.get(s.id, 0),
                 "created_at": s.created_at.isoformat(),
@@ -348,6 +351,9 @@ async def join_semester(
 
     await db.commit()
 
+    # Invalidate the joining user's course list cache so they see the new courses immediately
+    await cache.delete(courses_list_key(str(current_user.id)))
+
     # Notify semester owner via notification service
     try:
         from app.services.notifications import create_and_push_notification
@@ -434,9 +440,26 @@ async def add_course_to_semester(
         raise HTTPException(status_code=404, detail="Course not found.")
 
     course.semester_id = semester.id
-    await db.commit()
+    await db.flush()
 
-    return {"message": f"Course assigned to semester '{semester.name}'."}
+    # Auto-enroll all existing semester members in this new course
+    members_result = await db.execute(
+        select(SemesterMember).where(SemesterMember.semester_id == semester.id)
+    )
+    members = members_result.scalars().all()
+
+    for member in members:
+        existing = await db.execute(
+            select(CourseEnrollment).where(
+                CourseEnrollment.user_id == member.user_id,
+                CourseEnrollment.course_id == course.id,
+            )
+        )
+        if not existing.scalar_one_or_none():
+            db.add(CourseEnrollment(user_id=member.user_id, course_id=course.id))
+
+    await db.commit()
+    return {"message": f"Course added to semester '{semester.name}'. {len(members)} member(s) auto-enrolled."}
 
 
 @router.delete("/{semester_id}/courses/{course_id}", status_code=status.HTTP_200_OK)

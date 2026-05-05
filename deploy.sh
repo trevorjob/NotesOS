@@ -26,6 +26,8 @@ SERVICES=(
     notesos-worker-grading
     notesos-worker-factcheck
     notesos-worker-transcription
+    notesos-worker-knowledge
+    notesos-worker-audio
 )
 
 # ── Helpers ──────────────────────────────────────────────
@@ -336,8 +338,8 @@ cmd_deploy() {
 
     # Sync files
     info "Syncing files to ${APP_DIR}..."
-    rsync -a --exclude='.git' --exclude='node_modules' --exclude='venv' \
-        --exclude='.next' --exclude='__pycache__' --exclude='.env' \
+    rsync -a --delete --exclude='.git' --exclude='node_modules' --exclude='venv' \
+        --exclude='.next' --exclude='__pycache__' \
         "${SCRIPT_DIR}/" "${APP_DIR}/"
     chown -R "${APP_USER}:${APP_USER}" "$APP_DIR"
 
@@ -368,9 +370,19 @@ cmd_deploy() {
     "
     ok "Frontend built"
 
+    # Sync and reload service files (picks up new or changed services)
+    info "Syncing systemd service files..."
+    for svc in "${SERVICES[@]}"; do
+        sed -e "s|__APP_DIR__|${APP_DIR}|g" \
+            -e "s|__APP_USER__|${APP_USER}|g" \
+            "${APP_DIR}/deploy/${svc}.service" > "/etc/systemd/system/${svc}.service"
+    done
+    systemctl daemon-reload
+
     # Restart services
     info "Restarting services..."
     for svc in "${SERVICES[@]}"; do
+        systemctl enable "$svc" 2>/dev/null || true
         systemctl restart "$svc"
     done
     ok "All services restarted"

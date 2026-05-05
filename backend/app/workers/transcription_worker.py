@@ -120,18 +120,21 @@ async def process_transcription_job(job_data: dict) -> None:
 
 
 async def transcription_worker() -> None:
-    """Main loop: drain queue:transcription using blocking BRPOP."""
+    """Main loop: drain queue:transcription using reliable BRPOPLPUSH."""
+    import json
+
     print("[TRANSCRIPTION WORKER] 🚀 Starting worker")
-    client = await redis_client.get_client()
+
+    recovered = await redis_client.recover_orphaned_jobs("transcription")
+    if recovered:
+        print(f"[TRANSCRIPTION WORKER] 🔄 Recovered {recovered} orphaned job(s)")
 
     while True:
+        job_json = None
         try:
-            result = await client.brpop("queue:transcription", timeout=5)
+            job_json = await redis_client.reliable_dequeue("transcription", timeout=5)
 
-            if result:
-                import json
-
-                _, job_json = result
+            if job_json:
                 job = json.loads(job_json)
 
                 job_id = job["id"]
@@ -147,12 +150,16 @@ async def transcription_worker() -> None:
                     "completed",
                     result={"resource_id": job_data.get("resource_id")},
                 )
+                await redis_client.ack_job("transcription", job_json)
 
         except asyncio.CancelledError:
+            # Do NOT ack — job stays in :processing and recovers on next startup
             print("[TRANSCRIPTION WORKER] Shutting down")
             break
         except Exception as exc:
             print(f"[TRANSCRIPTION WORKER] Worker error: {exc}")
+            if job_json:
+                await redis_client.ack_job("transcription", job_json)
             await asyncio.sleep(1)
 
 

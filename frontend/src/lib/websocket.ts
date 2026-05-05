@@ -8,13 +8,18 @@ import { tokenManager } from './api';
 export type WebSocketMessage =
     | { type: 'processing_status'; resource_id: string; status: 'processing' | 'completed' | 'failed' }
     | { type: 'fact_check:complete'; data: { resource_id: string; topic_id: string; summary: string; stats: Record<string, number> } }
-    | { type: 'grading:complete'; answer_id: string; attempt_id: string; score: number; encouragement: string }
-    | { type: 'resource_created'; data: any }
-    | { type: 'resource_updated'; data: any }
+    | { type: 'grading:complete'; data: { answer_id: string; attempt_id: string; score: number; encouragement: string } }
+    | { type: 'knowledge_updated'; topic_id: string; knowledge_id: string }
+    | { type: 'knowledge_status'; topic_id: string; status: string }
+    | { type: 'notification'; data: { id: string; type: string; title: string; body: string; is_read: boolean; created_at: string; meta_data?: Record<string, string> } }
+    | { type: 'resource_created'; data: unknown }
+    | { type: 'resource_updated'; data: unknown }
     | { type: 'resource_deleted'; resource_id: string }
     | { type: 'user_joined'; user_id: string; timestamp: string | null }
     | { type: 'active_users'; users: string[] }
-    | { type: 'echo'; data: any };
+    | { type: 'ping' }
+    | { type: 'pong' }
+    | { type: 'echo'; data: unknown };
 
 export interface WebSocketCallbacks {
     onMessage?: (message: WebSocketMessage) => void;
@@ -35,6 +40,8 @@ export class WebSocketClient {
     private reconnectDelay = 1000;
     private reconnectTimer: NodeJS.Timeout | null = null;
     private isIntentionalClose = false;
+    private pingTimer: NodeJS.Timeout | null = null;
+    private pongTimer: NodeJS.Timeout | null = null;
 
     constructor(courseId: string, callbacks: WebSocketCallbacks) {
         this.courseId = courseId;
@@ -63,13 +70,18 @@ export class WebSocketClient {
             this.ws.onopen = () => {
                 console.log('[WebSocket] Connected');
                 this.reconnectAttempts = 0;
+                this._startHeartbeat();
                 this.callbacks.onOpen?.();
             };
 
             this.ws.onmessage = (event) => {
                 try {
                     const message = JSON.parse(event.data) as WebSocketMessage;
-                    console.log('[WebSocket] Message received:', message.type);
+                    if (message.type === 'pong') {
+                        // Clear the pong timeout — connection is alive
+                        if (this.pongTimer) { clearTimeout(this.pongTimer); this.pongTimer = null; }
+                        return;
+                    }
                     this.callbacks.onMessage?.(message);
                 } catch (err) {
                     console.error('[WebSocket] Failed to parse message:', err);
@@ -81,9 +93,16 @@ export class WebSocketClient {
                 this.callbacks.onError?.(error);
             };
 
-            this.ws.onclose = () => {
-                console.log('[WebSocket] Disconnected');
+            this.ws.onclose = (event) => {
+                console.log('[WebSocket] Disconnected', event.code);
+                this._stopHeartbeat();
                 this.callbacks.onClose?.();
+
+                // 1008 = policy violation (auth failure) — don't retry, token won't fix itself
+                if (event.code === 1008) {
+                    console.error('[WebSocket] Auth rejected (1008), not reconnecting');
+                    return;
+                }
 
                 // Reconnect if not intentional close and haven't exceeded max attempts
                 if (!this.isIntentionalClose && this.reconnectAttempts < this.maxReconnectAttempts) {
@@ -103,8 +122,27 @@ export class WebSocketClient {
         }
     }
 
+    private _startHeartbeat(): void {
+        this._stopHeartbeat();
+        this.pingTimer = setInterval(() => {
+            if (this.ws?.readyState !== WebSocket.OPEN) return;
+            this.ws.send(JSON.stringify({ type: 'ping' }));
+            // If no pong arrives within 10s, treat connection as dead
+            this.pongTimer = setTimeout(() => {
+                console.warn('[WebSocket] Pong timeout — reconnecting');
+                this.ws?.close();
+            }, 10_000);
+        }, 30_000);
+    }
+
+    private _stopHeartbeat(): void {
+        if (this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null; }
+        if (this.pongTimer) { clearTimeout(this.pongTimer); this.pongTimer = null; }
+    }
+
     disconnect(): void {
         this.isIntentionalClose = true;
+        this._stopHeartbeat();
         if (this.reconnectTimer) {
             clearTimeout(this.reconnectTimer);
             this.reconnectTimer = null;
@@ -115,7 +153,7 @@ export class WebSocketClient {
         }
     }
 
-    send(message: any): void {
+    send(message: WebSocketMessage): void {
         if (this.ws?.readyState === WebSocket.OPEN) {
             this.ws.send(JSON.stringify(message));
         } else {

@@ -1,60 +1,56 @@
 'use client';
 
-import React from 'react';
+import { Component, ErrorInfo, ReactNode } from 'react';
 
-interface ErrorBoundaryState {
-    hasError: boolean;
+interface Props {
+  children: ReactNode;
+  fallback?: ReactNode;
 }
 
-export class ErrorBoundary extends React.Component<React.PropsWithChildren, ErrorBoundaryState> {
-    state: ErrorBoundaryState = {
-        hasError: false,
-    };
-
-    static getDerivedStateFromError(): ErrorBoundaryState {
-        return { hasError: true };
-    }
-
-    componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-        console.error('[ErrorBoundary] Caught error:', error, errorInfo);
-    }
-
-    render() {
-        if (this.state.hasError) {
-            return (
-                <div className="min-h-screen bg-[var(--bg-base)] flex items-center justify-center px-4">
-                    <div className="max-w-md w-full text-center">
-                        <div className="w-12 h-12 mx-auto mb-4 rounded-xl bg-[var(--error)]/10 flex items-center justify-center">
-                            <span className="text-[var(--error)] text-xl">!</span>
-                        </div>
-                        <h1 className="text-lg font-semibold text-[var(--text-primary)] mb-2">
-                            Something went wrong
-                        </h1>
-                        <p className="text-sm text-[var(--text-secondary)] mb-4">
-                            An unexpected error occurred. Try refreshing the page or going back to your courses.
-                        </p>
-                        <div className="flex justify-center gap-3">
-                            <button
-                                type="button"
-                                onClick={() => window.location.reload()}
-                                className="px-4 py-2 rounded-lg bg-[var(--accent-primary)] text-white text-sm font-medium hover:bg-[var(--accent-hover)] transition-colors"
-                            >
-                                Reload
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => (window.location.href = '/courses')}
-                                className="px-4 py-2 rounded-lg bg-[var(--bg-sunken)] text-[var(--text-secondary)] text-sm font-medium hover:text-[var(--text-primary)] transition-colors"
-                            >
-                                Go to courses
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            );
-        }
-
-        return this.props.children;
-    }
+interface State {
+  hasError: boolean;
+  error: Error | null;
 }
 
+export class ErrorBoundary extends Component<Props, State> {
+  state: State = { hasError: false, error: null };
+
+  static getDerivedStateFromError(error: Error): State {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    try {
+      // Report to PostHog if available
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const posthog = require('posthog-js').default;
+      posthog.captureException(error, { extra: { componentStack: info.componentStack } });
+    } catch {
+      // PostHog not loaded — silent
+    }
+    console.error('[ErrorBoundary]', error, info.componentStack);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      if (this.props.fallback) return this.props.fallback;
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-[#F5F3EE] px-4">
+          <div className="max-w-md text-center space-y-4">
+            <p className="text-2xl font-semibold text-[#1a1917]">Something went wrong</p>
+            <p className="text-sm text-[#6b6762]">
+              An unexpected error occurred. Try refreshing the page.
+            </p>
+            <button
+              onClick={() => window.location.reload()}
+              className="px-4 py-2 rounded-xl bg-[#1a1917] text-white text-sm hover:opacity-90 transition-opacity"
+            >
+              Refresh
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}

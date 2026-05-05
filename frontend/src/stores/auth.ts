@@ -5,6 +5,8 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { AxiosError } from 'axios';
+import posthog from 'posthog-js';
 import { api, tokenManager } from '@/lib/api';
 
 interface User {
@@ -55,15 +57,18 @@ export const useAuthStore = create<AuthState>()(
 
           // Store tokens
           tokenManager.setTokens(access_token, refresh_token);
+          posthog.identify(user.id, { email: user.email, name: user.full_name });
 
-          set({
+            set({
             user,
             isAuthenticated: true,
             isLoading: false,
-          });
-        } catch (error: any) {
+            });
+          } catch (error: unknown) {
           const errorMessage =
-            error.response?.data?.detail || 'Login failed. Please try again.';
+            error instanceof AxiosError
+              ? (error.response?.data as { detail?: string })?.detail || 'Login failed. Please try again.'
+              : 'Login failed. Please try again.';
           set({ isLoading: false, error: errorMessage });
           throw new Error(errorMessage);
         }
@@ -77,16 +82,18 @@ export const useAuthStore = create<AuthState>()(
 
           // Store tokens
           tokenManager.setTokens(access_token, refresh_token);
+          posthog.identify(user.id, { email: user.email, name: user.full_name });
 
           set({
             user,
             isAuthenticated: true,
             isLoading: false,
           });
-        } catch (error: any) {
+        } catch (error: unknown) {
           const errorMessage =
-            error.response?.data?.detail ||
-            'Registration failed. Please try again.';
+            error instanceof AxiosError
+              ? (error.response?.data as { detail?: string })?.detail || 'Registration failed. Please try again.'
+              : 'Registration failed. Please try again.';
           set({ isLoading: false, error: errorMessage });
           throw new Error(errorMessage);
         }
@@ -99,8 +106,9 @@ export const useAuthStore = create<AuthState>()(
           // Ignore logout errors
           console.error('Logout error:', error);
         } finally {
-          // Clear tokens and state
-          tokenManager.clearTokens();
+          // Wipe all persisted client state (localStorage + IndexedDB)
+          tokenManager.clearAll();
+          posthog.reset();
           set({
             user: null,
             isAuthenticated: false,

@@ -3,12 +3,16 @@ NotesOS - Question Generator Service
 LangGraph-based test question generation with quality loop.
 """
 
+import asyncio
 import json
+import logging
 import httpx
 from typing import TypedDict, List, Dict, Any
 from langgraph.graph import StateGraph, END
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+
+logger = logging.getLogger(__name__)
 
 from app.config import settings
 from app.models.resource import Resource
@@ -20,6 +24,7 @@ class QuestionGenState(TypedDict):
 
     test_id: str
     topic_ids: List[str]
+    topic_name: str
     resource_content: str
     question_count: int
     difficulty: str
@@ -27,6 +32,9 @@ class QuestionGenState(TypedDict):
     generated_questions: List[Dict[str, Any]]
     quality_score: float
     retry_count: int
+
+
+BATCH_SIZE = 12  # Questions per parallel API call
 
 
 class QuestionGenerator:
@@ -41,11 +49,14 @@ class QuestionGenerator:
         self,
         db: AsyncSession,
         course_id: str,
-        user_id: str,  # Added user_id
+        user_id: str,
         topic_ids: List[str],
+        topic_name: str,
         question_count: int = 10,
         difficulty: str = "medium",
         question_types: List[str] = None,
+        title: str = None,
+        
     ) -> Test:
         """
         Generate a complete test with questions.
@@ -74,7 +85,7 @@ class QuestionGenerator:
         test = Test(
             course_id=uuid.UUID(course_id),
             created_by=uuid.UUID(user_id),
-            title=f"Practice Test - {difficulty.capitalize()}",
+            title=title or f"Practice Test - {difficulty.capitalize()}",
             test_type=TestType.PRACTICE,
             topics=topic_ids,
             question_count=question_count,
@@ -89,6 +100,7 @@ class QuestionGenerator:
         initial_state = {
             "test_id": str(test.id),
             "topic_ids": topic_ids,
+            "topic_name": topic_name,
             "resource_content": resource_content,
             "question_count": question_count,
             "difficulty": difficulty,
@@ -158,50 +170,115 @@ class QuestionGenerator:
 
         return "\n\n".join(content_parts)
 
-    async def _generate_questions(self, state: QuestionGenState) -> Dict[str, Any]:
-        """Generate questions using DeepSeek."""
-        prompt = f"""Generate {state["question_count"]} practice test questions based on this course content.
+    def _build_prompt(self, state: QuestionGenState, batch_count: int, batch_index: int, total_batches: int) -> str:
+        return f"""You are writing a quiz for a student studying {state["topic_name"]}.
+Your job is to write questions that actually test whether someone
+understands the material — not just whether they memorised keywords.
 
-Difficulty: {state["difficulty"]}
-Question Types: {", ".join(state["question_types"])}
+Good questions:
+- Test a concept, relationship, or application — not just a definition
+- Have wrong answers that are plausible (a student who half-understands
+  could pick them)
+- Are specific enough that someone can answer them without guessing
+- Are not trick questions or gotchas
 
-Content:
-{state["resource_content"][:4000]}
+Bad questions (never write these):
+- "What is the definition of X?" when X was defined word-for-word in the notes
+- Questions with obviously wrong distractors
+- Questions testing trivial details that wouldn't appear on a real exam
+- Two questions that test essentially the same idea
 
-Requirements:
-1. Ensure all major concepts are covered
-2. Create diverse questions (don't repeat topics)
-3. For MCQ: provide 4 answer options with exactly one correct answer
-4. For short answer: provide a model answer (2-3 sentences)
-5. Make questions clear and unambiguous
+TOPIC: {state["topic_name"]}
+DIFFICULTY: {state["difficulty"]}
+NUMBER OF QUESTIONS: {batch_count} (generate EXACTLY this many, no more, no fewer)
+QUESTION TYPES ALLOWED: {", ".join(state["question_types"])} — use ONLY these types, no others
+BATCH: {batch_index + 1} of {total_batches} — cover a DIFFERENT section of the material than other batches
 
-Return JSON array of questions in this format:
+STUDY MATERIAL:
+{state["resource_content"]}
+
+DIFFICULTY GUIDE:
+- easy: recall of key facts and straightforward definitions
+- medium: application of concepts, cause-and-effect, compare-and-contrast
+- hard: synthesis, edge cases, explain why something works the way it does
+
+QUESTION TYPE RULES:
+
+For "mcq":
+- Write exactly 4 answer options
+- All 4 options must be plausible to someone who partially understands the topic
+- Wrong options should represent common misconceptions or close-but-wrong ideas
+- Never make the correct answer obviously longer or more detailed than the others
+- correct_answer must be the EXACT TEXT of one of the answer_options strings —
+  not a label, not a paraphrase, the exact string copied
+
+For "short_answer":
+- The question should require 2–4 sentences to answer properly
+- correct_answer is a model answer showing the key points the student must hit
+- Format model answer as: "Key points: [point 1] / [point 2] / [point 3]"
+  so the grader knows what to look for
+
+COVERAGE:
+- Spread questions across different concepts — don't cluster on one section
+- Ensure no two questions test the same idea
+- Prioritise concepts that appear repeatedly in the material or seem central to the topic
+
+CRITICAL: Return a JSON array of EXACTLY {batch_count} question(s). Not more, not fewer. If {batch_count} is 1, return an array with 1 element. If {batch_count} is 2, return exactly 2 elements.
 [
   {{
-    "question_text": "What is...?",
+    "question_text": "The question",
     "question_type": "mcq",
-    "correct_answer": "Option B",
     "answer_options": ["Option A", "Option B", "Option C", "Option D"],
+    "correct_answer": "Option B",
+    "explanation": "Brief explanation of why this is correct and why the others are wrong. 1–2 sentences.",
     "points": 1
   }},
   {{
-    "question_text": "Explain...",
+    "question_text": "The question",
     "question_type": "short_answer",
-    "correct_answer": "Model answer here...",
+    "correct_answer": "Key points: [first thing they must say] / [second thing] / [third thing if applicable]",
+    "explanation": "What a strong answer looks like and what a weak answer misses.",
     "points": 2
   }}
 ]
 
-Return ONLY valid JSON, no other text."""
+Return ONLY valid JSON. No preamble. No text outside the array."""
 
-        response = await self._call_deepseek(prompt)
-
+    async def _generate_batch(self, state: QuestionGenState, batch_count: int, batch_index: int, total_batches: int) -> List[Dict[str, Any]]:
+        """Generate a single batch of questions."""
+        prompt = self._build_prompt(state, batch_count, batch_index, total_batches)
+        # ~350 tokens per question (question + options + explanation + JSON overhead) + 500 base
+        max_tokens = min(500 + batch_count * 350, 8000)
         try:
+            response = await self._call_deepseek(prompt, max_tokens=max_tokens)
             questions = self._parse_json_response(response)
-            return {"generated_questions": questions}
+            # Trim to exact count in case the model over-generates
+            return questions[:batch_count]
         except Exception as e:
-            print(f"[QUESTION GEN] Error parsing questions: {e}")
-            return {"generated_questions": []}
+            logger.error(f"[QUESTION GEN] Batch {batch_index + 1} failed: {e}")
+            return []
+
+    async def _generate_questions(self, state: QuestionGenState) -> Dict[str, Any]:
+        """Generate questions using parallel batches."""
+        total = state["question_count"]
+        total_batches = (total + BATCH_SIZE - 1) // BATCH_SIZE
+
+        # Build batch sizes (last batch may be smaller)
+        batches = []
+        remaining = total
+        for i in range(total_batches):
+            batch_count = min(BATCH_SIZE, remaining)
+            batches.append((batch_count, i, total_batches))
+            remaining -= batch_count
+
+        results = await asyncio.gather(*[
+            self._generate_batch(state, count, idx, total_batches)
+            for count, idx, total in batches
+        ])
+
+        all_questions = [q for batch in results for q in batch]
+        logger.info(f"[QUESTION GEN] Generated {len(all_questions)} / {total} questions across {total_batches} batches")
+        return {"generated_questions": all_questions}
 
     async def _quality_check(self, state: QuestionGenState) -> Dict[str, Any]:
         """Check quality of generated questions."""
@@ -244,9 +321,10 @@ Return ONLY valid JSON, no other text."""
         """Provide feedback and increment retry counter."""
         return {"retry_count": state["retry_count"] + 1}
 
-    async def _call_deepseek(self, prompt: str) -> str:
+    async def _call_deepseek(self, prompt: str, max_tokens: int = 3000) -> str:
         """Make API call to DeepSeek."""
-        async with httpx.AsyncClient() as client:
+        timeout = httpx.Timeout(connect=10.0, read=180.0, write=10.0, pool=5.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
                 f"{self.deepseek_base}/chat/completions",
                 headers={
@@ -257,9 +335,8 @@ Return ONLY valid JSON, no other text."""
                     "model": "deepseek-chat",
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.6,
-                    "max_tokens": 3000,
+                    "max_tokens": max_tokens,
                 },
-                timeout=45.0,
             )
             response.raise_for_status()
             data = response.json()

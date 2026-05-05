@@ -38,19 +38,10 @@ async_session_maker = async_sessionmaker(
 
 
 async def init_db():
-    """Initialize database - create tables if they don't exist."""
+    """Initialize database extensions. Schema is managed exclusively by Alembic."""
     async with engine.begin() as conn:
-        # Import all models to ensure they're registered
-        from app.models import (
-            user,
-            course,
-            test,
-            progress,
-            resource,
-            classmate,
-        )
-
-        await conn.run_sync(Base.metadata.create_all)
+        from sqlalchemy import text
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
 
 
 async def get_db() -> AsyncSession:

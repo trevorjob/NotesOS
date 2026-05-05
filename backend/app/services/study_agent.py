@@ -28,6 +28,7 @@ class StudyAgent:
         question: str,
         topic_id: Optional[str] = None,
         conversation_id: Optional[str] = None,
+        personality: Optional[dict] = None,
     ) -> Dict[str, Any]:
         """
         Answer a study question using RAG + AI.
@@ -46,11 +47,11 @@ class StudyAgent:
                 - sources: List of source resources
                 - conversation_id: Conversation ID for follow-ups
         """
-        # 1. Get or create conversation
+        # 1. Get or create conversation — one per user per topic
         if conversation_id:
             conversation = await self._get_conversation(db, conversation_id, user_id)
         else:
-            conversation = await self._create_conversation(
+            conversation = await self._get_or_create_conversation(
                 db, user_id, course_id, topic_id
             )
 
@@ -70,7 +71,7 @@ class StudyAgent:
         history = await self._get_conversation_history(db, conversation.id)
 
         # 4. Generate answer with DeepSeek
-        answer = await self._generate_answer(question, context, history)
+        answer = await self._generate_answer(question, context, history, personality=personality)
 
         # 5. Save messages to conversation
         await self._save_messages(db, conversation.id, question, answer)
@@ -104,15 +105,26 @@ class StudyAgent:
 
         return conversation
 
-    async def _create_conversation(
+    async def _get_or_create_conversation(
         self,
         db: AsyncSession,
         user_id: str,
         course_id: str,
         topic_id: Optional[str] = None,
     ) -> AIConversation:
-        """Create new conversation."""
+        """Return the existing conversation for this user+topic, or create one."""
         import uuid
+
+        if topic_id:
+            result = await db.execute(
+                select(AIConversation).where(
+                    AIConversation.user_id == uuid.UUID(user_id),
+                    AIConversation.topic_id == uuid.UUID(topic_id),
+                )
+            )
+            existing = result.scalar_one_or_none()
+            if existing:
+                return existing
 
         conversation = AIConversation(
             user_id=uuid.UUID(user_id),
@@ -143,25 +155,96 @@ class StudyAgent:
 
         return history
 
-    async def _generate_answer(self, question: str, context: str, history: list) -> str:
-        """Generate answer using DeepSeek with RAG context."""
-        system_prompt = """You are a friendly, knowledgeable study assistant helping students learn course material.
+    async def _generate_answer(self, question: str, context: str, history: list, personality: Optional[dict] = None) -> str:
+        """Generate answer using DeepSeek with RAG context and user personality."""
+        tone = (personality or {}).get("tone", "encouraging")
+        emoji_usage = (personality or {}).get("emoji_usage", "moderate")
+        explanation_style = (personality or {}).get("explanation_style", "detailed")
 
-Your job is to:
-1. Answer questions clearly and accurately based on the provided course notes
-2. Explain concepts in an easy-to-understand way
-3. Encourage students and keep them motivated
-4. If the notes don't contain the answer, say so honestly
+        tone_desc = {
+            "encouraging": (
+                "warm and genuinely invested in the student's understanding. "
+                "Celebrate when they ask good questions. If they're struggling, "
+                "acknowledge it and break things down further. Never condescending."
+            ),
+            "direct": (
+                "efficient and no-nonsense. Skip preamble, get to the answer. "
+                "No 'great question!', no filler phrases. Respect that the student "
+                "wants the information fast."
+            ),
+            "humorous": (
+                "sharp and occasionally funny — use wit to make dense material "
+                "more memorable, but never at the expense of clarity. "
+                "A well-placed analogy beats a joke every time."
+            ),
+        }.get(tone, "friendly and clear")
 
-Be conversational, supportive, and use examples when helpful."""
+        emoji_desc = {
+            "none": "Do not use any emojis at all.",
+            "moderate": (
+                "Use 1–2 emojis per response maximum, only where they genuinely "
+                "add meaning or warmth — not as decoration."
+            ),
+            "heavy": (
+                "Use emojis naturally throughout, the way a student texting a "
+                "classmate would."
+            ),
+        }.get(emoji_usage, "Use emojis sparingly.")
 
-        user_prompt = f"""Question: {question}
+        style_desc = {
+            "concise": (
+                "Lead with the direct answer in 1–2 sentences. Only add context "
+                "if the question requires it. Prefer short paragraphs over lists "
+                "unless listing is genuinely the clearest format."
+            ),
+            "detailed": (
+                "Give the full picture — explain not just what but why. "
+                "Use examples where they help. Break complex ideas into steps. "
+                "But don't pad — every sentence should earn its place."
+            ),
+            "visual": (
+                "Think in examples and analogies first. Before explaining a concept "
+                "abstractly, ground it in something concrete the student can picture. "
+                "Use step-by-step breakdowns for processes. Comparisons are your "
+                "best tool."
+            ),
+        }.get(explanation_style, "Give thorough explanations.")
 
-Course Notes Context:
-{context}
+        system_prompt = f"""You are the student's personal study partner for this course — 
+        someone who has read all the same notes and is there to help them actually 
+        understand the material, not just recite it back.
 
-Please provide a clear, helpful answer based on the course notes above."""
+        HOW YOU COMMUNICATE:
+        - Tone: {tone_desc}
+        - Emojis: {emoji_desc}
+        - Style: {style_desc}
 
+        HOW YOU ANSWER:
+        - Base every answer on the course notes provided. If the notes cover it, 
+        use them as your primary source.
+        - If the notes only partially cover the question, answer what you can from 
+        the notes and clearly flag what's coming from general knowledge: 
+        "Your notes don't cover this directly, but generally..."
+        - If the question is completely outside the notes, say so plainly and 
+        offer a general answer if it's helpful — don't refuse, don't pretend 
+        the notes say something they don't.
+        - If a question is vague, answer the most likely interpretation and 
+        offer to go deeper on any part.
+        - Never use phrases like "Based on the provided context..." or 
+        "According to the course notes..." — just answer naturally, 
+        the way a study partner would.
+        - Match your response length to the question. A factual question 
+        gets a short answer. A conceptual question gets a fuller explanation.
+        - If the student seems to have a misconception in their question, 
+        gently correct it before answering."""
+
+        user_prompt = f"""Here are the notes for this topic:
+
+        {context}
+
+        ---
+
+        Student's question: {question}"""
         # Build messages array with history
         messages = [{"role": "system", "content": system_prompt}]
         messages.extend(history)  # Add conversation history

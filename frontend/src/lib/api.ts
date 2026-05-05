@@ -48,6 +48,19 @@ export const tokenManager = {
         localStorage.removeItem(TOKEN_KEY);
         localStorage.removeItem(REFRESH_TOKEN_KEY);
     },
+
+    clearAll: () => {
+        if (typeof window === 'undefined') return;
+        localStorage.clear();
+        // Clear all IndexedDB databases
+        if (typeof indexedDB !== 'undefined' && indexedDB.databases) {
+            indexedDB.databases().then((dbs) => {
+                dbs.forEach((db) => {
+                    if (db.name) indexedDB.deleteDatabase(db.name);
+                });
+            }).catch(() => {});
+        }
+    },
 };
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -93,8 +106,13 @@ apiClient.interceptors.response.use(
             _retry?: boolean;
         };
 
-        // If 401 and not already retrying
-        if (error.response?.status === 401 && !originalRequest._retry) {
+        // If 401 and not already retrying, and not an auth endpoint
+        // (login/register return 401 on bad creds; logout doesn't need auth)
+        const isAuthEndpoint =
+            originalRequest.url?.includes('/api/auth/login') ||
+            originalRequest.url?.includes('/api/auth/register') ||
+            originalRequest.url?.includes('/api/auth/logout');
+        if (error.response?.status === 401 && !originalRequest._retry && !isAuthEndpoint) {
             if (isRefreshing) {
                 // Queue this request
                 return new Promise((resolve, reject) => {
@@ -192,6 +210,18 @@ export const api = {
             emoji_usage?: string;
             explanation_style?: string;
         }) => apiClient.patch('/api/auth/me/personality', prefs),
+
+        updateProfile: (data: { full_name?: string }) =>
+            apiClient.patch('/api/auth/me', data),
+
+        changePassword: (data: { current_password: string; new_password: string }) =>
+            apiClient.post('/api/auth/me/change-password', data),
+
+        forgotPassword: (email: string) =>
+            apiClient.post('/api/auth/forgot-password', { email }),
+
+        resetPassword: (token: string, new_password: string) =>
+            apiClient.post('/api/auth/reset-password', { token, new_password }),
     },
 
     // Courses
@@ -204,7 +234,7 @@ export const api = {
             code: string;
             name: string;
             description?: string;
-            semester?: string;
+            semester_id?: string;
             is_public?: boolean;
         }) => apiClient.post('/api/courses', data),
 
@@ -277,6 +307,9 @@ export const api = {
             isHandwritten?: boolean,
             onProgress?: (percent: number) => void
         ) => {
+            if (!topicId || !courseId) {
+                throw new Error('topicId and courseId are required for upload');
+            }
             const { uploadFilesToCloudinary } = await import('./cloudinaryUpload');
             const folder = `notesos/${courseId}/${topicId}`;
             const uploaded = await uploadFilesToCloudinary(files, folder, onProgress);
@@ -332,13 +365,16 @@ export const api = {
             params: { course_id: courseId },
         }),
 
-        getConversations: (courseId: string) =>
+        getConversations: (courseId: string, topicId?: string) =>
             apiClient.get('/api/study/conversations', {
-                params: { course_id: courseId },
+                params: { course_id: courseId, ...(topicId ? { topic_id: topicId } : {}) },
             }),
 
         getConversation: (conversationId: string) =>
             apiClient.get(`/api/study/conversations/${conversationId}`),
+
+        deleteConversation: (conversationId: string) =>
+            apiClient.delete(`/api/study/conversations/${conversationId}`),
 
         // Tests
         generateTest: (courseId: string, data: {
@@ -377,16 +413,20 @@ export const api = {
                     formData.append(`voice_${questionId}`, file);
                 });
             }
+            // Clear Content-Type so browser sets multipart/form-data with boundary
             return apiClient.post(`/api/tests/${testId}/submit-full`, formData, {
-                headers: { 'Content-Type': 'multipart/form-data' },
+                headers: { 'Content-Type': undefined },
             });
         },
 
         getTestResults: (attemptId: string) =>
             apiClient.get(`/api/tests/attempts/${attemptId}/results`),
 
-        getTestStats: (courseId?: string) =>
-            apiClient.get('/api/tests/stats', { params: courseId ? { course_id: courseId } : {} }),
+        getTestStats: (courseId: string) =>
+            apiClient.get('/api/tests/stats', { params: { course_id: courseId } }),
+
+        getRecentAttempts: (limit = 10) =>
+            apiClient.get('/api/tests/attempts/recent', { params: { limit } }),
 
         saveDraft: (testId: string, answers: Array<{ question_id: string; answer_text: string }>) =>
             apiClient.post(`/api/tests/${testId}/draft`, { answers }),
@@ -420,11 +460,18 @@ export const api = {
 
     // Notifications
     notifications: {
-        getAll: () => apiClient.get('/api/notifications'),
+        getAll: (limit = 20, offset = 0) =>
+            apiClient.get('/api/notifications', { params: { limit, offset } }),
+
+        getUnreadCount: () => apiClient.get('/api/notifications/unread-count'),
 
         markRead: (id: string) => apiClient.patch(`/api/notifications/${id}/read`),
 
         markAllRead: () => apiClient.patch('/api/notifications/read-all'),
+
+        deleteOne: (id: string) => apiClient.delete(`/api/notifications/${id}`),
+
+        deleteAll: () => apiClient.delete('/api/notifications'),
     },
 
     // Progress
@@ -448,6 +495,24 @@ export const api = {
 
         getRecommendations: (courseId: string) =>
             apiClient.get(`/api/progress/${courseId}/recommendations`),
+    },
+
+    // Knowledge & Audio
+    knowledge: {
+        get: (topicId: string) =>
+            apiClient.get(`/api/topics/${topicId}/knowledge`),
+
+        regenerate: (topicId: string) =>
+            apiClient.post(`/api/topics/${topicId}/knowledge/regenerate`),
+
+        getAudio: (topicId: string) =>
+            apiClient.get(`/api/topics/${topicId}/audio`),
+
+        regenerateAudio: (topicId: string) =>
+            apiClient.post(`/api/topics/${topicId}/audio/regenerate`),
+
+        getTopicQuiz: (topicId: string) =>
+            apiClient.get(`/api/topics/${topicId}/quiz`),
     },
 
     // Invites (Global Class Invites)

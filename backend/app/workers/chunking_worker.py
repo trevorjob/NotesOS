@@ -15,6 +15,10 @@ from app.services.embeddings import embedding_service
 from app.services.vector_store import vector_store
 from app.services.websocket import broadcast_processing_status
 from app.models.course import Topic
+from app.config import settings
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 # Use the centralized async engine and session maker
 AsyncSessionLocal = async_session_maker
@@ -42,7 +46,7 @@ async def process_chunking_job(job_data: dict):
             resource = result.scalar_one_or_none()
 
             if not resource:
-                print(f"Resource {resource_id} not found")
+                logger.warning("Resource not found, skipping", extra={"resource_id": str(resource_id)})
                 return
 
             # Get course_id for WebSocket broadcast
@@ -59,7 +63,7 @@ async def process_chunking_job(job_data: dict):
             chunks = chunking_service.chunk_text(text, resource_id=resource_id)
 
             if not chunks:
-                print(f"No chunks generated for resource {resource_id}")
+                logger.warning("No chunks generated for resource", extra={"resource_id": str(resource_id)})
                 resource.is_processed = True
                 await db.commit()
                 return
@@ -79,16 +83,24 @@ async def process_chunking_job(job_data: dict):
             resource.is_processed = True
             await db.commit()
 
-            print(
-                f"✅ Processed resource {resource_id}: {chunks_inserted} chunks indexed"
-            )
+            logger.info("Resource processed", extra={"resource_id": str(resource_id), "chunks_inserted": chunks_inserted})
 
             # Broadcast completion
             if course_id:
                 await broadcast_processing_status(course_id, resource_id, "completed")
 
-        except Exception as e:
-            print(f"❌ Error processing resource {resource_id}: {str(e)}")
+            # Step 5: Enqueue knowledge synthesis for this topic
+            if resource.topic_id and settings.ENABLE_KNOWLEDGE_SYNTHESIS:
+                await redis_client.enqueue_job(
+                    "knowledge",
+                    {
+                        "topic_id": str(resource.topic_id),
+                        "course_id": course_id,
+                    },
+                )
+
+        except Exception:
+            logger.error("Error processing resource", exc_info=True, extra={"resource_id": str(resource_id)})
 
             # Broadcast failure
             if course_id:
@@ -109,43 +121,43 @@ async def process_chunking_job(job_data: dict):
 async def chunking_worker():
     """
     Main worker loop for chunking queue.
-    Polls Redis for jobs and processes them.
+    Uses reliable BRPOPLPUSH so jobs survive worker restarts.
     """
-    print("🚀 Chunking worker started")
+    logger.info("Chunking worker started")
 
-    client = await redis_client.get_client()
+    recovered = await redis_client.recover_orphaned_jobs("chunking")
+    if recovered:
+        logger.info("Chunking worker recovered orphaned jobs", extra={"count": recovered})
 
     while True:
+        job_json = None
         try:
-            # Blocking pop from queue (waits for job)
-            result = await client.brpop("queue:chunking", timeout=5)
+            job_json = await redis_client.reliable_dequeue("chunking", timeout=5)
 
-            if result:
-                queue_name, job_json = result
+            if job_json:
                 job = json.loads(job_json)
 
                 job_id = job["id"]
                 job_data = job["data"]
 
-                print(f"📝 Processing chunking job {job_id}")
+                logger.info("Processing chunking job", extra={"job_id": job_id})
 
-                # Update job status
                 await redis_client.update_job_status(job_id, "processing")
-
-                # Process the job
                 await process_chunking_job(job_data)
 
-                # Mark as completed
                 resource_id = job_data.get("resource_id") or job_data.get("note_id")
                 await redis_client.update_job_status(
                     job_id, "completed", result={"resource_id": resource_id}
                 )
+                await redis_client.ack_job("chunking", job_json)
 
         except asyncio.CancelledError:
-            print("Chunking worker shutting down")
+            logger.info("Chunking worker shutting down")
             break
-        except Exception as e:
-            print(f"Worker error: {str(e)}")
+        except Exception:
+            logger.error("Chunking worker error", exc_info=True)
+            if job_json:
+                await redis_client.ack_job("chunking", job_json)
             await asyncio.sleep(1)
 
 

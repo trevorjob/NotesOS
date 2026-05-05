@@ -3,9 +3,9 @@ NotesOS API - Notifications Endpoints
 """
 
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
+from sqlalchemy import select, update, delete, func
 
 from app.database import get_db
 from app.models.notification import Notification
@@ -15,16 +15,39 @@ from app.api.auth import get_current_user
 router = APIRouter()
 
 
-@router.get("")
-async def list_notifications(
+@router.get("/unread-count")
+async def get_unread_count(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return all notifications for the current user, newest first."""
+    """Return count of unread notifications for the current user."""
+    result = await db.execute(
+        select(func.count(Notification.id))
+        .where(Notification.user_id == current_user.id, Notification.is_read.is_(False))
+    )
+    return {"count": result.scalar_one()}
+
+
+@router.get("")
+async def list_notifications(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return paginated notifications for the current user, newest first."""
+    total_result = await db.execute(
+        select(func.count(Notification.id))
+        .where(Notification.user_id == current_user.id)
+    )
+    total = total_result.scalar_one()
+
     result = await db.execute(
         select(Notification)
         .where(Notification.user_id == current_user.id)
         .order_by(Notification.created_at.desc())
+        .limit(limit)
+        .offset(offset)
     )
     notifications = result.scalars().all()
 
@@ -40,7 +63,9 @@ async def list_notifications(
                 "created_at": n.created_at.isoformat(),
             }
             for n in notifications
-        ]
+        ],
+        "total": total,
+        "has_more": (offset + limit) < total,
     }
 
 
@@ -87,3 +112,39 @@ async def mark_notification_read(
         "id": str(notification.id),
         "is_read": notification.is_read,
     }
+
+
+@router.delete("/{notification_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_notification(
+    notification_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a single notification (ownership enforced)."""
+    result = await db.execute(
+        select(Notification).where(Notification.id == uuid.UUID(notification_id))
+    )
+    notification = result.scalar_one_or_none()
+
+    if not notification:
+        raise HTTPException(status_code=404, detail="Notification not found.")
+
+    if notification.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied.")
+
+    await db.delete(notification)
+    await db.commit()
+
+
+@router.delete("", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_all_notifications(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete all notifications for the current user."""
+    await db.execute(
+        delete(Notification).where(Notification.user_id == current_user.id)
+    )
+    await db.commit()
+
+

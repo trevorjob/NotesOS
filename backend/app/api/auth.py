@@ -7,7 +7,7 @@ import secrets
 from datetime import datetime, timedelta
 from typing import Optional
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
@@ -40,6 +40,7 @@ class RegisterRequest(BaseModel):
     password: str
     full_name: str
     study_personality: Optional[dict] = None
+    invite_code: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
@@ -88,6 +89,15 @@ class ResetPasswordRequest(BaseModel):
 class PreferencesUpdate(BaseModel):
     preferences: Optional[dict] = None
     personality_tags: Optional[list] = None
+
+
+class ProfileUpdate(BaseModel):
+    full_name: Optional[str] = None
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
 
 
 # =============================================================================
@@ -191,7 +201,7 @@ async def verify_course_enrollment(
 @router.post(
     "/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED
 )
-async def register(request: RegisterRequest, db: AsyncSession = Depends(get_db)):
+async def register(request: RegisterRequest, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
     """Register a new user account."""
     # Check if email already exists
     result = await db.execute(select(User).where(User.email == request.email))
@@ -213,8 +223,37 @@ async def register(request: RegisterRequest, db: AsyncSession = Depends(get_db))
         },
     )
     db.add(user)
+    await db.flush()
+
+    # Auto-join semester if invite code provided
+    if request.invite_code:
+        try:
+            from app.models.semester import Semester, SemesterMember, SemesterRole
+            from app.models.course import Course, CourseEnrollment
+            sem_result = await db.execute(
+                select(Semester).where(Semester.invite_code == request.invite_code)
+            )
+            semester = sem_result.scalar_one_or_none()
+            if semester:
+                db.add(SemesterMember(
+                    semester_id=semester.id,
+                    user_id=user.id,
+                    role=SemesterRole.MEMBER,
+                ))
+                courses_result = await db.execute(
+                    select(Course).where(Course.semester_id == semester.id, Course.is_active)
+                )
+                for course in courses_result.scalars().all():
+                    db.add(CourseEnrollment(user_id=user.id, course_id=course.id))
+        except Exception:
+            pass  # Never fail registration over an invite code issue
+
     await db.commit()
     await db.refresh(user)
+
+    # Welcome email — runs after response is sent, never blocks registration
+    from app.services.email import send_welcome_email
+    background_tasks.add_task(send_welcome_email, user.email, user.full_name)
 
     # Generate tokens
     access_token = create_access_token(data={"sub": str(user.id)})
@@ -370,6 +409,43 @@ async def update_personality(
     await db.commit()
 
     return {"study_personality": current_personality}
+
+
+@router.patch("/me")
+async def update_profile(
+    data: ProfileUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update user profile fields (e.g. full_name)."""
+    if data.full_name is not None:
+        current_user.full_name = data.full_name.strip()
+    await db.commit()
+    return {
+        "id": str(current_user.id),
+        "email": current_user.email,
+        "full_name": current_user.full_name,
+        "avatar_url": current_user.avatar_url,
+        "study_personality": current_user.study_personality,
+    }
+
+
+@router.post("/me/change-password", status_code=status.HTTP_200_OK)
+async def change_password(
+    data: ChangePasswordRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Change password — verifies current password before updating."""
+    if not current_user.password_hash:
+        raise HTTPException(status_code=400, detail="Password change not available for OAuth accounts.")
+    if not pwd_context.verify(data.current_password, current_user.password_hash):
+        raise HTTPException(status_code=400, detail="Current password is incorrect.")
+    if len(data.new_password) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters.")
+    current_user.password_hash = hash_password(data.new_password)
+    await db.commit()
+    return {"message": "Password updated successfully."}
 
 
 @router.post("/forgot-password", status_code=status.HTTP_200_OK)

@@ -143,6 +143,48 @@ class RedisClient:
 
         await client.hset(f"job:{job_id}", mapping=updates)
 
+    async def reliable_dequeue(self, queue_name: str, timeout: int = 5) -> Optional[str]:
+        """
+        Atomically pop from the main queue and push to a processing queue.
+
+        Uses BRPOPLPUSH so that if the worker crashes mid-job, the job stays
+        in queue:<name>:processing and is recovered on the next startup via
+        recover_orphaned_jobs().
+
+        Returns the raw job JSON string, or None on timeout.
+        """
+        client = await self.get_client()
+        return await client.brpoplpush(
+            f"queue:{queue_name}",
+            f"queue:{queue_name}:processing",
+            timeout=timeout,
+        )
+
+    async def ack_job(self, queue_name: str, job_json: str) -> None:
+        """Remove a finished job from the processing queue."""
+        client = await self.get_client()
+        await client.lrem(f"queue:{queue_name}:processing", 1, job_json)
+
+    async def recover_orphaned_jobs(self, queue_name: str) -> int:
+        """
+        On worker startup, move any jobs left in queue:<name>:processing back
+        to the main queue. These are jobs that were in-flight when the previous
+        worker process was killed.
+
+        Returns the number of jobs recovered.
+        """
+        client = await self.get_client()
+        count = 0
+        while True:
+            job_json = await client.rpoplpush(
+                f"queue:{queue_name}:processing",
+                f"queue:{queue_name}",
+            )
+            if job_json is None:
+                break
+            count += 1
+        return count
+
     async def cache_embedding(self, text: str, embedding: list, ttl: int = 3600):
         """
         Cache embedding for frequently accessed text.

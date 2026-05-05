@@ -9,13 +9,18 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.models.course import Topic, CourseEnrollment
+from app.models.course import Course, Topic, CourseEnrollment
+from app.models.knowledge import AudioLesson, KnowledgeStatus, TopicKnowledge
 from app.models.progress import UserProgress
+from app.models.resource import Resource
+from app.models.test import Test, TestQuestion, TestType
 from app.api.auth import get_current_user
 from app.models.user import User
-from app.services.cache import cache, topics_list_key, topic_key, course_key
+from app.services.cache import cache, topics_list_key, topic_key, course_key, courses_list_key
+from app.services.question_generator import question_generator
 from app.config import settings
 
 
@@ -148,7 +153,7 @@ async def create_topic(
     await db.commit()
     await db.refresh(topic)
 
-    await _invalidate_topic_caches(course_id)
+    await _invalidate_topic_caches(course_id, db=db)
 
     return _topic_to_dict(topic)
 
@@ -182,10 +187,28 @@ async def get_topic(
     mastery = float(progress.mastery_level) if progress else 0.0
     completion_percentage = round(mastery * 100, 1)
 
+    # Fetch knowledge synthesis status
+    knowledge_result = await db.execute(
+        select(TopicKnowledge).where(TopicKnowledge.topic_id == topic.id)
+    )
+    knowledge = knowledge_result.scalar_one_or_none()
+
+    # Fetch latest audio lesson status
+    audio_result = await db.execute(
+        select(AudioLesson)
+        .where(AudioLesson.topic_id == topic.id)
+        .order_by(AudioLesson.created_at.desc())
+        .limit(1)
+    )
+    audio = audio_result.scalar_one_or_none()
+
     payload = {
         **_topic_to_dict(topic),
         "completion_percentage": completion_percentage,
         "status": _derive_topic_status(mastery),
+        "knowledge_status": knowledge.status.value if knowledge else "pending",
+        "audio_status": audio.status.value if audio else "pending",
+        "has_audio": audio is not None and audio.status == KnowledgeStatus.COMPLETED,
     }
     return payload
 
@@ -221,9 +244,97 @@ async def update_topic(
     await db.commit()
     await db.refresh(topic)
 
-    await _invalidate_topic_caches(str(topic.course_id), topic_id)
+    await _invalidate_topic_caches(str(topic.course_id), topic_id, db=db)
 
     return _topic_to_dict(topic)
+
+
+@router.get("/topics/{topic_id}/quiz")
+async def get_topic_quiz(
+    topic_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Return the shared quiz for this topic.
+    Creates one on first call (synchronous, ~10-15s), then serves from DB cache.
+    """
+    topic_uuid = uuid.UUID(topic_id)
+
+    # Verify topic exists
+    topic_result = await db.execute(select(Topic).where(Topic.id == topic_uuid))
+    topic = topic_result.scalar_one_or_none()
+    if not topic:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Topic not found")
+
+    await _assert_enrolled(db, current_user.id, str(topic.course_id))
+
+    # Look up existing shared quiz for this topic (use first() to be safe with duplicates)
+    test_result = await db.execute(
+        select(Test).where(
+            Test.topics == [topic_id],
+            Test.test_type == TestType.SELF_TEST,
+        ).limit(1)
+    )
+    test = test_result.scalars().first()
+
+    if test is None:
+        # Verify topic has resources before generating
+        resources_result = await db.execute(
+            select(Resource).where(Resource.topic_id == topic_uuid).limit(1)
+        )
+        if not resources_result.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No materials uploaded for this topic yet. Add materials before taking a quiz.",
+            )
+
+        # Load course code for quiz title
+        course_result = await db.execute(select(Course).where(Course.id == topic.course_id))
+        course = course_result.scalar_one_or_none()
+        course_code = course.code if course else ""
+        quiz_title = f"{course_code}: {topic.title}" if course_code else topic.title
+
+        # Generate shared quiz (synchronous — ~10-15s on first call)
+        test = await question_generator.generate_test(
+            db=db,
+            course_id=str(topic.course_id),
+            user_id=str(current_user.id),
+            topic_ids=[topic_id],
+            question_count=10,
+            difficulty="medium",
+            question_types=["mcq", "short_answer"],
+            title=quiz_title,
+            topic_name=topic.title,
+        )
+        # Override test_type to SELF_TEST so this acts as the shared topic quiz
+        test.test_type = TestType.SELF_TEST
+        await db.commit()
+
+    # Load questions
+    questions_result = await db.execute(
+        select(TestQuestion)
+        .where(TestQuestion.test_id == test.id)
+        .order_by(TestQuestion.order_index)
+    )
+    questions = questions_result.scalars().all()
+
+    return {
+        "id": str(test.id),
+        "title": test.title,
+        "question_count": test.question_count,
+        "questions": [
+            {
+                "id": str(q.id),
+                "question_text": q.question_text,
+                "question_type": q.question_type.value,
+                "answer_options": q.answer_options,
+                "points": q.points,
+                "order_index": q.order_index,
+            }
+            for q in questions
+        ],
+    }
 
 
 @router.delete("/topics/{topic_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -248,7 +359,7 @@ async def delete_topic(
     await db.delete(topic)
     await db.commit()
 
-    await _invalidate_topic_caches(course_id, topic_id)
+    await _invalidate_topic_caches(course_id, topic_id, db=db)
 
     return None
 
@@ -270,9 +381,23 @@ async def _assert_enrolled(db: AsyncSession, user_id, course_id: str) -> None:
         )
 
 
-async def _invalidate_topic_caches(course_id: str, topic_id: str | None = None) -> None:
-    """Invalidate list + course detail + optionally individual topic cache."""
+async def _invalidate_topic_caches(
+    course_id: str,
+    topic_id: str | None = None,
+    db: AsyncSession | None = None,
+) -> None:
+    """Invalidate list + course detail + optionally individual topic cache.
+    If db is provided, also busts the courses-list cache for all enrolled users
+    (topics are now embedded in that response)."""
     await cache.delete(topics_list_key(course_id))
     await cache.delete(course_key(course_id))
     if topic_id:
         await cache.delete(topic_key(topic_id))
+    if db is not None:
+        enrolled = await db.execute(
+            select(CourseEnrollment.user_id).where(
+                CourseEnrollment.course_id == uuid.UUID(course_id)
+            )
+        )
+        for (user_id,) in enrolled.all():
+            await cache.delete(courses_list_key(str(user_id)))

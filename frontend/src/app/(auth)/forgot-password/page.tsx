@@ -1,91 +1,81 @@
 'use client';
 
-import { FormEvent, useState } from 'react';
-import { TextInputBordered } from '@/components/ui/TextInputBordered';
+import { useState } from 'react';
+import Link from 'next/link';
+import { api } from '@/lib/api';
+import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
-import { TextLink } from '@/components/ui/TextLink';
-import { Icon } from '@/components/ui/Icon';
-import { apiClient } from '@/lib/api';
-
-type PageState = 'idle' | 'loading' | 'submitted';
 
 export default function ForgotPasswordPage() {
-  const [email, setEmail]     = useState('');
-  const [state, setState]     = useState<PageState>('idle');
-  const [error, setError]     = useState('');
+  const [email, setEmail] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState('');
 
-  const handleSubmit = async (e: FormEvent) => {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    setLoading(true);
     setError('');
-    setState('loading');
     try {
-      await apiClient.post('/api/auth/forgot-password', { email });
+      await api.auth.forgotPassword(email);
+      setSent(true);
     } catch {
-      // Server always returns 200 — any failure is a network error
+      setError('Something went wrong. Please try again.');
     } finally {
-      setState('submitted');
+      setLoading(false);
     }
-  };
-
-  if (state === 'submitted') {
-    return (
-      <div className="glass-card p-8 text-center">
-        <div className="w-14 h-14 rounded-2xl bg-[var(--success-bg)] flex items-center justify-center mx-auto mb-4">
-          <Icon name="mark_email_read" size="lg" className="text-[var(--color-success)]" />
-        </div>
-        <h1 className="font-display font-semibold text-xl text-[var(--text-primary)] mb-2">
-          Check your inbox
-        </h1>
-        <p className="text-sm text-[var(--text-secondary)] mb-8 max-w-[280px] mx-auto">
-          If an account exists for <strong>{email}</strong>, we've sent a password reset link. It expires in 1 hour.
-        </p>
-        <TextLink href="/login">Back to sign in</TextLink>
-      </div>
-    );
   }
 
   return (
-    <div className="glass-card p-8">
-      <button
-        onClick={() => history.back()}
-        className="flex items-center gap-1.5 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors mb-6"
-      >
-        <Icon name="arrow_back" size="xs" /> Back
-      </button>
+    <div className="min-h-screen bg-[#f0eeea] flex items-center justify-center p-4">
+      <div className="w-full max-w-sm bg-white rounded-2xl border border-[#dedad4] p-8 shadow-sm">
+        {sent ? (
+          <>
+            <div className="w-10 h-10 bg-[#f0fdf4] border border-[#bbf7d0] rounded-xl flex items-center justify-center mx-auto mb-4">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                <path d="M4 10l4 4 8-8" stroke="#16a34a" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </div>
+            <h1 className="text-xl font-semibold text-[#1a1917] mb-2 text-center">Check your email</h1>
+            <p className="text-sm text-[#6b6762] text-center mb-6">
+              If <span className="font-medium text-[#1a1917]">{email}</span> is registered, you&apos;ll receive a reset link shortly. Check your spam folder if it doesn&apos;t arrive.
+            </p>
+            <Link href="/login">
+              <Button variant="ghost" className="w-full">Back to sign in</Button>
+            </Link>
+          </>
+        ) : (
+          <>
+            <h1 className="text-xl font-semibold text-[#1a1917] mb-1">Forgot password?</h1>
+            <p className="text-sm text-[#6b6762] mb-6">Enter your email and we&apos;ll send you a reset link.</p>
 
-      <h1 className="font-display font-semibold text-2xl text-[var(--text-primary)] mb-1">
-        Forgot password?
-      </h1>
-      <p className="text-sm text-[var(--text-secondary)] mb-8">
-        Enter your email and we'll send a reset link.
-      </p>
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <Input
+                label="Email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                autoComplete="email"
+                required
+              />
 
-      {error && (
-        <div className="mb-6 flex items-start gap-2 px-4 py-3 bg-[var(--error-bg)] rounded-xl">
-          <Icon name="error" size="xs" className="text-[var(--color-error)] flex-shrink-0 mt-0.5" />
-          <p className="text-sm text-[var(--error-text)]">{error}</p>
-        </div>
-      )}
+              {error && <p className="text-sm text-[#dc2626]">{error}</p>}
 
-      <form onSubmit={handleSubmit} className="flex flex-col gap-5">
-        <TextInputBordered
-          label="Email address"
-          type="email"
-          placeholder="you@university.edu"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          iconLeft="mail"
-          required
-          autoComplete="email"
-        />
-        <Button type="submit" variant="primary" size="lg" loading={state === 'loading'} fullWidth>
-          Send reset link
-        </Button>
-      </form>
+              <Button type="submit" className="w-full" loading={loading}>
+                Send reset link
+              </Button>
+            </form>
 
-      <p className="text-center text-sm text-[var(--text-secondary)] mt-6">
-        Remember it? <TextLink href="/login">Sign in</TextLink>
-      </p>
+            <p className="mt-5 text-center text-sm text-[#6b6762]">
+              Remember it?{' '}
+              <Link href="/login" className="text-[#1a1917] font-medium underline underline-offset-2">
+                Sign in
+              </Link>
+            </p>
+          </>
+        )}
+      </div>
     </div>
   );
 }

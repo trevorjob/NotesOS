@@ -14,7 +14,7 @@ ENV/
 .env
 .env.local
 .env.*.local
-
+.claude/
 # IDE
 .idea/
 .vscode/

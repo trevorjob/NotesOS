@@ -1,0 +1,17 @@
+[Unit]
+Description=NotesOS Knowledge Worker
+After=network.target postgresql.service redis-server.service
+Wants=postgresql.service redis-server.service
+
+[Service]
+Type=simple
+User=__APP_USER__
+Group=__APP_USER__
+WorkingDirectory=__APP_DIR__/backend
+EnvironmentFile=__APP_DIR__/backend/.env
+ExecStart=__APP_DIR__/backend/venv/bin/python -m app.workers.knowledge_worker
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

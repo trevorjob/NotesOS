@@ -25,7 +25,11 @@ class StorageService:
         )
 
     async def upload_file(
-        self, file: Union[bytes, BinaryIO], folder: str, resource_type: str = "auto"
+        self,
+        file: Union[bytes, BinaryIO],
+        folder: str,
+        resource_type: str = "auto",
+        public_id: Optional[str] = None,
     ) -> dict:
         """
         Upload file to Cloudinary (non-blocking).
@@ -44,6 +48,8 @@ class StorageService:
                 "folder": folder,
                 "resource_type": resource_type,
             }
+            if public_id is not None:
+                upload_options["public_id"] = public_id
             if settings.CLOUDINARY_UPLOAD_PRESET:
                 upload_options["upload_preset"] = settings.CLOUDINARY_UPLOAD_PRESET
 

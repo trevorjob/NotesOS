@@ -1,133 +1,233 @@
 'use client';
 
-import { FormEvent, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth';
-import { TextInputBordered } from '@/components/ui/TextInputBordered';
-import { PasswordInput } from '@/components/ui/PasswordInput';
+import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
-import { TextLink } from '@/components/ui/TextLink';
-import { Icon } from '@/components/ui/Icon';
+
+type Tone = 'encouraging' | 'direct' | 'humorous';
+type Emoji = 'none' | 'moderate' | 'heavy';
+type Style = 'concise' | 'detailed' | 'visual';
+
+const TONE_OPTIONS: { value: Tone; label: string; desc: string }[] = [
+  { value: 'encouraging', label: 'Encouraging', desc: 'Warm & supportive' },
+  { value: 'direct', label: 'Direct', desc: 'Straight to the point' },
+  { value: 'humorous', label: 'Humorous', desc: 'Light-hearted & fun' },
+];
+
+const STYLE_OPTIONS: { value: Style; label: string; desc: string }[] = [
+  { value: 'concise', label: 'Concise', desc: 'Short and clear' },
+  { value: 'detailed', label: 'Detailed', desc: 'Thorough explanations' },
+  { value: 'visual', label: 'Visual', desc: 'Diagrams & examples' },
+];
+
+const EMOJI_OPTIONS: { value: Emoji; label: string }[] = [
+  { value: 'none', label: 'None' },
+  { value: 'moderate', label: 'Moderate' },
+  { value: 'heavy', label: 'Heavy' },
+];
+
+function OptionCard<T extends string>({
+  value,
+  label,
+  desc,
+  selected,
+  onSelect,
+}: {
+  value: T;
+  label: string;
+  desc?: string;
+  selected: boolean;
+  onSelect: (v: T) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(value)}
+      className={`flex-1 rounded-lg border px-3 py-2.5 text-left transition-colors ${
+        selected
+          ? 'border-[#1a1917] bg-[#1a1917] text-white'
+          : 'border-[#dedad4] bg-white text-[#1a1917] hover:border-[#9e9a94]'
+      }`}
+    >
+      <p className="text-sm font-medium">{label}</p>
+      {desc && <p className={`text-xs mt-0.5 ${selected ? 'text-[#c8c4be]' : 'text-[#6b6762]'}`}>{desc}</p>}
+    </button>
+  );
+}
 
 export default function RegisterPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-[#f0eeea] flex items-center justify-center">
+        <div className="w-5 h-5 border-2 border-[#1a1917] border-t-transparent rounded-full animate-spin" />
+      </div>
+    }>
+      <RegisterPageInner />
+    </Suspense>
+  );
+}
+
+function RegisterPageInner() {
   const router = useRouter();
-  const { register, isLoading, error, clearError } = useAuthStore();
+  const searchParams = useSearchParams();
+  const inviteCode = searchParams.get('code');
+  const { register, updatePersonality, isLoading, error, clearError } = useAuthStore();
 
-  const [fullName, setFullName]   = useState('');
-  const [email, setEmail]         = useState('');
-  const [password, setPassword]   = useState('');
-  const [confirm, setConfirm]     = useState('');
-  const [localError, setLocalError] = useState('');
+  const [step, setStep] = useState(1);
 
-  const handleSubmit = async (e: FormEvent) => {
+  // Step 1 fields
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+
+  // Step 2 fields
+  const [tone, setTone] = useState<Tone>('encouraging');
+  const [style, setStyle] = useState<Style>('detailed');
+  const [emoji, setEmoji] = useState<Emoji>('moderate');
+
+  const [saving, setSaving] = useState(false);
+
+  async function handleStep1(e: React.FormEvent) {
     e.preventDefault();
-    setLocalError('');
     clearError();
-
-    if (password.length < 8) {
-      setLocalError('Password must be at least 8 characters.');
-      return;
-    }
-    if (password !== confirm) {
-      setLocalError('Passwords do not match.');
-      return;
-    }
-
     try {
-      await register({ email, password, full_name: fullName });
-      router.push('/courses');
-    } catch {}
-  };
+      await register({ full_name: name, email, password, ...(inviteCode ? { invite_code: inviteCode } : {}) });
+      setStep(2);
+    } catch {
+      // error already in store
+    }
+  }
 
-  const displayError = localError || error;
+  async function handleFinish() {
+    setSaving(true);
+    try {
+      await updatePersonality({ tone, explanation_style: style, emoji_usage: emoji });
+    } catch {
+      // non-critical — proceed anyway
+    } finally {
+      setSaving(false);
+      router.replace('/home');
+    }
+  }
 
   return (
-    <div className="glass-card p-8">
-      <h1 className="font-display font-semibold text-2xl text-[var(--text-primary)] mb-1">
-        Create your account
-      </h1>
-      <p className="text-sm text-[var(--text-secondary)] mb-8">
-        Start studying smarter with AI
-      </p>
+    <div className="min-h-screen bg-[#f0eeea] flex items-center justify-center p-4">
+      <div className="w-full max-w-sm bg-white rounded-2xl border border-[#dedad4] p-8 shadow-sm">
 
-      {displayError && (
-        <div className="mb-6 flex items-start gap-2 px-4 py-3 bg-[var(--error-bg)] border border-[var(--color-error)]/20 rounded-xl">
-          <Icon name="error" size="xs" className="text-[var(--color-error)] flex-shrink-0 mt-0.5" />
-          <p className="text-sm text-[var(--error-text)]">{displayError}</p>
+        {/* Step dots */}
+        <div className="flex items-center gap-1.5 mb-6">
+          {[1, 2].map((n) => (
+            <span
+              key={n}
+              className={`h-1.5 rounded-full transition-all duration-300 ${
+                n === step ? 'w-6 bg-[#1a1917]' : 'w-1.5 bg-[#dedad4]'
+              }`}
+            />
+          ))}
         </div>
-      )}
 
-      <form onSubmit={handleSubmit} className="flex flex-col gap-5">
-        <TextInputBordered
-          label="Full name"
-          type="text"
-          placeholder="Jane Smith"
-          value={fullName}
-          onChange={(e) => setFullName(e.target.value)}
-          iconLeft="person"
-          required
-          autoComplete="name"
-        />
-        <TextInputBordered
-          label="Email address"
-          type="email"
-          placeholder="you@university.edu"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          iconLeft="mail"
-          required
-          autoComplete="email"
-        />
-        <PasswordInput
-          label="Password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-          autoComplete="new-password"
-        />
-        <PasswordInput
-          label="Confirm password"
-          value={confirm}
-          onChange={(e) => setConfirm(e.target.value)}
-          required
-          autoComplete="new-password"
-        />
+        {step === 1 && (
+          <>
+            <h1 className="text-xl font-semibold text-[#1a1917] mb-1">Create account</h1>
+            <p className="text-sm text-[#6b6762] mb-6">Start your learning journey</p>
 
-        <Button type="submit" variant="primary" size="lg" loading={isLoading} fullWidth className="mt-2">
-          Create account
-        </Button>
-      </form>
+            <form onSubmit={handleStep1} className="space-y-4">
+              <Input
+                label="Username"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Joker123"
+                autoComplete="name"
+                required
+              />
+              <Input
+                label="Email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                autoComplete="email"
+                required
+              />
+              <Input
+                label="Password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Min. 8 characters"
+                autoComplete="new-password"
+                required
+              />
 
-      {/* Google OAuth */}
-      <div className="flex items-center gap-3 my-6">
-        <div className="flex-1 h-px bg-[var(--border-base)]" />
-        <span className="text-xs text-[var(--text-tertiary)] uppercase tracking-wider">or</span>
-        <div className="flex-1 h-px bg-[var(--border-base)]" />
+              {error && <p className="text-sm text-[#dc2626]">{error}</p>}
+
+              <Button type="submit" className="w-full" loading={isLoading}>
+                Continue
+              </Button>
+            </form>
+
+            <p className="mt-5 text-center text-sm text-[#6b6762]">
+              Already have an account?{' '}
+              <a
+                href={inviteCode ? `/login?redirect=${encodeURIComponent(`/join?code=${inviteCode}`)}` : '/login'}
+                className="text-[#1a1917] font-medium underline underline-offset-2"
+              >
+                Sign in
+              </a>
+            </p>
+          </>
+        )}
+
+        {step === 2 && (
+          <>
+            <h1 className="text-xl font-semibold text-[#1a1917] mb-1">Personalise your AI</h1>
+            <p className="text-sm text-[#6b6762] mb-6">How should NotesOS talk to you?</p>
+
+            <div className="space-y-5">
+              {/* Tone */}
+              <div>
+                <p className="text-xs font-medium text-[#6b6762] mb-2 uppercase tracking-wide">Tone</p>
+                <div className="flex gap-2">
+                  {TONE_OPTIONS.map((o) => (
+                    <OptionCard key={o.value} {...o} selected={tone === o.value} onSelect={setTone} />
+                  ))}
+                </div>
+              </div>
+
+              {/* Explanation style */}
+              <div>
+                <p className="text-xs font-medium text-[#6b6762] mb-2 uppercase tracking-wide">Explanation Style</p>
+                <div className="flex gap-2">
+                  {STYLE_OPTIONS.map((o) => (
+                    <OptionCard key={o.value} {...o} selected={style === o.value} onSelect={setStyle} />
+                  ))}
+                </div>
+              </div>
+
+              {/* Emoji */}
+              <div>
+                <p className="text-xs font-medium text-[#6b6762] mb-2 uppercase tracking-wide">Emoji Usage</p>
+                <div className="flex gap-2">
+                  {EMOJI_OPTIONS.map((o) => (
+                    <OptionCard key={o.value} label={o.label} value={o.value} selected={emoji === o.value} onSelect={setEmoji} />
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-6 flex flex-col gap-2">
+              <Button className="w-full" loading={saving} onClick={handleFinish}>
+                Start studying
+              </Button>
+              <Button variant="ghost" className="w-full" onClick={() => router.replace('/home')}>
+                Skip for now
+              </Button>
+            </div>
+          </>
+        )}
       </div>
-
-      <a
-        href={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/auth/google`}
-        className="
-          flex items-center justify-center gap-3 w-full h-11
-          rounded-xl border border-[var(--border-base)]
-          bg-[var(--bg-elevated)] hover:bg-[var(--bg-sunken)]
-          text-sm font-semibold text-[var(--text-primary)]
-          transition-colors focus-ring
-        "
-      >
-        <svg className="w-4 h-4" viewBox="0 0 24 24">
-          <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-          <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-          <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
-          <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-        </svg>
-        Continue with Google
-      </a>
-
-      <p className="text-center text-sm text-[var(--text-secondary)] mt-6">
-        Already have an account?{' '}
-        <TextLink href="/login">Sign in</TextLink>
-      </p>
     </div>
   );
 }

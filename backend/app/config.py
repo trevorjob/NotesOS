@@ -67,6 +67,7 @@ class Settings(BaseSettings):
     ENABLE_FACT_CHECK: bool = True
     ENABLE_PRE_CLASS_RESEARCH: bool = True
     ENABLE_VOICE_GRADING: bool = True
+    ENABLE_KNOWLEDGE_SYNTHESIS: bool = True   # auto-synthesize after chunking
 
     # Cache (Redis read-through for GET endpoints)
     CACHE_ENABLED: bool = True
@@ -76,7 +77,7 @@ class Settings(BaseSettings):
 
     # Email (Resend)
     RESEND_API_KEY: str = ""
-    EMAIL_FROM: str = "noreply@notesos.com"
+    EMAIL_FROM: str = "NotesOS <onboarding@resend.dev>"
     PASSWORD_RESET_URL: str = "http://localhost:3000/reset-password"
 
     # Google OAuth

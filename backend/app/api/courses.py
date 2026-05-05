@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models import Course, CourseEnrollment, Topic, User
+from app.models.semester import SemesterMember
 from app.models.progress import UserProgress
 from app.api.auth import get_current_user, verify_course_enrollment
 from app.services.cache import (
@@ -33,7 +34,7 @@ router = APIRouter()
 class CreateCourseRequest(BaseModel):
     code: str
     name: str
-    semester: Optional[str] = None
+    semester_id: Optional[str] = None
     description: Optional[str] = None
     is_public: bool = True
 
@@ -156,18 +157,37 @@ async def list_courses(
                 "studied_at": row.last_activity.isoformat(),
             }
 
+    # Batch topics for all courses — avoids N+1 and lets the frontend render
+    # the sidebar and home page without a separate selectCourse call per course.
+    topics_result = await db.execute(
+        select(Topic)
+        .where(Topic.course_id.in_(course_ids))
+        .order_by(Topic.order_index)
+    )
+    topics_by_course: dict = {}
+    for topic in topics_result.scalars().all():
+        cid = str(topic.course_id)
+        if cid not in topics_by_course:
+            topics_by_course[cid] = []
+        topics_by_course[cid].append({
+            "id": str(topic.id),
+            "title": topic.title,
+            "order_index": topic.order_index,
+            "week_number": topic.week_number,
+        })
+
     courses = [
         {
             "id": str(course.id),
             "code": course.code,
             "name": course.name,
-            "semester": course.semester,
             "semester_id": str(course.semester_id) if course.semester_id else None,
             "member_count": member_counts.get(str(course.id), 1),
             "created_by": str(course.created_by),
             "joined_at": joined_at.isoformat(),
             "completion_percentage": completion_map.get(str(course.id), 0.0),
             "last_studied": last_studied_map.get(str(course.id)),
+            "topics": topics_by_course.get(str(course.id), []),
         }
         for course, joined_at in rows
     ]
@@ -189,7 +209,7 @@ async def create_course(
     course = Course(
         code=request.code,
         name=request.name,
-        semester=request.semester,
+        semester_id=request.semester_id,
         description=request.description,
         is_public=request.is_public,
         invite_code=invite_code,
@@ -201,6 +221,16 @@ async def create_course(
     # Auto-enroll creator
     enrollment = CourseEnrollment(user_id=current_user.id, course_id=course.id)
     db.add(enrollment)
+
+    # Auto-enroll all existing semester members (other than creator)
+    if request.semester_id:
+        members_result = await db.execute(
+            select(SemesterMember).where(SemesterMember.semester_id == request.semester_id)
+        )
+        for member in members_result.scalars().all():
+            if str(member.user_id) != str(current_user.id):
+                db.add(CourseEnrollment(user_id=member.user_id, course_id=course.id))
+
     await db.commit()
     await db.refresh(course)
 
@@ -284,6 +314,22 @@ async def join_course(
     await cache.delete(courses_list_key(str(current_user.id)))
     await cache.delete(course_key(str(course.id)))
 
+    # Notify the course owner that someone joined
+    if course.created_by and course.created_by != current_user.id:
+        try:
+            from app.services.notifications import create_and_push_notification
+            from app.models.notification import NotificationType
+            await create_and_push_notification(
+                db=db,
+                user_id=course.created_by,
+                notif_type=NotificationType.CLASSMATE_JOINED,
+                title=f"{current_user.full_name} joined {course.name}",
+                body=f"Your course now has {member_count} member{'s' if member_count != 1 else ''}.",
+                meta_data={"course_id": str(course.id)},
+            )
+        except Exception:
+            pass  # Non-fatal
+
     return {
         "message": f"Welcome to {course.name}! 👋",
         "course": {"id": str(course.id), "code": course.code, "name": course.name},
@@ -337,7 +383,7 @@ async def get_course(
             "code": course.code,
             "name": course.name,
             "description": course.description,
-            "semester": course.semester,
+            "semester_id": str(course.semester_id) if course.semester_id else None,
         },
         "topics": [
             {
@@ -381,9 +427,10 @@ async def create_topic(
     await db.commit()
     await db.refresh(topic)
 
-    # Invalidate course + topic list caches
+    # Invalidate course + topic list caches + the user's courses list (topics are now embedded)
     await cache.delete(course_key(course_id))
     await cache.delete(topics_list_key(course_id))
+    await cache.delete(courses_list_key(str(current_user.id)))
 
     return {
         "topic": {
