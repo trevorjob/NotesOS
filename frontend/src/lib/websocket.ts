@@ -5,6 +5,14 @@
 
 import { tokenManager } from './api';
 
+export interface StreamedQuestion {
+    question_text: string;
+    question_type: string;
+    answer_options: string[] | null;
+    points: number;
+    order_index: number;
+}
+
 export type WebSocketMessage =
     | { type: 'processing_status'; resource_id: string; status: 'processing' | 'completed' | 'failed' }
     | { type: 'fact_check:complete'; data: { resource_id: string; topic_id: string; summary: string; stats: Record<string, number> } }
@@ -17,6 +25,12 @@ export type WebSocketMessage =
     | { type: 'resource_deleted'; resource_id: string }
     | { type: 'user_joined'; user_id: string; timestamp: string | null }
     | { type: 'active_users'; users: string[] }
+    // Test generation streaming events (user-scoped, via /ws/user/{user_id})
+    | { type: 'test_generation_status'; data: { test_id: string; status: string; batches_done: number; batches_total: number } }
+    | { type: 'test_batch_ready'; data: { test_id: string; batch_index: number; batches_total: number; questions: StreamedQuestion[] } }
+    | { type: 'test_generation_complete'; data: { test_id: string; question_count: number } }
+    | { type: 'test_generation_failed'; data: { test_id: string; reason: string; partial_question_count: number } }
+    | { type: 'test_generation_regenerating'; data: { test_id: string; retry_count: number } }
     | { type: 'ping' }
     | { type: 'pong' }
     | { type: 'echo'; data: unknown };

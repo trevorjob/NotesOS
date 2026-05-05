@@ -4,11 +4,11 @@ LangGraph-based multi-step agent for verifying factual claims in resources.
 """
 
 import json
+from typing import TypedDict, List, Dict, Any, Any as JsonAny
 import httpx
-from typing import TypedDict, List, Dict, Any
 from langgraph.graph import StateGraph, END
 
-from app.config import settings
+from app.services.llm import call_llm
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -30,9 +30,8 @@ class FactChecker:
     """LangGraph-based fact checker using DeepSeek + Serper."""
 
     def __init__(self):
-        self.deepseek_api_key = settings.DEEPSEEK_API_KEY
+        from app.config import settings
         self.serper_api_key = settings.SERPER_API_KEY
-        self.deepseek_base = "https://api.deepseek.com/v1"
         self.serper_url = "https://google.serper.dev/search"
 
     async def check_facts(self, resource_id: str, content: str) -> Dict[str, Any]:
@@ -108,7 +107,7 @@ Return JSON array of claims:
 
 Return ONLY the JSON array, no other text."""
 
-        response = await self._call_deepseek(prompt)
+        response = await self._call_llm(prompt)
 
         try:
             # Extract JSON from response
@@ -189,7 +188,7 @@ Return JSON:
 
 Return ONLY valid JSON, no other text. Refer to sources in the explanation using [1], [2] format corresponding to the source numbers provided above."""
 
-        response = await self._call_deepseek(prompt)
+        response = await self._call_llm(prompt)
 
         try:
             verification = self._parse_json_response(response)
@@ -247,26 +246,8 @@ Return ONLY valid JSON, no other text. Refer to sources in the explanation using
 
         return {"final_report": report}
 
-    async def _call_deepseek(self, prompt: str) -> str:
-        """Make API call to DeepSeek."""
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{self.deepseek_base}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.deepseek_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "deepseek-chat",
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.3,
-                    "max_tokens": 2000,
-                },
-                timeout=30.0,
-            )
-            response.raise_for_status()
-            data = response.json()
-            return data["choices"][0]["message"]["content"]
+    async def _call_llm(self, prompt: str) -> str:
+        return await call_llm(prompt, task="fact_check", temperature=0.3, max_tokens=2000, timeout=30.0)
 
     def _parse_json_response(self, response: str) -> Any:
         """Extract and parse JSON from AI response."""

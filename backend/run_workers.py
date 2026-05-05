@@ -17,6 +17,7 @@ from app.workers.fact_check_worker import start_fact_check_worker
 from app.workers.grading_worker import start_grading_worker
 from app.workers.knowledge_worker import knowledge_worker
 from app.workers.audio_worker import audio_worker
+from app.workers.test_generation_worker import test_generation_worker
 
 WORKERS = {
     "chunking": chunking_worker,
@@ -25,6 +26,7 @@ WORKERS = {
     "grading": start_grading_worker,
     "knowledge": knowledge_worker,
     "audio": audio_worker,
+    "test_generation": test_generation_worker,
 }
 
 

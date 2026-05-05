@@ -27,6 +27,13 @@ class TestType(str, Enum):
     SELF_TEST = "self-test"
 
 
+class TestGenerationStatus(str, Enum):
+    PENDING = "pending"
+    GENERATING = "generating"
+    READY = "ready"
+    FAILED = "failed"
+
+
 class QuestionType(str, Enum):
     MCQ = "mcq"
     SHORT_ANSWER = "short_answer"
@@ -53,9 +60,21 @@ class Test(Base):
     )
 
     title = Column(String(255), nullable=False)
-    test_type = Column(SQLEnum(TestType), default=TestType.PRACTICE, nullable=False)
+    test_type = Column(SQLEnum(TestType, values_callable=lambda e: [x.name for x in e]), default=TestType.PRACTICE, nullable=False)
     topics = Column(JSONB, nullable=False, default=[])  # Array of topic IDs
+    question_types = Column(JSONB, nullable=True)  # e.g. ["mcq", "short_answer"] or ["essay"]
     question_count = Column(Integer, nullable=False, default=0)
+
+    # Generation progress
+    generation_status = Column(
+        SQLEnum(TestGenerationStatus, values_callable=lambda e: [x.value for x in e], native_enum=False),
+        default=TestGenerationStatus.PENDING,
+        nullable=False,
+    )
+    batches_total = Column(Integer, nullable=True)
+    batches_done = Column(Integer, default=0, nullable=False)
+    started_at = Column(DateTime, nullable=True)
+    failure_reason = Column(Text, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 

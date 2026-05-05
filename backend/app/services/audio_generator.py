@@ -14,6 +14,7 @@ import httpx
 from app.config import settings
 from app.models.knowledge import TopicKnowledge
 from app.services.storage import storage_service
+from app.services.llm import call_llm
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -27,9 +28,6 @@ class AudioGenerator:
     """Generate TTS audio lessons from consolidated topic knowledge."""
 
     def __init__(self):
-        self.deepseek_api_key = settings.DEEPSEEK_API_KEY
-        self.deepseek_base = "https://api.deepseek.com/v1"
-        self.anthropic_api_key = settings.ANTHROPIC_API_KEY
         self.openai_api_key = settings.OPENAI_API_KEY
 
     async def generate_script(self, knowledge: TopicKnowledge, topic_name: str) -> str:
@@ -80,7 +78,7 @@ execution so it doesn't feel like a template repeating itself:
   3. Ground it in something concrete: an analogy, an example, 
      a real-world application, a comparison to something familiar
   4. Ask a recall question — make it feel conversational, 
-     not like a quiz ("So here's something to sit with — ...")
+     not like a quiz
   5. [PAUSE]
   6. Give the answer, then add one more thing they didn't know to ask
 
@@ -155,9 +153,7 @@ Return ONLY the script. Start immediately with the hook.
 No title, no label, no "here is the script." Just the words."""
 
         try:
-            if self.deepseek_api_key:
-                return await self._script_via_deepseek(prompt)
-            return await self._script_via_claude(prompt)
+            return await call_llm(prompt, task="audio_script", temperature=0.5, max_tokens=4000, timeout=60.0)
         except Exception:
             logger.error("Audio script generation failed", exc_info=True)
             raise
@@ -245,43 +241,6 @@ No title, no label, no "here is the script." Just the words."""
     # Internal helpers
     # -------------------------------------------------------------------------
 
-    async def _script_via_deepseek(self, prompt: str) -> str:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{self.deepseek_base}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.deepseek_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "deepseek-chat",
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.5,
-                    "max_tokens": 1500,
-                },
-                timeout=60.0,
-            )
-            response.raise_for_status()
-            return response.json()["choices"][0]["message"]["content"].strip()
-
-    async def _script_via_claude(self, prompt: str) -> str:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": self.anthropic_api_key,
-                    "anthropic-version": "2023-06-01",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "claude-haiku-4-5-20251001",
-                    "max_tokens": 1500,
-                    "messages": [{"role": "user", "content": prompt}],
-                },
-                timeout=60.0,
-            )
-            response.raise_for_status()
-            return response.json()["content"][0]["text"].strip()
 
 
 # Singleton instance

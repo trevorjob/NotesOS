@@ -439,6 +439,27 @@ class TestResponse(BaseModel):
     title: str
     question_count: int
     questions: List[TestQuestionResponse]
+    generation_status: str = "ready"
+    batches_done: int = 0
+    batches_total: int | None = None
+
+
+class TestGenerateResponse(BaseModel):
+    test_id: str
+    status: str
+    title: str
+    question_count: int
+    batches_total: int | None
+
+
+class TestStatusResponse(BaseModel):
+    test_id: str
+    status: str
+    batches_done: int
+    batches_total: int | None
+    eta_seconds: int | None
+    failure_reason: str | None
+    question_count: int
 
 
 class TestListItem(BaseModel):
@@ -446,6 +467,7 @@ class TestListItem(BaseModel):
     title: str
     question_count: int
     created_at: str
+    generation_status: str = "ready"
 
 
 class TestAttemptListItem(BaseModel):
@@ -490,14 +512,18 @@ class TestResultsResponse(BaseModel):
     answers: List[GradedAnswerResponse]
 
 
-@router.post("/tests/generate", response_model=TestResponse)
+@router.post("/tests/generate", response_model=TestGenerateResponse, status_code=202)
 async def generate_test(
     request: GenerateTestRequest,
     course_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Generate a practice test."""
+    """
+    Enqueue test generation. Returns immediately with test_id and status=pending.
+    The client should subscribe to /ws/user/{user_id} for test_batch_ready /
+    test_generation_complete / test_generation_failed events.
+    """
     course_uuid = uuid.UUID(course_id)
     await verify_course_enrollment(db, current_user.id, course_uuid)
 
@@ -518,45 +544,94 @@ async def generate_test(
         topic_names = "All Topics"
 
     difficulty_label = request.difficulty.capitalize()
-    title = f"{course_code}: {topic_names} — {difficulty_label}" if course_code else f"{topic_names} — {difficulty_label}"
+    title = (
+        f"{course_code}: {topic_names} — {difficulty_label}"
+        if course_code
+        else f"{topic_names} — {difficulty_label}"
+    )
 
-    test = await question_generator.generate_test(
+    test = await question_generator.create_pending_test(
         db=db,
         course_id=course_id,
         user_id=str(current_user.id),
         topic_ids=request.topic_ids,
+        topic_name=topic_names,
         question_count=request.question_count,
         difficulty=request.difficulty,
         question_types=request.question_types,
         title=title,
-        topic_name=topic_names,
     )
 
-    # Refresh to get questions
-    await db.refresh(test)
-    questions_query = (
-        select(TestQuestion)
-        .where(TestQuestion.test_id == test.id)
-        .order_by(TestQuestion.order_index)
-    )
-    questions_result = await db.execute(questions_query)
-    questions = questions_result.scalars().all()
+    await redis_client.enqueue_job("test_generation", {
+        "test_id": str(test.id),
+        "user_id": str(current_user.id),
+        "course_id": course_id,
+        "topic_ids": request.topic_ids,
+        "topic_name": topic_names,
+        "question_count": request.question_count,
+        "difficulty": request.difficulty,
+        "question_types": request.question_types or ["mcq", "short_answer"],
+        "title": title,
+    })
 
-    return TestResponse(
-        id=str(test.id),
+    return TestGenerateResponse(
+        test_id=str(test.id),
+        status="pending",
         title=test.title,
         question_count=test.question_count,
-        questions=[
-            TestQuestionResponse(
-                id=str(q.id),
-                question_text=q.question_text,
-                question_type=q.question_type.value,
-                answer_options=q.answer_options,
-                points=q.points,
-                order_index=q.order_index,
-            )
-            for q in questions
-        ],
+        batches_total=test.batches_total,
+    )
+
+
+@router.get("/tests/{test_id}/status", response_model=TestStatusResponse)
+async def get_test_status(
+    test_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Poll generation progress for a test. Used for reconnect/resume."""
+    from app.models.test import TestGenerationStatus
+    from math import ceil
+
+    test_uuid = uuid.UUID(test_id)
+    result = await db.execute(select(Test).where(Test.id == test_uuid))
+    test = result.scalar_one_or_none()
+
+    if not test:
+        raise HTTPException(status_code=404, detail="Test not found")
+
+    await verify_course_enrollment(db, current_user.id, test.course_id)
+
+    # Count actually committed questions
+    from sqlalchemy import func
+    count_result = await db.execute(
+        select(func.count()).where(TestQuestion.test_id == test_uuid)
+    )
+    committed_count = count_result.scalar() or 0
+
+    # Linear ETA estimate
+    eta_seconds = None
+    if (
+        test.generation_status == TestGenerationStatus.GENERATING
+        and test.started_at
+        and test.batches_done
+        and test.batches_total
+        and test.batches_done > 0
+    ):
+        from datetime import datetime
+        elapsed = (datetime.utcnow() - test.started_at).total_seconds()
+        seconds_per_batch = elapsed / test.batches_done
+        remaining_batches = test.batches_total - test.batches_done
+        eta_seconds = ceil(seconds_per_batch * remaining_batches)
+
+    return TestStatusResponse(
+        test_id=test_id,
+        status=test.generation_status.value,
+        batches_done=test.batches_done or 0,
+        batches_total=test.batches_total,
+        eta_seconds=eta_seconds,
+        failure_reason=test.failure_reason,
+        question_count=committed_count,
     )
 
 
@@ -581,6 +656,7 @@ async def list_tests(
             title=t.title,
             question_count=t.question_count,
             created_at=t.created_at.isoformat() if t.created_at else "",
+            generation_status=t.generation_status.value if t.generation_status else "ready",
         )
         for t in tests
     ]
@@ -715,6 +791,9 @@ async def get_test(
         id=str(test.id),
         title=test.title,
         question_count=test.question_count,
+        generation_status=test.generation_status.value if test.generation_status else "ready",
+        batches_done=test.batches_done or 0,
+        batches_total=test.batches_total,
         questions=[
             TestQuestionResponse(
                 id=str(q.id),

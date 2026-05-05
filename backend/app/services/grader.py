@@ -5,18 +5,13 @@ AI-powered answer grading with voice-awareness and encouragement.
 
 import json
 import random
-import httpx
 from typing import Dict, Any, Optional
 
-from app.config import settings
+from app.services.llm import call_llm
 
 
 class Grader:
     """AI grader with voice-awareness and motivational feedback."""
-
-    def __init__(self):
-        self.deepseek_api_key = settings.DEEPSEEK_API_KEY
-        self.deepseek_base = "https://api.deepseek.com/v1"
 
     async def grade_answer(
         self,
@@ -56,7 +51,7 @@ class Grader:
         )
 
         # 2. Get AI grading
-        response = await self._call_deepseek(prompt)
+        response = await self._call_llm(prompt)
 
         try:
             grading_result = self._parse_json_response(response)
@@ -103,7 +98,7 @@ class Grader:
             personality=personality,
         )
         try:
-            encouragement = await self._call_deepseek(encouragement_prompt)
+            encouragement = await self._call_llm(encouragement_prompt)
             encouragement = encouragement.strip()
         except Exception:
             encouragement = self._generate_encouragement(score)
@@ -117,9 +112,11 @@ class Grader:
         }
 
     def _build_grading_prompt(
-        self, question: str, expected: str, student: str, 
+        self, question: str, expected: str, student: str,
         question_type: str, is_voice: bool
     ) -> str:
+        if question_type == "essay":
+            return self._build_essay_grading_prompt(question, expected, student, is_voice)
 
         voice_guidance = ""
         if is_voice:
@@ -129,16 +126,16 @@ class Grader:
     - Ignore filler words (um, uh, like, you know, kind of)
     - Ignore false starts and self-corrections ("wait, no, I mean...")
     - Ignore informal grammar and sentence fragments
-    - Do not penalise for missing technical spelling of terms if the 
+    - Do not penalise for missing technical spelling of terms if the
     pronunciation is clearly correct
-    - DO penalise for wrong concepts, missing key ideas, or clear 
+    - DO penalise for wrong concepts, missing key ideas, or clear
     misunderstandings — those are content errors, not speech errors
-    - If the student clearly knew something but struggled to articulate it, 
+    - If the student clearly knew something but struggled to articulate it,
     give them the benefit of the doubt on that point
     """
 
-        return f"""You are grading a student's answer. Your job is to be fair, 
-    specific, and genuinely useful — not harsh, not generous. 
+        return f"""You are grading a student's answer. Your job is to be fair,
+    specific, and genuinely useful — not harsh, not generous.
     A grade that doesn't reflect reality helps no one.
 
     QUESTION:
@@ -156,12 +153,12 @@ class Grader:
     ═══════════════════════════════════════
 
     CONCEPT UNDERSTANDING (primary — worth most of the grade):
-    Does the student actually understand what's happening, or are they 
-    reciting words without meaning? 
-    - Full marks: demonstrates clear understanding, could explain it 
+    Does the student actually understand what's happening, or are they
+    reciting words without meaning?
+    - Full marks: demonstrates clear understanding, could explain it
     differently if asked
     - Partial: has the right idea but is missing the mechanism or reason
-    - Low: uses correct vocabulary but shows no understanding of what 
+    - Low: uses correct vocabulary but shows no understanding of what
     it means
     - Zero: fundamentally misunderstands the concept
 
@@ -175,21 +172,21 @@ class Grader:
 
     WHAT TO IGNORE:
     - Spelling and grammar (unless so bad it changes the meaning)
-    - Points the student made that are correct but weren't in the expected 
+    - Points the student made that are correct but weren't in the expected
     answer — reward accurate knowledge even if unexpected
-    - Phrasing that differs from the model answer — grade the idea, 
+    - Phrasing that differs from the model answer — grade the idea,
     not the wording
 
     ═══════════════════════════════════════
     SCORING GUIDE:
     ═══════════════════════════════════════
-    9–10: Covers all key points, demonstrates clear understanding, 
+    9–10: Covers all key points, demonstrates clear understanding,
         could teach this concept to someone else
-    7–8:  Gets the main idea right, hits most key points, 
+    7–8:  Gets the main idea right, hits most key points,
         minor gaps or imprecision
-    5–6:  Partially correct — right direction but missing something 
+    5–6:  Partially correct — right direction but missing something
         important, or correct points without demonstrated understanding
-    3–4:  Some relevant knowledge but significant gaps or 
+    3–4:  Some relevant knowledge but significant gaps or
         a meaningful misconception present
     1–2:  Minimal relevant content, mostly off-track
     0:    No relevant content or completely wrong
@@ -209,6 +206,97 @@ class Grader:
         "what_you_got_right": "<1–2 sentences. Specific — name what they got right, not just 'good job'. If nothing is right, null.>",
         "what_to_fix": "<1–3 sentences. Tell them exactly what they got wrong or missed and why it matters. Be direct, not harsh. If nothing to fix, null.>",
         "one_thing_to_remember": "<The single most important thing they should take away from this question, whether they got it right or wrong. 1 sentence.>"
+    }}
+    }}
+
+    Return ONLY valid JSON. No preamble."""
+
+    def _build_essay_grading_prompt(
+        self, question: str, rubric: str, student: str, is_voice: bool
+    ) -> str:
+        voice_guidance = ""
+        if is_voice:
+            voice_guidance = """
+    VOICE ANSWER: This was transcribed from speech. Ignore filler words, false
+    starts, and informal grammar. Grade the ideas, not the articulation.
+    """
+
+        return f"""You are grading a university-level essay answer. Grade as a
+    knowledgeable, fair tutor — reward genuine understanding, penalise
+    vagueness and factual errors, do not penalise unusual structure.
+
+    QUESTION:
+    {question}
+
+    MARKING RUBRIC (from the question setter):
+    {rubric}
+
+    STUDENT'S ESSAY:
+    {student}
+    {voice_guidance}
+
+    ═══════════════════════════════════════
+    ESSAY GRADING DIMENSIONS:
+    ═══════════════════════════════════════
+
+    1. CENTRAL ARGUMENT (35% of grade)
+       Does the student make the core claim from the rubric, or an equally
+       valid alternative? Is the position clear and defensible?
+       - Strong: clear thesis, maintained throughout
+       - Weak: implicit or drifting position, or no real argument
+
+    2. COVERAGE OF KEY POINTS (30% of grade)
+       How many of the rubric's key points did the student address?
+       Missing the central claim is a major penalty; missing a supporting
+       point is minor.
+
+    3. REASONING AND EVIDENCE (20% of grade)
+       Does the student explain *why* their claims are true? Do they use
+       examples, mechanisms, or evidence from the material?
+       - Strong: claims are supported, not just asserted
+       - Weak: statements without explanation ("X is important because it is")
+
+    4. COHERENCE AND DEVELOPMENT (15% of grade)
+       Does the answer build toward a conclusion, or is it a list of
+       disconnected facts?
+       - Strong: ideas connect and build
+       - Weak: fragmented or repetitive
+
+    WHAT TO IGNORE:
+    - Essay length (a concise, well-argued response beats a padded one)
+    - Writing style, unless clarity is genuinely impaired
+    - Points correct but not in the rubric — reward accurate knowledge
+    - Minor factual slips that don't change the argument
+
+    ═══════════════════════════════════════
+    SCORING GUIDE (out of 10):
+    ═══════════════════════════════════════
+    9–10: Strong thesis, all key rubric points addressed, well-reasoned,
+        coherent. A student who clearly understands the material deeply.
+    7–8:  Solid argument, most key points covered, good reasoning with
+        minor gaps.
+    5–6:  Correct direction but missing either a clear argument or
+        significant rubric points. Some reasoning present.
+    3–4:  Shows some relevant knowledge but lacks argument or has
+        meaningful gaps/misconceptions.
+    1–2:  Largely off-topic or shows fundamental misunderstanding.
+    0:    No relevant content.
+
+    Return JSON:
+    {{
+    "score": <integer 0-10>,
+    "verdict": "<one of: correct | mostly_correct | partial | mostly_wrong | wrong>",
+    "key_points_covered": [
+        "<rubric point or valid argument element the student demonstrated>"
+    ],
+    "key_points_missed": [
+        "<rubric point or expected argument element the student missed>"
+    ],
+    "misconception": "<specific wrong belief the student showed, in one sentence — or null>",
+    "feedback": {{
+        "what_you_got_right": "<1–3 sentences. Name the argument or points they got right. Specific, not generic.>",
+        "what_to_fix": "<1–3 sentences. The most important gap — missing argument, missing evidence, or key rubric point not addressed.>",
+        "one_thing_to_remember": "<The single most valuable insight this question was testing. 1 sentence.>"
     }}
     }}
 
@@ -310,26 +398,8 @@ class Grader:
                 ]
             )
 
-    async def _call_deepseek(self, prompt: str) -> str:
-        """Make API call to DeepSeek."""
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{self.deepseek_base}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.deepseek_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "deepseek-chat",
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.3,  # More deterministic for grading
-                    "max_tokens": 1000,
-                },
-                timeout=30.0,
-            )
-            response.raise_for_status()
-            data = response.json()
-            return data["choices"][0]["message"]["content"]
+    async def _call_llm(self, prompt: str, max_tokens: int = 2000) -> str:
+        return await call_llm(prompt, task="grading", temperature=0.3, max_tokens=max_tokens, timeout=45.0)
 
     def _parse_json_response(self, response: str) -> Dict[str, Any]:
         """Extract and parse JSON from AI response."""

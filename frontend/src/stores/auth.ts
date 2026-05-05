@@ -14,6 +14,7 @@ interface User {
   email: string;
   full_name: string;
   avatar_url?: string;
+  university?: string | null;
   study_personality?: {
     tone: 'encouraging' | 'direct' | 'humorous';
     emoji_usage: 'none' | 'moderate' | 'heavy';

@@ -3,22 +3,17 @@ NotesOS - Study Agent Service
 RAG-powered Q&A assistant with conversation history tracking.
 """
 
-import httpx
 from typing import Dict, Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.config import settings
 from app.services.rag import rag_service
+from app.services.llm import call_llm
 from app.models.progress import AIConversation, AIMessage, MessageRole
 
 
 class StudyAgent:
     """RAG-powered study assistant with conversation memory."""
-
-    def __init__(self):
-        self.deepseek_api_key = settings.DEEPSEEK_API_KEY
-        self.deepseek_base = "https://api.deepseek.com/v1"
 
     async def ask_question(
         self,
@@ -245,30 +240,11 @@ class StudyAgent:
         ---
 
         Student's question: {question}"""
-        # Build messages array with history
         messages = [{"role": "system", "content": system_prompt}]
-        messages.extend(history)  # Add conversation history
+        messages.extend(history)
         messages.append({"role": "user", "content": user_prompt})
 
-        # Call DeepSeek API
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{self.deepseek_base}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.deepseek_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "deepseek-chat",
-                    "messages": messages,
-                    "temperature": 0.5,
-                    "max_tokens": 1500,
-                },
-                timeout=30.0,
-            )
-            response.raise_for_status()
-            data = response.json()
-            return data["choices"][0]["message"]["content"]
+        return await call_llm("", task="study_chat", messages=messages, temperature=0.5, max_tokens=3000, timeout=45.0)
 
     async def _save_messages(
         self, db: AsyncSession, conversation_id, question: str, answer: str

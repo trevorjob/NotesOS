@@ -65,6 +65,7 @@ export default function SettingsPage() {
 
   // Profile
   const [fullName, setFullName] = useState(user?.full_name ?? '');
+  const [university, setUniversity] = useState(user?.university ?? '');
   const [savingName, setSavingName] = useState(false);
   const [nameMsg, setNameMsg] = useState('');
   const [currentPw, setCurrentPw] = useState('');
@@ -140,8 +141,8 @@ export default function SettingsPage() {
     if (!fullName.trim() || !user) return;
     setSavingName(true); setNameMsg('');
     try {
-      await api.auth.updateProfile({ full_name: fullName.trim() });
-      setUser({ ...user, full_name: fullName.trim() });
+      await api.auth.updateProfile({ full_name: fullName.trim(), university: university.trim() || undefined });
+      setUser({ ...user, full_name: fullName.trim(), university: university.trim() || null });
       setNameMsg('Saved!');
       setTimeout(() => setNameMsg(''), 2000);
     } catch { setNameMsg('Failed.'); }
@@ -333,9 +334,10 @@ export default function SettingsPage() {
 
               <div className="space-y-3">
                 <Input label="Username" value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Your Username or NickName" />
+                <Input label="University" value={university} onChange={(e) => setUniversity(e.target.value)} placeholder="e.g. University of Cape Town" />
                 <p className="text-xs text-[#9e9a94]">Email: {user?.email} (cannot be changed)</p>
                 <div className="flex items-center gap-3">
-                  <Button size="sm" loading={savingName} onClick={handleSaveName}>Save name</Button>
+                  <Button size="sm" loading={savingName} onClick={handleSaveName}>Save profile</Button>
                   {nameMsg && <span className="text-xs text-[#16a34a]">{nameMsg}</span>}
                 </div>
               </div>

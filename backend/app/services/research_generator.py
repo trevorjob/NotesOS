@@ -11,15 +11,14 @@ from app.config import settings
 from app.database import AsyncSession
 from app.models.resource import PreClassResearch
 from app.models.course import Topic
+from app.services.llm import call_llm
 
 
 class ResearchGenerator:
     """Generate AI-powered pre-class research for topics."""
 
     def __init__(self):
-        self.deepseek_api_key = settings.DEEPSEEK_API_KEY
         self.serper_api_key = settings.SERPER_API_KEY
-        self.deepseek_base = "https://api.deepseek.com/v1"
         self.serper_url = "https://google.serper.dev/search"
 
     async def generate_research(
@@ -140,7 +139,7 @@ Return JSON:
 Return ONLY valid JSON, no other text."""
 
         try:
-            response = await self._call_deepseek(prompt)
+            response = await self._call_llm(prompt)
             result = self._parse_json_response(response)
 
             return (
@@ -170,26 +169,8 @@ Return ONLY valid JSON, no other text."""
 """
         return content, {"concepts": [topic_title]}
 
-    async def _call_deepseek(self, prompt: str) -> str:
-        """Make API call to DeepSeek."""
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{self.deepseek_base}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.deepseek_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "deepseek-chat",
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.4,  # Slightly higher for creative synthesis
-                    "max_tokens": 3000,
-                },
-                timeout=45.0,  # Longer timeout for research
-            )
-            response.raise_for_status()
-            data = response.json()
-            return data["choices"][0]["message"]["content"]
+    async def _call_llm(self, prompt: str) -> str:
+        return await call_llm(prompt, task="research", temperature=0.4, max_tokens=6000, timeout=60.0)
 
     def _parse_json_response(self, response: str) -> Dict[str, Any]:
         """Extract and parse JSON from AI response."""

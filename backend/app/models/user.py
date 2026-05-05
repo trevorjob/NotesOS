@@ -20,6 +20,7 @@ class User(Base):
     password_hash = Column(String(255), nullable=True)  # nullable for OAuth-only users
     full_name = Column(String(255), nullable=False)
     avatar_url = Column(Text, nullable=True)
+    university = Column(String(255), nullable=True)
 
     # Google OAuth
     google_id = Column(String(255), unique=True, nullable=True, index=True)
