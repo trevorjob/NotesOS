@@ -371,7 +371,7 @@ export default function TopicPage() {
       {!showChat && (
         <button
           onClick={() => setShowChat(true)}
-          className="fixed bottom-10 right-6 flex items-center gap-2 bg-[#1a1917] text-white px-4 py-2.5 rounded-full shadow-lg hover:opacity-90 transition-opacity text-sm font-medium z-30"
+          className="fixed bottom-15 right-6 flex items-center gap-2 bg-[#1a1917] text-white px-4 py-2.5 rounded-full shadow-lg hover:opacity-90 transition-opacity text-sm font-medium z-30"
         >
           💬 Ask AI
         </button>

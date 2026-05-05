@@ -190,3 +190,7 @@ async def test_generation_worker() -> None:
             if job_json:
                 await redis_client.ack_job("test_generation", job_json)
             await asyncio.sleep(1)
+
+
+if __name__ == "__main__":
+    asyncio.run(test_generation_worker())
