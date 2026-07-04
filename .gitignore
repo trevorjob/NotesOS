@@ -9,6 +9,8 @@ venv/
 env/
 .venv/
 ENV/
+n.json
+dev.sh
 
 # Environment files
 .env

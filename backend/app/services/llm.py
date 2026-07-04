@@ -58,6 +58,7 @@ async def call_llm(
     temperature: float = 0.5,
     max_tokens: int = 2000,
     timeout: float = 120.0,
+    response_format: dict[str, Any] | None = None,
 ) -> str:
     """
     Call the appropriate LLM for the given task.
@@ -71,6 +72,8 @@ async def call_llm(
         temperature: Sampling temperature.
         max_tokens:  Max completion tokens.
         timeout:     HTTP timeout in seconds.
+        response_format: Optional OpenAI-compatible response_format, e.g.
+                     {"type": "json_object"} to force syntactically valid JSON.
 
     Returns:
         The assistant message content string.
@@ -100,6 +103,15 @@ async def call_llm(
 
     logger.debug("[LLM] task=%s provider=%s model=%s tokens=%d", task, provider, model, max_tokens)
 
+    body: dict[str, Any] = {
+        "model": model,
+        "messages": payload_messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    if response_format is not None:
+        body["response_format"] = response_format
+
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(
             f"{base_url}/chat/completions",
@@ -107,13 +119,7 @@ async def call_llm(
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
-            json={
-                "model": model,
-                "messages": payload_messages,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-                
-            },
+            json=body,
         )
         response.raise_for_status()
         data = response.json()

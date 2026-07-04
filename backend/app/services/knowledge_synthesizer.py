@@ -203,6 +203,7 @@ Return ONLY valid JSON. No preamble. No text outside the JSON."""
                 temperature=0.3,
                 max_tokens=16000,
                 timeout=120.0,
+                response_format={"type": "json_object"},
             )
             return self._parse_json(content)
         except Exception:
@@ -210,12 +211,18 @@ Return ONLY valid JSON. No preamble. No text outside the JSON."""
             raise
 
     def _parse_json(self, text: str) -> Dict[str, Any]:
-        """Extract and parse JSON from AI response."""
+        """Extract and parse JSON from AI response.
+
+        With response_format=json_object the API returns syntactically valid
+        JSON, but we still slice to the outer braces (defensive) and parse with
+        strict=False so stray control characters inside string values (raw
+        newlines/tabs from source material) don't break parsing.
+        """
         start = text.find("{")
         end = text.rfind("}") + 1
         if start == -1 or end == 0:
             raise ValueError("No JSON found in AI response")
-        return json.loads(text[start:end])
+        return json.loads(text[start:end], strict=False)
 
 
 # Singleton instance
