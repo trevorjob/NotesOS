@@ -5,6 +5,7 @@ NotesOS API - Course Endpoints
 import secrets
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -12,8 +13,8 @@ from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models import Course, CourseEnrollment, Topic, User
-from app.models.semester import SemesterMember
 from app.models.progress import UserProgress
+from app.models.term import Term
 from app.api.auth import get_current_user, verify_course_enrollment
 from app.services.cache import (
     cache,
@@ -21,6 +22,7 @@ from app.services.cache import (
     course_key,
     topics_list_key,
 )
+from app.services.proximity import find_course_candidates
 from app.config import settings
 
 router = APIRouter()
@@ -34,15 +36,19 @@ router = APIRouter()
 class CreateCourseRequest(BaseModel):
     code: str
     name: str
-    semester_id: Optional[str] = None
     description: Optional[str] = None
-    is_public: bool = True
+    # Optional: file the new course under one of the user's own terms.
+    term_id: Optional[str] = None
+    # Set true to skip the proximity check and fork a new course even when
+    # near-matches exist ("make my own"). The client sends this on the second
+    # call, after the user has seen the offered matches and declined them.
+    force: bool = False
 
 
 class JoinCourseRequest(BaseModel):
-    search: Optional[str] = None
     course_id: Optional[str] = None
     invite_code: Optional[str] = None
+    term_id: Optional[str] = None
 
 
 class TopicCreate(BaseModel):
@@ -76,6 +82,18 @@ def generate_invite_code() -> str:
     return f"{part1}-{part2}"
 
 
+async def resolve_owned_term_id(term_id: Optional[str], user: User, db: AsyncSession):
+    """Validate that term_id (if given) belongs to the user. Returns it or None."""
+    if not term_id:
+        return None
+    owned = await db.scalar(
+        select(Term.id).where(Term.id == term_id, Term.user_id == user.id)
+    )
+    if not owned:
+        raise HTTPException(status_code=404, detail="Term not found")
+    return term_id
+
+
 # =============================================================================
 # Endpoints
 # =============================================================================
@@ -94,14 +112,20 @@ async def list_courses(
         return cached
 
     result = await db.execute(
-        select(Course, CourseEnrollment.joined_at)
+        select(
+            Course,
+            CourseEnrollment.joined_at,
+            CourseEnrollment.term_id,
+            Term.label,
+        )
         .join(CourseEnrollment, CourseEnrollment.course_id == Course.id)
+        .outerjoin(Term, Term.id == CourseEnrollment.term_id)
         .where(CourseEnrollment.user_id == current_user.id)
         .where(Course.is_active)
     )
     rows = result.all()
 
-    course_ids = [course.id for course, _ in rows]
+    course_ids = [course.id for course, _, _, _ in rows]
     if not course_ids:
         payload = {"courses": []}
         await cache.set(cache_key, payload, settings.CACHE_TTL_COURSES)
@@ -181,7 +205,8 @@ async def list_courses(
             "id": str(course.id),
             "code": course.code,
             "name": course.name,
-            "semester_id": str(course.semester_id) if course.semester_id else None,
+            "term_id": str(term_id) if term_id else None,
+            "term_label": term_label,
             "member_count": member_counts.get(str(course.id), 1),
             "created_by": str(course.created_by),
             "joined_at": joined_at.isoformat(),
@@ -189,7 +214,7 @@ async def list_courses(
             "last_studied": last_studied_map.get(str(course.id)),
             "topics": topics_by_course.get(str(course.id), []),
         }
-        for course, joined_at in rows
+        for course, joined_at, term_id, term_label in rows
     ]
 
     payload = {"courses": courses}
@@ -203,33 +228,47 @@ async def create_course(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Create a new course."""
-    invite_code = None if request.is_public else generate_invite_code()
+    """Create a new course.
+
+    Runs the proximity check first: if near-matches exist at the creator's school,
+    return them as an offer (HTTP 200, nothing created) instead of forking a copy.
+    The client re-POSTs with ``force=true`` to create anyway.
+    """
+    term_id = await resolve_owned_term_id(request.term_id, current_user, db)
+
+    if not request.force:
+        candidates = await find_course_candidates(
+            db, creator=current_user, code=request.code, name=request.name
+        )
+        if candidates:
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "proximity_check": True,
+                    "message": "This might already exist. Join one of these, or make your own.",
+                    "matches": [c.as_dict() for c in candidates],
+                },
+            )
 
     course = Course(
         code=request.code,
         name=request.name,
-        semester_id=request.semester_id,
         description=request.description,
-        is_public=request.is_public,
-        invite_code=invite_code,
+        invite_code=generate_invite_code(),
         created_by=current_user.id,
+        # A course inherits the creator's school — the proximity-check hard filter.
+        school_id=current_user.school_id,
     )
     db.add(course)
     await db.flush()
 
-    # Auto-enroll creator
-    enrollment = CourseEnrollment(user_id=current_user.id, course_id=course.id)
+    # Auto-enroll creator, filing the course under their chosen term (if any).
+    enrollment = CourseEnrollment(
+        user_id=current_user.id,
+        course_id=course.id,
+        term_id=term_id,
+    )
     db.add(enrollment)
-
-    # Auto-enroll all existing semester members (other than creator)
-    if request.semester_id:
-        members_result = await db.execute(
-            select(SemesterMember).where(SemesterMember.semester_id == request.semester_id)
-        )
-        for member in members_result.scalars().all():
-            if str(member.user_id) != str(current_user.id):
-                db.add(CourseEnrollment(user_id=member.user_id, course_id=course.id))
 
     await db.commit()
     await db.refresh(course)
@@ -267,26 +306,13 @@ async def join_course(
 
     elif request.course_id:
         result = await db.execute(
-            select(Course).where(Course.id == request.course_id).where(Course.is_public)
+            select(Course).where(Course.id == request.course_id)
         )
         course = result.scalar_one_or_none()
 
-    elif request.search:
-        result = await db.execute(
-            select(Course)
-            .where(Course.is_public)
-            .where(
-                Course.code.ilike(f"%{request.search}%")
-                | Course.name.ilike(f"%{request.search}%")
-            )
-            .limit(10)
-        )
-        courses = result.scalars().all()
-        return {
-            "courses": [
-                {"id": str(c.id), "code": c.code, "name": c.name} for c in courses
-            ]
-        }
+    # No public search branch: a course is reached by invite code, a direct
+    # course_id from the classmate-graph discovery feed, or creation. Public
+    # browse is exactly what the emergent-set model rules out.
 
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
@@ -300,7 +326,12 @@ async def join_course(
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Already enrolled in this course")
 
-    enrollment = CourseEnrollment(user_id=current_user.id, course_id=course.id)
+    term_id = await resolve_owned_term_id(request.term_id, current_user, db)
+    enrollment = CourseEnrollment(
+        user_id=current_user.id,
+        course_id=course.id,
+        term_id=term_id,
+    )
     db.add(enrollment)
     await db.commit()
 
@@ -335,6 +366,33 @@ async def join_course(
         "course": {"id": str(course.id), "code": course.code, "name": course.name},
         "classmates": member_count - 1,
     }
+
+
+class SetCourseTermRequest(BaseModel):
+    term_id: Optional[str] = None  # null unfiles the course
+
+
+@router.patch("/{course_id}/term")
+async def set_course_term(
+    course_id: str,
+    request: SetCourseTermRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """File (or refile / unfile) the current user's enrollment under one of their terms."""
+    enrollment = await db.scalar(
+        select(CourseEnrollment).where(
+            CourseEnrollment.user_id == current_user.id,
+            CourseEnrollment.course_id == course_id,
+        )
+    )
+    if not enrollment:
+        raise HTTPException(status_code=404, detail="Not enrolled in this course")
+
+    enrollment.term_id = await resolve_owned_term_id(request.term_id, current_user, db)
+    await db.commit()
+    await cache.delete(courses_list_key(str(current_user.id)))
+    return {"course_id": course_id, "term_id": str(enrollment.term_id) if enrollment.term_id else None}
 
 
 @router.get("/{course_id}")
@@ -383,7 +441,7 @@ async def get_course(
             "code": course.code,
             "name": course.name,
             "description": course.description,
-            "semester_id": str(course.semester_id) if course.semester_id else None,
+            "school_id": str(course.school_id) if course.school_id else None,
         },
         "topics": [
             {
@@ -512,21 +570,22 @@ async def batch_create_courses(
     created_courses = []
 
     for course_req in request.courses:
-        invite_code = None if course_req.is_public else generate_invite_code()
-
         course = Course(
             code=course_req.code,
             name=course_req.name,
-            semester=course_req.semester,
             description=course_req.description,
-            is_public=course_req.is_public,
-            invite_code=invite_code,
+            invite_code=generate_invite_code(),
             created_by=current_user.id,
+            school_id=current_user.school_id,
         )
         db.add(course)
         await db.flush()
 
-        enrollment = CourseEnrollment(user_id=current_user.id, course_id=course.id)
+        enrollment = CourseEnrollment(
+            user_id=current_user.id,
+            course_id=course.id,
+            term_id=await resolve_owned_term_id(course_req.term_id, current_user, db),
+        )
         db.add(enrollment)
 
         created_courses.append(

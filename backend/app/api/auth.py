@@ -40,7 +40,11 @@ class RegisterRequest(BaseModel):
     password: str
     full_name: str
     study_personality: Optional[dict] = None
-    invite_code: Optional[str] = None
+    # Proximity-check signals — all optional (a US fresher may know none of them).
+    school_name: Optional[str] = None
+    program: Optional[str] = None
+    entry_year: Optional[int] = None
+    phone: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
@@ -66,6 +70,10 @@ class UserResponse(BaseModel):
     avatar_url: Optional[str]
     study_personality: Optional[dict]
     university: Optional[str] = None
+    school_id: Optional[str] = None
+    program: Optional[str] = None
+    entry_year: Optional[int] = None
+    phone: Optional[str] = None
 
 
 class PersonalityUpdate(BaseModel):
@@ -95,6 +103,10 @@ class PreferencesUpdate(BaseModel):
 class ProfileUpdate(BaseModel):
     full_name: Optional[str] = None
     university: Optional[str] = None
+    school_name: Optional[str] = None
+    program: Optional[str] = None
+    entry_year: Optional[int] = None
+    phone: Optional[str] = None
 
 
 class ChangePasswordRequest(BaseModel):
@@ -105,6 +117,22 @@ class ChangePasswordRequest(BaseModel):
 # =============================================================================
 # Utility Functions
 # =============================================================================
+
+
+def serialize_user(user: User) -> dict:
+    """Single source of truth for the user payload returned across auth endpoints."""
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "full_name": user.full_name,
+        "avatar_url": user.avatar_url,
+        "study_personality": user.study_personality,
+        "university": user.university,
+        "school_id": str(user.school_id) if user.school_id else None,
+        "program": user.program,
+        "entry_year": user.entry_year,
+        "phone": user.phone,
+    }
 
 
 def hash_password(password: str) -> str:
@@ -212,6 +240,25 @@ async def register(request: RegisterRequest, background_tasks: BackgroundTasks, 
             status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered"
         )
 
+    # Phone is unique-when-present; pre-check for a friendly error instead of a
+    # 500 from the unique index.
+    phone_value = (request.phone.strip() if request.phone else None) or None
+    if phone_value:
+        existing_phone = await db.execute(select(User).where(User.phone == phone_value))
+        if existing_phone.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Phone number already registered",
+            )
+
+    # Resolve the typed school to a canonical row (created if new).
+    school_id = None
+    if request.school_name:
+        from app.services.school import find_or_create_school
+
+        school = await find_or_create_school(db, request.school_name)
+        school_id = school.id if school else None
+
     # Create user
     user = User(
         email=request.email,
@@ -223,32 +270,13 @@ async def register(request: RegisterRequest, background_tasks: BackgroundTasks, 
             "emoji_usage": "moderate",
             "explanation_style": "detailed",
         },
+        school_id=school_id,
+        program=request.program,
+        entry_year=request.entry_year,
+        phone=phone_value,
     )
     db.add(user)
     await db.flush()
-
-    # Auto-join semester if invite code provided
-    if request.invite_code:
-        try:
-            from app.models.semester import Semester, SemesterMember, SemesterRole
-            from app.models.course import Course, CourseEnrollment
-            sem_result = await db.execute(
-                select(Semester).where(Semester.invite_code == request.invite_code)
-            )
-            semester = sem_result.scalar_one_or_none()
-            if semester:
-                db.add(SemesterMember(
-                    semester_id=semester.id,
-                    user_id=user.id,
-                    role=SemesterRole.MEMBER,
-                ))
-                courses_result = await db.execute(
-                    select(Course).where(Course.semester_id == semester.id, Course.is_active)
-                )
-                for course in courses_result.scalars().all():
-                    db.add(CourseEnrollment(user_id=user.id, course_id=course.id))
-        except Exception:
-            pass  # Never fail registration over an invite code issue
 
     await db.commit()
     await db.refresh(user)
@@ -265,12 +293,7 @@ async def register(request: RegisterRequest, background_tasks: BackgroundTasks, 
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "user": {
-            "id": str(user.id),
-            "email": user.email,
-            "full_name": user.full_name,
-            "study_personality": user.study_personality,
-        },
+        "user": serialize_user(user),
     }
 
 
@@ -298,12 +321,7 @@ async def login(request: LoginRequest, db: AsyncSession = Depends(get_db)):
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "user": {
-            "id": str(user.id),
-            "email": user.email,
-            "full_name": user.full_name,
-            "study_personality": user.study_personality,
-        },
+        "user": serialize_user(user),
     }
 
 
@@ -355,12 +373,7 @@ async def refresh_access_token(
         "access_token": new_access_token,
         "refresh_token": new_refresh_token,
         "token_type": "bearer",
-        "user": {
-            "id": str(user.id),
-            "email": user.email,
-            "full_name": user.full_name,
-            "study_personality": user.study_personality,
-        },
+        "user": serialize_user(user),
     }
 
 
@@ -383,14 +396,7 @@ async def logout(
 @router.get("/me", response_model=UserResponse)
 async def get_me(current_user: User = Depends(get_current_user)):
     """Get current user profile."""
-    return {
-        "id": str(current_user.id),
-        "email": current_user.email,
-        "full_name": current_user.full_name,
-        "avatar_url": current_user.avatar_url,
-        "study_personality": current_user.study_personality,
-        "university": current_user.university,
-    }
+    return serialize_user(current_user)
 
 
 @router.patch("/me/personality")
@@ -420,20 +426,24 @@ async def update_profile(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update user profile fields (full_name, university)."""
+    """Update user profile fields (name, school, and proximity-check signals)."""
     if data.full_name is not None:
         current_user.full_name = data.full_name.strip()
     if data.university is not None:
         current_user.university = data.university.strip() or None
+    if data.school_name is not None:
+        from app.services.school import find_or_create_school
+
+        school = await find_or_create_school(db, data.school_name)
+        current_user.school_id = school.id if school else None
+    if data.program is not None:
+        current_user.program = data.program.strip() or None
+    if data.entry_year is not None:
+        current_user.entry_year = data.entry_year
+    if data.phone is not None:
+        current_user.phone = data.phone.strip() or None
     await db.commit()
-    return {
-        "id": str(current_user.id),
-        "email": current_user.email,
-        "full_name": current_user.full_name,
-        "avatar_url": current_user.avatar_url,
-        "study_personality": current_user.study_personality,
-        "university": current_user.university,
-    }
+    return serialize_user(current_user)
 
 
 @router.post("/me/change-password", status_code=status.HTTP_200_OK)

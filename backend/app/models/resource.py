@@ -96,6 +96,14 @@ class Resource(Base):
     # Fact-checking status
     is_verified = Column(Boolean, default=False, nullable=False)
 
+    # Merge Agent gate: a wildly off-topic upload is quarantined — held out of the
+    # shared consolidated note, visible only to its uploader, until it corroborates
+    # with other material in the topic (embedding coherence). Governance without a
+    # moderator: the gate is a worker, not a person.
+    quarantined = Column(Boolean, default=False, nullable=False, index=True)
+    quarantine_reason = Column(Text, nullable=True)
+    quarantined_at = Column(DateTime, nullable=True)
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(

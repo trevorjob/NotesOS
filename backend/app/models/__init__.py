@@ -4,8 +4,9 @@ NotesOS Models Package
 
 from app.models.user import User
 from app.models.refresh_token import RefreshToken
+from app.models.school import School
+from app.models.term import Term, DivisionType
 from app.models.course import Course, CourseEnrollment, Topic, CourseOutline
-from app.models.semester import Semester, SemesterMember, SemesterRole
 from app.models.resource import (
     Resource,
     ResourceFile,
@@ -33,24 +34,25 @@ from app.models.progress import (
     SessionType,
     MessageRole,
 )
-from app.models.classmate import Class, Classmate
 from app.models.notification import Notification, NotificationType
 from app.models.knowledge import TopicKnowledge, AudioLesson, KnowledgeStatus
+from app.models.retrieval import Concept, ConceptState, RetrievalAttempt
 
 
 __all__ = [
     # User
     "User",
     "RefreshToken",
+    # School
+    "School",
+    # Term
+    "Term",
+    "DivisionType",
     # Course
     "Course",
     "CourseEnrollment",
     "Topic",
     "CourseOutline",
-    # Semester
-    "Semester",
-    "SemesterMember",
-    "SemesterRole",
     # Resource
     "Resource",
     "ResourceFile",
@@ -75,9 +77,6 @@ __all__ = [
     "AIMessage",
     "SessionType",
     "MessageRole",
-    # Classmates (Global Invites)
-    "Class",
-    "Classmate",
     # Notifications
     "Notification",
     "NotificationType",
@@ -85,4 +84,8 @@ __all__ = [
     "TopicKnowledge",
     "AudioLesson",
     "KnowledgeStatus",
+    # Retrieval substrate
+    "Concept",
+    "ConceptState",
+    "RetrievalAttempt",
 ]

@@ -4,7 +4,6 @@ Background worker to chunk resources and generate embeddings.
 """
 
 import asyncio
-import json
 from sqlalchemy import select
 from app.database import async_session_maker
 
@@ -17,6 +16,7 @@ from app.services.websocket import broadcast_processing_status
 from app.models.course import Topic
 from app.config import settings
 from app.core.logging import get_logger
+from app.workers.base import run_worker_loop
 
 logger = get_logger(__name__)
 
@@ -119,48 +119,9 @@ async def process_chunking_job(job_data: dict):
 
 
 async def chunking_worker():
-    """
-    Main worker loop for chunking queue.
-    Uses reliable BRPOPLPUSH so jobs survive worker restarts.
-    """
-    logger.info("Chunking worker started")
-
-    recovered = await redis_client.recover_orphaned_jobs("chunking")
-    if recovered:
-        logger.info("Chunking worker recovered orphaned jobs", extra={"count": recovered})
-
-    while True:
-        job_json = None
-        try:
-            job_json = await redis_client.reliable_dequeue("chunking", timeout=5)
-
-            if job_json:
-                job = json.loads(job_json)
-
-                job_id = job["id"]
-                job_data = job["data"]
-
-                logger.info("Processing chunking job", extra={"job_id": job_id})
-
-                await redis_client.update_job_status(job_id, "processing")
-                await process_chunking_job(job_data)
-
-                resource_id = job_data.get("resource_id") or job_data.get("note_id")
-                await redis_client.update_job_status(
-                    job_id, "completed", result={"resource_id": resource_id}
-                )
-                await redis_client.ack_job("chunking", job_json)
-
-        except asyncio.CancelledError:
-            logger.info("Chunking worker shutting down")
-            break
-        except Exception:
-            logger.error("Chunking worker error", exc_info=True)
-            if job_json:
-                await redis_client.ack_job("chunking", job_json)
-            await asyncio.sleep(1)
+    """Drain the chunking queue via the shared reliable worker loop."""
+    await run_worker_loop("chunking", process_chunking_job)
 
 
 if __name__ == "__main__":
-    """Run the worker."""
     asyncio.run(chunking_worker())

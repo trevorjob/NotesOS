@@ -14,7 +14,7 @@ import asyncio
 import os
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.orm import selectinload
 from pydantic import BaseModel
 import uuid
@@ -72,6 +72,10 @@ class ResourceResponse(BaseModel):
     is_processed: bool
     ocr_cleaned: bool
     is_verified: bool
+    # Merge Agent gate — only ever True in a payload sent to the uploader themselves;
+    # quarantined resources are filtered out for everyone else.
+    quarantined: bool = False
+    quarantine_reason: Optional[str] = None
     ocr_confidence: Optional[float] = None
     ocr_provider: Optional[str] = None
     files: List[ResourceFileResponse] = []
@@ -124,6 +128,8 @@ def build_resource_response(resource: Resource, uploader_name: str) -> ResourceR
         is_processed=resource.is_processed,
         ocr_cleaned=resource.ocr_cleaned,
         is_verified=resource.is_verified,
+        quarantined=resource.quarantined,
+        quarantine_reason=resource.quarantine_reason,
         ocr_confidence=float(resource.ocr_confidence)
         if resource.ocr_confidence
         else None,
@@ -157,18 +163,26 @@ async def list_resources(
 
     await verify_course_enrollment(db, current_user.id, topic.course_id)
 
-    # ── Cache read-through ────────────────────────────────────────────────────
-    cache_key = resources_list_key(topic_id, page, page_size)
+    # ── Cache read-through (user-scoped: quarantine visibility differs per viewer) ─
+    cache_key = resources_list_key(topic_id, str(current_user.id), page, page_size)
     cached = await cache.get(cache_key)
     if cached is not None:
         return cached
     # ─────────────────────────────────────────────────────────────────────────
+
+    # Merge Agent gate: a quarantined upload is held out of the shared note and is
+    # visible only to whoever uploaded it — never to their classmates.
+    visibility = or_(
+        Resource.quarantined.is_(False),
+        Resource.uploaded_by == current_user.id,
+    )
 
     offset = (page - 1) * page_size
     resources_query = (
         select(Resource)
         .options(selectinload(Resource.files))
         .where(Resource.topic_id == uuid.UUID(topic_id))
+        .where(visibility)
         .order_by(Resource.created_at.desc())
         .offset(offset)
         .limit(page_size)
@@ -178,7 +192,10 @@ async def list_resources(
 
     # Total count — single scalar query, no row fetching
     total = await db.scalar(
-        select(func.count()).where(Resource.topic_id == uuid.UUID(topic_id))
+        select(func.count())
+        .select_from(Resource)
+        .where(Resource.topic_id == uuid.UUID(topic_id))
+        .where(visibility)
     )
 
     # Batch-load uploader names in one query

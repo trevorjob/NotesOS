@@ -19,6 +19,7 @@ from app.models.resource import Resource
 from app.services.redis_client import redis_client
 from app.services.vision_transcribe import vision_transcribe
 from app.services.file_processor import file_processor
+from app.workers.base import run_worker_loop
 
 
 async def _broadcast(course_id: str, resource_id: str, status: str) -> None:
@@ -120,47 +121,8 @@ async def process_transcription_job(job_data: dict) -> None:
 
 
 async def transcription_worker() -> None:
-    """Main loop: drain queue:transcription using reliable BRPOPLPUSH."""
-    import json
-
-    print("[TRANSCRIPTION WORKER] 🚀 Starting worker")
-
-    recovered = await redis_client.recover_orphaned_jobs("transcription")
-    if recovered:
-        print(f"[TRANSCRIPTION WORKER] 🔄 Recovered {recovered} orphaned job(s)")
-
-    while True:
-        job_json = None
-        try:
-            job_json = await redis_client.reliable_dequeue("transcription", timeout=5)
-
-            if job_json:
-                job = json.loads(job_json)
-
-                job_id = job["id"]
-                job_data = job["data"]
-
-                print(f"[TRANSCRIPTION WORKER] 📝 Processing job {job_id}")
-                await redis_client.update_job_status(job_id, "processing")
-
-                await process_transcription_job(job_data)
-
-                await redis_client.update_job_status(
-                    job_id,
-                    "completed",
-                    result={"resource_id": job_data.get("resource_id")},
-                )
-                await redis_client.ack_job("transcription", job_json)
-
-        except asyncio.CancelledError:
-            # Do NOT ack — job stays in :processing and recovers on next startup
-            print("[TRANSCRIPTION WORKER] Shutting down")
-            break
-        except Exception as exc:
-            print(f"[TRANSCRIPTION WORKER] Worker error: {exc}")
-            if job_json:
-                await redis_client.ack_job("transcription", job_json)
-            await asyncio.sleep(1)
+    """Drain the transcription queue via the shared reliable worker loop."""
+    await run_worker_loop("transcription", process_transcription_job)
 
 
 if __name__ == "__main__":

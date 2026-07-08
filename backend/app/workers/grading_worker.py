@@ -16,6 +16,7 @@ from app.services.redis_client import redis_client
 from app.services.transcription import transcription_service
 from app.services.grader import grader
 from app.core.logging import get_logger
+from app.workers.base import run_worker_loop
 
 logger = get_logger(__name__)
 
@@ -211,25 +212,13 @@ async def _update_attempt_score(db, attempt_id) -> bool:
 
 
 async def start_grading_worker():
-    """Start the grading worker to process jobs from Redis."""
-    logger.info("Grading worker started")
+    """Drain the voice-grading queue via the shared reliable worker loop.
 
-    while True:
-        try:
-            # Dequeue job from Redis
-            job_data = await redis_client.dequeue_job("voice_grade")
-
-            if job_data:
-                await process_grading_job(job_data)
-            else:
-                # No jobs available, wait before polling again
-                await asyncio.sleep(1)
-
-        except Exception:
-            logger.error("Grading worker error", exc_info=True)
-            await asyncio.sleep(5)
+    Previously used a plain RPOP with no processing queue, so a crash mid-job
+    dropped the work entirely. Now reliable + retried + dead-lettered.
+    """
+    await run_worker_loop("voice_grade", process_grading_job)
 
 
 if __name__ == "__main__":
-    """Run the worker."""
     asyncio.run(start_grading_worker())

@@ -1,0 +1,180 @@
+"""
+Shared pytest fixtures for the NotesOS backend test suite.
+
+Strategy
+--------
+- A dedicated test database (TEST_DATABASE_URL) has its schema built once per
+  session from the SQLAlchemy models (Base.metadata), not from Alembic
+  migrations. This keeps the suite fast and lets the model definitions be the
+  single source of truth the tests assert against. A separate migration
+  smoke-test verifies Alembic head.
+- Between tests every table is TRUNCATE ... RESTART IDENTITY CASCADE'd, so each
+  test starts from a clean slate without paying for a full schema rebuild.
+- Redis and outbound email are neutralised: caching is disabled and the welcome
+  email is patched to a no-op, so the suite has no hard dependency on either.
+
+Event-loop / connection safety
+------------------------------
+pytest-asyncio runs in ``auto`` mode with function-scoped event loops (the
+default). asyncpg connections are pinned to the event loop that created them and
+are NOT concurrency-safe. A session-scoped engine would build its pool on the
+session-setup loop and then hand those connections to tests running on a
+different (function) loop, producing
+``InterfaceError: cannot perform operation: another operation is in progress``.
+
+To avoid that entirely:
+- The per-session schema build runs in its own isolated ``asyncio.run`` loop on a
+  throwaway ``NullPool`` engine, so no connection outlives it.
+- The ``engine`` used by tests is function-scoped and uses ``NullPool`` — every
+  test gets fresh connections created on its own loop, and nothing survives past
+  the test.
+- ``db_session`` and the app (via ``get_db`` override) each draw their own
+  ``AsyncSession`` from the same function-scoped factory, so no single asyncpg
+  connection is ever shared between two coroutines.
+
+Set TEST_DATABASE_URL to point at a local Postgres with the pgvector extension
+available. Default assumes the docker-compose Postgres with a `notesos_test` db.
+"""
+
+import asyncio
+import os
+import uuid
+
+# Neutralise external services BEFORE importing the app / settings.
+os.environ.setdefault("CACHE_ENABLED", "false")
+os.environ.setdefault("DATABASE_SSL", "false")
+
+import pytest
+import pytest_asyncio
+from httpx import AsyncClient, ASGITransport
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
+
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL",
+    "postgresql+asyncpg://notesos:blessed@localhost:5432/notesos_test",
+)
+
+# Importing app.models registers every model on Base.metadata.
+import app.models  # noqa: F401,E402
+from app.database import Base, get_db  # noqa: E402
+from app.main import app  # noqa: E402
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _schema():
+    """Build the schema once per session in a fully isolated event loop.
+
+    Uses its own ``asyncio.run`` loop and a NullPool engine so no asyncpg
+    connection outlives this call — nothing is shared with the per-test loops.
+    """
+
+    async def _build():
+        eng = create_async_engine(TEST_DATABASE_URL, future=True, poolclass=NullPool)
+        try:
+            async with eng.begin() as conn:
+                await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+                await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+                await conn.run_sync(Base.metadata.drop_all)
+                await conn.run_sync(Base.metadata.create_all)
+        finally:
+            await eng.dispose()
+
+    asyncio.run(_build())
+    yield
+
+
+@pytest_asyncio.fixture
+async def engine(_schema):
+    """Function-scoped engine on a NullPool.
+
+    A fresh engine per test means every connection is created on that test's own
+    event loop and disposed with it — no cross-loop connection reuse.
+    """
+    eng = create_async_engine(TEST_DATABASE_URL, future=True, poolclass=NullPool)
+    yield eng
+    await eng.dispose()
+
+
+@pytest_asyncio.fixture
+async def session_factory(engine):
+    return async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _clean_tables(engine):
+    """Wipe every table after each test for isolation."""
+    yield
+    tables = ", ".join(f'"{t.name}"' for t in Base.metadata.sorted_tables)
+    if tables:
+        async with engine.begin() as conn:
+            await conn.execute(text(f"TRUNCATE {tables} RESTART IDENTITY CASCADE"))
+
+
+@pytest.fixture(autouse=True)
+def _no_outbound_email(monkeypatch):
+    """The register route fires a welcome email as a background task; stub it."""
+    async def _noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "app.services.email.send_welcome_email", _noop, raising=False
+    )
+
+
+@pytest_asyncio.fixture
+async def db_session(session_factory):
+    """A raw session for tests that exercise models / DB constraints directly."""
+    async with session_factory() as session:
+        yield session
+
+
+@pytest_asyncio.fixture
+async def client(session_factory):
+    """HTTP client wired to the test database via a get_db override.
+
+    The app gets its own AsyncSession per request from the same function-scoped
+    factory, independent of any ``db_session`` the test also holds — so the app
+    coroutine and the test body never touch the same asyncpg connection.
+    """
+
+    async def override_get_db():
+        async with session_factory() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+            finally:
+                await session.close()
+
+    app.dependency_overrides[get_db] = override_get_db
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        yield ac
+    app.dependency_overrides.clear()
+
+
+@pytest_asyncio.fixture
+async def register_user(client):
+    """Factory: register a fresh user, return its tokens + auth headers."""
+
+    async def _make(email: str | None = None, password: str = "password123", full_name: str = "Test User"):
+        email = email or f"user_{uuid.uuid4().hex[:10]}@test.dev"
+        resp = await client.post(
+            "/api/auth/register",
+            json={"email": email, "password": password, "full_name": full_name},
+        )
+        assert resp.status_code == 201, resp.text
+        data = resp.json()
+        return {
+            "id": data["user"]["id"],
+            "email": email,
+            "password": password,
+            "tokens": data,
+            "headers": {"Authorization": f"Bearer {data['access_token']}"},
+        }
+
+    return _make

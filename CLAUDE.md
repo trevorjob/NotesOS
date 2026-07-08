@@ -6,6 +6,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 NotesOS is a collaborative AI-powered study platform. Students upload course resources (PDFs, notes, DOCX), and the system auto-generates quizzes, fact-checks content, provides AI tutoring, and tracks mastery — with real-time collaboration via WebSockets.
 
+> **On branch `v2`? Read [`docs/START_HERE.md`](docs/START_HERE.md) first.** It's the
+> entry point for the ongoing rebuild: current state, the doc map, Mac setup, and where
+> to pick up. Canonical architecture is [`NotesOS_Architecture_NextPhase.md`](NotesOS_Architecture_NextPhase.md)
+> (wins on conflict); the feature target is [`docs/product-map.md`](docs/product-map.md);
+> execution status is [`docs/v2-redesign-plan.md`](docs/v2-redesign-plan.md).
+>
+> **v2 working conventions (keep these):** backend-only (don't touch the Next.js
+> frontend — v2's client is a native app); v1 is a separate branch/env; **never
+> hand-write Alembic migrations** (keep models correct, run `alembic revision
+> --autogenerate`); extensions go in `init_db()`, seed data in `scripts/`; new logic
+> ships with tests against a real Postgres.
+
 ## Development Commands
 
 ### Setup

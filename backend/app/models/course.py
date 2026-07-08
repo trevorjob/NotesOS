@@ -4,7 +4,16 @@ NotesOS Models - Course Related Models
 
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Boolean, DateTime, Text, Integer, ForeignKey
+from sqlalchemy import (
+    Column,
+    String,
+    Boolean,
+    DateTime,
+    Text,
+    Integer,
+    ForeignKey,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -20,23 +29,24 @@ class Course(Base):
     code = Column(String(50), nullable=False, index=True)
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
-    semester = Column(String(50), nullable=True)  # free-text label, kept for display
 
     # Course creator (but no special permissions beyond deletion)
     created_by = Column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
     )
 
-    # Optional grouping under a Semester (SET NULL on semester delete)
-    semester_id = Column(
+    # School this course belongs to — the hard filter for the proximity check.
+    # Nullable during migration; set from the creator's school on creation.
+    school_id = Column(
         UUID(as_uuid=True),
-        ForeignKey("semesters.id", ondelete="SET NULL"),
+        ForeignKey("schools.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
 
-    # Privacy
-    is_public = Column(Boolean, default=True, nullable=False)
+    # Direct-invite code — every course has one. There is no public/private
+    # distinction: courses are reached by creation, discovery through the
+    # classmate graph, or a direct invite.
     invite_code = Column(String(20), unique=True, nullable=True)
 
     # Status
@@ -62,7 +72,7 @@ class Course(Base):
     ai_conversations = relationship(
         "AIConversation", back_populates="course", cascade="all, delete-orphan"
     )
-    semester_ref = relationship("Semester", back_populates="courses", foreign_keys=[semester_id])
+    school = relationship("School", back_populates="courses")
 
 
 class CourseEnrollment(Base):
@@ -79,12 +89,26 @@ class CourseEnrollment(Base):
     )
     joined_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
+    # The user's personal Term this course is filed under. The term lives on the
+    # enrolment, not the course: a shared course is an institutional fact, but how
+    # you file it into a study period is your own view of the map. Optional —
+    # a course can be unfiled and assigned a term later.
+    term_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("terms.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     # Relationships
     course = relationship("Course", back_populates="enrollments")
+    term = relationship("Term", back_populates="enrollments")
 
+    # A user appears at most once per course. This is load-bearing: the classmate
+    # graph (emergent-set model) is computed from this table, so duplicate rows
+    # would double-count overlap.
     __table_args__ = (
-        # One enrollment per user-course pair
-        {"sqlite_autoincrement": True},
+        UniqueConstraint("user_id", "course_id", name="uq_enrollment_user_course"),
     )
 
 

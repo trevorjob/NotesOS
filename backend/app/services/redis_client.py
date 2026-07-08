@@ -165,6 +165,26 @@ class RedisClient:
         client = await self.get_client()
         await client.lrem(f"queue:{queue_name}:processing", 1, job_json)
 
+    async def requeue_job(self, queue_name: str, job_json: str) -> None:
+        """
+        Push a job back onto the tail of the main queue for a later retry.
+
+        LPUSH places it behind jobs already waiting, so a repeatedly-failing job
+        can't hot-loop and starve the queue.
+        """
+        client = await self.get_client()
+        await client.lpush(f"queue:{queue_name}", job_json)
+
+    async def push_dead_letter(self, queue_name: str, job_json: str) -> None:
+        """
+        Park a job that has exhausted its retries in a dead-letter list.
+
+        Nothing consumes queue:<name>:dead automatically — it exists so failed
+        work is inspectable and replayable instead of silently lost.
+        """
+        client = await self.get_client()
+        await client.lpush(f"queue:{queue_name}:dead", job_json)
+
     async def recover_orphaned_jobs(self, queue_name: str) -> int:
         """
         On worker startup, move any jobs left in queue:<name>:processing back

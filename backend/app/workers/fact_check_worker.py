@@ -12,6 +12,7 @@ from app.database import worker_session
 from app.models.resource import Resource, FactCheck, VerificationStatus
 from app.services.fact_checker import fact_checker
 from app.services.redis_client import redis_client
+from app.workers.base import run_worker_loop
 
 
 async def process_fact_check_job(job_data: dict):
@@ -105,25 +106,13 @@ async def process_fact_check_job(job_data: dict):
 
 
 async def start_fact_check_worker():
-    """Start the fact check worker (listens to Redis queue)."""
-    print("[FACT CHECK WORKER] Starting worker...")
+    """Drain the fact-check queue via the shared reliable worker loop.
 
-    while True:
-        try:
-            # Poll for jobs from Redis
-            job_data = await redis_client.dequeue_job("fact_check")
-
-            if job_data:
-                await process_fact_check_job(job_data)
-            else:
-                # No jobs, wait a bit
-                await asyncio.sleep(1)
-
-        except Exception as e:
-            print(f"[FACT CHECK WORKER] Worker error: {e}")
-            await asyncio.sleep(5)
+    Previously used a plain RPOP with no processing queue, so a crash mid-job
+    dropped the work entirely. Now reliable + retried + dead-lettered.
+    """
+    await run_worker_loop("fact_check", process_fact_check_job)
 
 
 if __name__ == "__main__":
-    """Run the worker."""
     asyncio.run(start_fact_check_worker())

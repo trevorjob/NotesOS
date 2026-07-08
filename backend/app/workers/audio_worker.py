@@ -5,7 +5,6 @@ calls OpenAI TTS to produce MP3, and uploads it to Cloudinary.
 """
 
 import asyncio
-import json
 from datetime import datetime
 
 from sqlalchemy import select
@@ -17,6 +16,7 @@ from app.services.audio_generator import audio_generator
 from app.services.redis_client import redis_client
 from app.services.websocket import connection_manager
 from app.core.logging import get_logger
+from app.workers.base import run_worker_loop
 
 logger = get_logger(__name__)
 
@@ -136,43 +136,8 @@ async def process_audio_job(job_data: dict):
 
 
 async def audio_worker():
-    """
-    Main worker loop. Polls Redis queue:audio and processes jobs.
-    """
-    logger.info("Audio worker started")
-
-    recovered = await redis_client.recover_orphaned_jobs("audio")
-    if recovered:
-        logger.info("Audio worker recovered orphaned jobs", extra={"count": recovered})
-
-    while True:
-        job_json = None
-        try:
-            job_json = await redis_client.reliable_dequeue("audio", timeout=5)
-
-            if job_json:
-                job = json.loads(job_json)
-
-                job_id = job["id"]
-                job_data = job["data"]
-
-                logger.info("Processing audio job", extra={"job_id": job_id, "topic_id": job_data.get("topic_id")})
-
-                await redis_client.update_job_status(job_id, "processing")
-                await process_audio_job(job_data)
-                await redis_client.update_job_status(
-                    job_id, "completed", result={"topic_id": job_data.get("topic_id")}
-                )
-                await redis_client.ack_job("audio", job_json)
-
-        except asyncio.CancelledError:
-            logger.info("Audio worker shutting down")
-            break
-        except Exception as e:
-            logger.error("Audio worker error", exc_info=True)
-            if job_json:
-                await redis_client.ack_job("audio", job_json)
-            await asyncio.sleep(1)
+    """Drain the audio queue via the shared reliable worker loop."""
+    await run_worker_loop("audio", process_audio_job)
 
 
 if __name__ == "__main__":

@@ -192,7 +192,10 @@ class QuestionGenerator:
     async def _gather_resources(self, db: AsyncSession, topic_ids: List[str]) -> str:
         """Gather all resource content for topics."""
         topic_uuids = [uuid.UUID(tid) for tid in topic_ids]
-        query = select(Resource).where(Resource.topic_id.in_(topic_uuids))
+        # Quarantined uploads don't feed generated tests either (Merge Agent gate).
+        query = select(Resource).where(
+            Resource.topic_id.in_(topic_uuids), Resource.quarantined.is_(False)
+        )
         result = await db.execute(query)
         resources = result.scalars().all()
 

@@ -105,26 +105,28 @@ async def health_check():
 from app.api import auth_router, courses_router
 from app.api.topics import router as topics_router
 from app.api.resources import router as resources_router
-from app.api.invites import router as invites_router
 from app.api.ai_features import router as ai_features_router
 from app.api.progress import router as progress_router
-from app.api.semesters import router as semesters_router
 from app.api.notifications import router as notifications_router
 from app.api.knowledge import router as knowledge_router
+from app.api.schools import router as schools_router
+from app.api.terms import router as terms_router
+from app.api.discovery import router as discovery_router
 from app.services.websocket import connection_manager
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(courses_router, prefix="/api/courses", tags=["courses"])
 app.include_router(topics_router, prefix="/api", tags=["topics"])
 app.include_router(resources_router, prefix="/api", tags=["resources"])
-app.include_router(invites_router, prefix="/api/invites", tags=["invites"])
 app.include_router(ai_features_router, prefix="", tags=["AI Features"])
 app.include_router(progress_router, prefix="", tags=["Progress"])
-app.include_router(semesters_router, prefix="/api/semesters", tags=["semesters"])
 app.include_router(
     notifications_router, prefix="/api/notifications", tags=["notifications"]
 )
 app.include_router(knowledge_router, prefix="/api", tags=["knowledge"])
+app.include_router(schools_router, prefix="/api/schools", tags=["schools"])
+app.include_router(terms_router, prefix="/api/terms", tags=["terms"])
+app.include_router(discovery_router, prefix="/api/discovery", tags=["discovery"])
 
 
 # WebSocket endpoint for user-scoped events (test generation, personal notifications)

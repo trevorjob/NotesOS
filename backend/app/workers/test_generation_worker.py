@@ -5,7 +5,6 @@ batch-ready events to the requesting user via WebSocket.
 """
 
 import asyncio
-import json
 import uuid
 from datetime import datetime
 from typing import List, Dict, Any
@@ -17,6 +16,7 @@ from app.models.test import Test, TestQuestion, TestGenerationStatus, QuestionTy
 from app.services.redis_client import redis_client
 from app.services.question_generator import question_generator
 from app.core.logging import get_logger
+from app.workers.base import run_worker_loop
 
 logger = get_logger(__name__)
 
@@ -159,37 +159,8 @@ async def process_test_generation_job(job_data: dict) -> None:
 
 
 async def test_generation_worker() -> None:
-    """Main worker loop for test generation queue."""
-    logger.info("Test generation worker started")
-
-    recovered = await redis_client.recover_orphaned_jobs("test_generation")
-    if recovered:
-        logger.info("Recovered orphaned test generation jobs", extra={"count": recovered})
-
-    while True:
-        job_json = None
-        try:
-            job_json = await redis_client.reliable_dequeue("test_generation", timeout=5)
-
-            if job_json:
-                job = json.loads(job_json)
-                job_id = job["id"]
-                job_data = job["data"]
-
-                logger.info("Processing test generation job", extra={"job_id": job_id})
-                await redis_client.update_job_status(job_id, "processing")
-                await process_test_generation_job(job_data)
-                await redis_client.update_job_status(job_id, "completed", result={"test_id": job_data.get("test_id")})
-                await redis_client.ack_job("test_generation", job_json)
-
-        except asyncio.CancelledError:
-            logger.info("Test generation worker shutting down")
-            break
-        except Exception:
-            logger.error("Test generation worker error", exc_info=True)
-            if job_json:
-                await redis_client.ack_job("test_generation", job_json)
-            await asyncio.sleep(1)
+    """Drain the test-generation queue via the shared reliable worker loop."""
+    await run_worker_loop("test_generation", process_test_generation_job)
 
 
 if __name__ == "__main__":

@@ -17,6 +17,9 @@ redis>=5.0.1
 pgvector>=0.2.4
 pydantic[email]
 psycopg2-binary==2.9.11
+# Spaced repetition (retrieval engine scheduler)
+fsrs>=6.3,<7
+
 # AI & ML
 langchain>=0.1.0
 langgraph>=0.0.20

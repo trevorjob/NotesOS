@@ -104,8 +104,11 @@ def topic_key(topic_id: str) -> str:
     return f"notesos:v1:topics:topic:{topic_id}"
 
 
-def resources_list_key(topic_id: str, page: int, page_size: int) -> str:
-    return f"notesos:v1:resources:topic:{topic_id}:page:{page}:size:{page_size}"
+def resources_list_key(topic_id: str, user_id: str, page: int, page_size: int) -> str:
+    # User-scoped: quarantined uploads are visible only to their uploader, so the
+    # listing differs per viewer. The topic prefix is unchanged so delete_pattern
+    # (keyed on topic) still invalidates every viewer's cached page.
+    return f"notesos:v1:resources:topic:{topic_id}:user:{user_id}:page:{page}:size:{page_size}"
 
 
 def resource_key(resource_id: str) -> str:

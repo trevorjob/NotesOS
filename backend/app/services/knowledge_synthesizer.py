@@ -59,6 +59,8 @@ class KnowledgeSynthesizer:
                 select(ResourceChunk)
                 .join(Resource, ResourceChunk.resource_id == Resource.id)
                 .where(Resource.topic_id == _uuid.UUID(topic_id))
+                # Quarantined uploads are held out of the shared note (Merge Agent gate).
+                .where(Resource.quarantined.is_(False))
                 .order_by(ResourceChunk.resource_id, ResourceChunk.chunk_index)
             )
             chunks = chunks_result.scalars().all()

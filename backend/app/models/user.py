@@ -4,8 +4,9 @@ NotesOS Models - User Model
 
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Boolean, DateTime, Text
+from sqlalchemy import Column, String, Boolean, DateTime, Text, Integer, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.orm import relationship
 
 from app.database import Base
 
@@ -20,7 +21,24 @@ class User(Base):
     password_hash = Column(String(255), nullable=True)  # nullable for OAuth-only users
     full_name = Column(String(255), nullable=False)
     avatar_url = Column(Text, nullable=True)
+    # Free-text university, retained for one release. Superseded by school_id;
+    # kept nullable so the backfill can read it before it is dropped.
     university = Column(String(255), nullable=True)
+
+    # Canonical school (grouping signal + proximity-check hard filter).
+    school_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("schools.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    # Optional proximity-check ranking signals. All nullable and non-load-bearing:
+    # present in cohort-based systems (Nigeria), often blank elsewhere (US freshers).
+    program = Column(String(255), nullable=True)  # degree / major, free text
+    entry_year = Column(Integer, nullable=True)   # e.g. 2027
+    # Unique when present (multiple NULLs allowed) — powers contact discovery.
+    phone = Column(String(32), nullable=True, unique=True, index=True)
 
     # Google OAuth
     google_id = Column(String(255), unique=True, nullable=True, index=True)
@@ -54,3 +72,7 @@ class User(Base):
 
     # Account status
     is_active = Column(Boolean, default=True, nullable=False)
+
+    # Relationships
+    school = relationship("School", back_populates="users")
+    terms = relationship("Term", back_populates="user", cascade="all, delete-orphan")

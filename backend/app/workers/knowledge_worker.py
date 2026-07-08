@@ -5,18 +5,21 @@ a TopicKnowledge record, then enqueues an audio generation job.
 """
 
 import asyncio
-import json
+import uuid
 
 from sqlalchemy import select
 
 from app.database import async_session_maker
 from app.models.course import CourseEnrollment, Topic
+from app.services.retrieval.concepts import sync_concepts
 from app.models.notification import NotificationType
 from app.services.cache import cache, topic_key
 from app.services.knowledge_synthesizer import knowledge_synthesizer
 from app.services.notifications import create_and_push_notification
+from app.services.merge_gate import apply_merge_gate
 from app.services.redis_client import redis_client
 from app.services.websocket import connection_manager
+from app.workers.base import run_worker_loop
 
 AsyncSessionLocal = async_session_maker
 
@@ -41,6 +44,20 @@ async def process_knowledge_job(job_data: dict):
                     {"type": "knowledge_status", "topic_id": topic_id, "status": "processing"},
                 )
 
+            # Merge Agent gate: quarantine wildly off-topic uploads before synthesis so
+            # they never reach the shared note. Non-fatal — a gate error must not block
+            # synthesis. Invalidate the resource list so quarantine state is visible.
+            try:
+                gate_summary = await apply_merge_gate(db, topic_id)
+                await db.commit()
+                if gate_summary["quarantined"] or gate_summary["released"]:
+                    await cache.delete_pattern(
+                        f"notesos:v1:resources:topic:{topic_id}:"
+                    )
+            except Exception as gate_err:
+                await db.rollback()
+                print(f"⚠️ Merge gate failed for topic {topic_id}: {gate_err}")
+
             knowledge = await knowledge_synthesizer.synthesize(topic_id, db)
 
             if knowledge.status.value == "completed":
@@ -48,6 +65,27 @@ async def process_knowledge_job(job_data: dict):
 
                 # Invalidate topic cache so next GET reflects new knowledge_status
                 await cache.delete(topic_key(topic_id))
+
+                # Elevate synthesized concepts into first-class Concept rows so the
+                # retrieval engine can schedule and track them. Non-fatal — a failure
+                # here must not fail the synthesis that already succeeded.
+                try:
+                    concept_course_id = course_id
+                    if concept_course_id is None:
+                        topic_row = await db.scalar(
+                            select(Topic).where(Topic.id == knowledge.topic_id)
+                        )
+                        concept_course_id = str(topic_row.course_id) if topic_row else None
+                    if concept_course_id:
+                        await sync_concepts(
+                            db,
+                            topic_id=knowledge.topic_id,
+                            course_id=uuid.UUID(str(concept_course_id)),
+                            concepts=knowledge.concepts,
+                        )
+                        await db.commit()
+                except Exception as concept_err:
+                    print(f"⚠️ Concept extraction failed for topic {topic_id}: {concept_err}")
 
                 # Broadcast: knowledge ready
                 if course_id:
@@ -114,43 +152,8 @@ async def process_knowledge_job(job_data: dict):
 
 
 async def knowledge_worker():
-    """
-    Main worker loop. Uses reliable BRPOPLPUSH so jobs survive worker restarts.
-    """
-    print("🚀 Knowledge worker started")
-
-    recovered = await redis_client.recover_orphaned_jobs("knowledge")
-    if recovered:
-        print(f"🔄 Knowledge worker recovered {recovered} orphaned job(s)")
-
-    while True:
-        job_json = None
-        try:
-            job_json = await redis_client.reliable_dequeue("knowledge", timeout=5)
-
-            if job_json:
-                job = json.loads(job_json)
-
-                job_id = job["id"]
-                job_data = job["data"]
-
-                print(f"🧠 Processing knowledge job {job_id} for topic {job_data.get('topic_id')}")
-
-                await redis_client.update_job_status(job_id, "processing")
-                await process_knowledge_job(job_data)
-                await redis_client.update_job_status(
-                    job_id, "completed", result={"topic_id": job_data.get("topic_id")}
-                )
-                await redis_client.ack_job("knowledge", job_json)
-
-        except asyncio.CancelledError:
-            print("Knowledge worker shutting down")
-            break
-        except Exception as e:
-            print(f"Knowledge worker error: {e}")
-            if job_json:
-                await redis_client.ack_job("knowledge", job_json)
-            await asyncio.sleep(1)
+    """Drain the knowledge queue via the shared reliable worker loop."""
+    await run_worker_loop("knowledge", process_knowledge_job)
 
 
 if __name__ == "__main__":
