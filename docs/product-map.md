@@ -51,11 +51,37 @@ of gravity for the whole product.
 
 | Mode | What it is | Science | Status |
 |---|---|---|---|
-| **Quiz** | Structured Q&A. Sub-types: recall · "why"/elaborative · applied-problem | Parts 2, 3, 9, 12 | 🟡 exists, topic-only, one flavour |
-| **Ramble / Talk** | You speak freely about a concept; AI asks leading Socratic questions to surface gaps. Free recall + elaborative interrogation — stronger than cued recall | Parts 3, 9 | ⬜ (highest-leverage new mode) |
-| **Teach / Protégé** | You explain the concept to the AI (or to publish). Teaching forces retrieval + reorganization + gap-finding. A good explanation can become a note **contribution** | Part 15 | ⬜ |
-| **Pretest** | Questions *before* encoding — on add, or mid-study. Primes encoding, breaks the fluency illusion early, feeds calibration | Parts 12, 4, 8 | ⬜ |
+| **Quiz** | Structured Q&A. Sub-types: recall · "why"/elaborative · applied-problem | Parts 2, 3, 9, 12 | 🟡 plugin on the engine; still one flavour |
+| **Ramble / Talk** | You speak freely about a concept; AI asks leading Socratic questions to surface gaps. Free recall + elaborative interrogation — stronger than cued recall | Parts 3, 9 | 🟡 single-shot plugin (open prompt → gaps); multi-turn Socratic later |
+| **Teach / Protégé** | You explain the concept to the AI (or to publish). Teaching forces retrieval + reorganization + gap-finding. A good explanation can become a note **contribution** | Part 15 | 🟡 single-shot plugin (correctness-capped scoring) |
+| **Pretest** | Questions *before* encoding — on add, or mid-study. Primes encoding, breaks the fluency illusion early, feeds calibration | Parts 12, 4, 8 | 🟡 plugin (quiz reuse, grade capped so a pre-study guess can't schedule far out) |
+| **Recap** | At the start of a study block: "blurt everything you remember from last time." Free recall of the *previous session* — spaced retrieval + distributed practice in one warm-up move | Parts 5, 3, 9 | ⬜ (session-scoped, see note) |
 | *(Listen)* | Passive reinforcement, not retrieval — the spacing/consolidation touchpoint. Lives in Delivery | Part 10 | ✅ |
+
+> **Recap is session-scoped, not concept-scoped** — the first mode where *one* response
+> is graded against *many* concepts (the set the last session covered), producing an
+> attempt per concept. It stretches the pass-1 Protocol (`generate(concept)` → one
+> attempt) in the orthogonal direction to multi-turn Socratic: many concepts / one turn
+> vs. one concept / many turns.
+>
+> **Session definition — LOCKED (2026-07-09):** a study session **is a bout of
+> retrieval** — nothing else counts as "studying" (rereading the note is the fluency
+> illusion; only retrieval is real study, so only retrieval opens a session). A bout is
+> a run of `RetrievalAttempt`s clustered by idle gap: **a gap ≥ 15 min closes the
+> session.** Derived from the append-only attempt log — **no session table on day one**;
+> materialise later only if history/UX earns it. Listen is a legitimate *second* session
+> type later (retrieval-after-listening is the testing effect on fresh input), but v1 is
+> retrieval-only.
+>
+> **Recap scoping:** "last session" spans whatever you touched, so **spanning is the
+> general case and topic-scoped is a filter on it.** Build **topic-scoped first** (obvious
+> home — reopening a topic; easier same-topic grading), then full-session recap is the
+> same machinery with the topic filter removed. Recap is **offered, never forced**
+> (notebook ethos, same instinct as notify-don't-enroll) — a persuasive reject-twice
+> nudge ("recapping what you learnt strengthens it"), a UI concern.
+>
+> **Shared keystone:** the session concept is the foundation recap *and* multi-turn
+> ramble/teach both stand on — build it once, deliberately, here.
 
 Ramble, teach, and voice-quizzes all ride the **same voice substrate** (transcription
 → grading). Optimizing voice is foundational to three modes at once, not quiz-specific.
@@ -73,8 +99,12 @@ Ramble, teach, and voice-quizzes all ride the **same voice substrate** (transcri
    *Built (pass 1):* the three-table substrate (Concept / ConceptState /
    RetrievalAttempt), FSRS scheduler, mode Protocol + engine core (scope selection /
    attempt recording / scheduling), concept extraction wired into synthesis, and the
-   **quiz migrated onto it as the first plugin**. *Next:* ramble / teach / pretest
-   modes, the HTTP surface, and calibration + recognition events off each attempt.
+   **quiz migrated onto it as the first plugin**. *Built (pass 2):* ramble / teach /
+   pretest as single-shot plugins, the HTTP session surface (`POST /api/retrieval/next`
+   → `/attempt`), per-attempt calibration (predicted vs actual), and the dormant
+   recognition seam (topic-level attribution, gated behind `ENABLE_RECOGNITION`).
+   *Next:* multi-turn Socratic ramble/teach, subject-aware mode mixing, and wiring
+   recognition live once §11 attribution + §9 digest land.
 4. **Learning-science layer** ⬜ *(rides on §per-concept state)* — spaced repetition ·
    calibration (predict-vs-actual) · forgetting history / durability ·
    **knowledge-decay as the headline metric, not streaks** (Part 13) ·

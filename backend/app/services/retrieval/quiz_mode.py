@@ -15,22 +15,11 @@ from typing import Any, Optional
 
 from app.services.grader import grader
 from app.services.llm import call_llm
-from app.services.retrieval.modes import Challenge, ModeContext, Outcome
+from app.services.retrieval.modes import Challenge, ModeContext, Outcome, score_to_grade
 
-
-def score_to_grade(score: float) -> str:
-    """Map a normalized 0..1 recall score to an FSRS grade.
-
-    Thresholds are deliberately conservative — quizzing rewards demonstrated recall,
-    and a shaky pass should schedule sooner (``hard``), not later.
-    """
-    if score < 0.5:
-        return "again"
-    if score < 0.7:
-        return "hard"
-    if score < 0.9:
-        return "good"
-    return "easy"
+# ``score_to_grade`` now lives in ``modes.py`` (shared by every mode); re-exported here
+# for backward compatibility with existing imports.
+__all__ = ["QuizMode", "score_to_grade"]
 
 
 class QuizMode:

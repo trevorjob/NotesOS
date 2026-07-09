@@ -77,6 +77,10 @@ class Settings(BaseSettings):
     ENABLE_PRE_CLASS_RESEARCH: bool = True
     ENABLE_VOICE_GRADING: bool = True
     ENABLE_KNOWLEDGE_SYNTHESIS: bool = True   # auto-synthesize after chunking
+    # Recognition loop (product-map §7): notify a contributor when their material is
+    # studied. Off until attribution (§11) + notification digest/batching (§9) land —
+    # the seam resolves beneficiaries regardless, but only delivers when this is on.
+    ENABLE_RECOGNITION: bool = False
 
     # Cache (Redis read-through for GET endpoints)
     CACHE_ENABLED: bool = True

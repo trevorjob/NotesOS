@@ -14,6 +14,23 @@ from app.models.retrieval import Concept
 from app.services.retrieval.scheduler import GRADES
 
 
+def score_to_grade(score: float) -> str:
+    """Map a normalized 0..1 recall score to an FSRS grade.
+
+    The shared default across modes. Thresholds are deliberately conservative —
+    retrieval rewards *demonstrated* recall, and a shaky pass should schedule sooner
+    (``hard``), not later. A mode may override this mapping when its science differs
+    (e.g. pretest, where a miss is expected and mustn't fling the concept far out).
+    """
+    if score < 0.5:
+        return "again"
+    if score < 0.7:
+        return "hard"
+    if score < 0.9:
+        return "good"
+    return "easy"
+
+
 @dataclass(frozen=True)
 class Challenge:
     """What the user is asked to recall against — a question, a ramble opener, etc."""

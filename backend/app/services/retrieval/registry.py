@@ -6,7 +6,10 @@ the engine changes. Keys are stable strings stored on every ``RetrievalAttempt``
 """
 
 from app.services.retrieval.modes import RetrievalMode
+from app.services.retrieval.pretest_mode import PretestMode
 from app.services.retrieval.quiz_mode import QuizMode
+from app.services.retrieval.ramble_mode import RambleMode
+from app.services.retrieval.teach_mode import TeachMode
 
 _MODES: dict[str, RetrievalMode] = {}
 
@@ -27,3 +30,6 @@ def available_modes() -> list[str]:
 
 
 register(QuizMode())
+register(RambleMode())
+register(TeachMode())
+register(PretestMode())

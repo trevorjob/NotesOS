@@ -4,7 +4,7 @@
 > transfer automatically, where the project stands, how to get it running on macOS
 > from a fresh clone, and where to pick up. Everything else is linked from here.
 >
-> Last updated: 2026-07-08. Branch: `v2`.
+> Last updated: 2026-07-09. Branch: `v2`.
 
 ---
 
@@ -15,7 +15,7 @@ Git carries the code and these docs. It does **not** carry:
 | Thing | Why | What to do on the Mac |
 |---|---|---|
 | **Uncommitted work** | Not in git until pushed | Commit + push `v2` on the old machine first (you're handling this). |
-| **`.env` secrets** | Gitignored (API keys) | Copy `backend/.env` across securely (AirDrop/password manager). Template: `.env.example`. Keys listed in §3. |
+| **`.env` secrets** | Gitignored (API keys) | Copy `backend/.env` across securely (AirDrop/password manager). Template: `.env.example`. Keys listed in §3. **Fix `DATABASE_URL` to match the *new* machine's Docker Postgres** (`notesos:notesos_dev_password@localhost:5432/notesos`) — a copied `.env` carries the old box's DB name/password and fails auth on migrate. |
 | **Local Postgres data** | Lives in a Docker volume | Nothing — v2 starts from a fresh DB (migrations are aggressive, no data to preserve). |
 | **Claude Code memory** | Machine-local (`~/.claude/…`), not in the repo | Nothing to move — the durable decisions are captured in the repo docs (§1) and `CLAUDE.md`. A fresh Claude session rebuilds context by reading them. |
 | **Git credentials** | The current remote URL has a PAT embedded in it | Re-auth on the Mac with `gh auth login` or SSH. Don't copy the token-in-URL; rotate that PAT. |
@@ -49,11 +49,13 @@ Git carries the code and these docs. It does **not** carry:
 
 **Retrieval engine — pass 1 done (tested):** the substrate (`Concept` / `ConceptState` / `RetrievalAttempt`), FSRS scheduler, the mode-plugin abstraction + engine core, concept extraction wired into synthesis, and the existing **quiz migrated onto it as the first mode**. See §4.
 
+**Retrieval engine — pass 2 done (tested):** ramble / teach / pretest as single-shot mode plugins, the HTTP session surface (`POST /api/retrieval/next` → `/attempt`, `GET /modes`), per-attempt calibration (predicted-vs-actual delta in the response), and a **dormant recognition seam** (`services/retrieval/recognition.py`, topic-level attribution, gated behind `ENABLE_RECOGNITION` — resolves beneficiaries but delivers nothing until §11 attribution + §9 digest land). No migration (the substrate already carried every field). 114 tests green.
+
 **Migrations present** (`backend/alembic/versions/`): `…v2_baseline`, `…retrieval_substrate`, `…resource_quarantine_merge_gate`. Apply with `alembic upgrade head`.
 
 **Test suites** (all green): `test_auth`, `test_courses`, `test_enrollment`, `test_schools`, `test_user_signals`, `test_terms`, `test_proximity`, `test_discovery`, `test_retrieval_scheduler`, `test_retrieval_concepts`, `test_retrieval_engine`, `test_quiz_mode`, `test_merge_gate`.
 
-**Pending (next up):** retrieval-engine **pass 2** — the ramble / teach / pretest modes, the HTTP endpoints to drive a session, and the calibration + recognition events fired off each attempt. After that, the launch bar is mostly product/design/ops/legal (see product-map §"Core vs. later").
+**Pending (next up):** multi-turn Socratic ramble/teach (the engine currently models one attempt per generate/evaluate — a dialogue needs session/turns state), subject-aware mode mixing off `subject_weight`, and wiring recognition **live** once the §11 attribution layer + §9 notification digest exist. After that, the launch bar is mostly product/design/ops/legal (see product-map §"Core vs. later").
 
 ---
 
@@ -157,9 +159,35 @@ These were the standing rules for the whole v2 effort. Keep them:
 
 ## 6. Pick up here
 
-Ready to continue with **retrieval-engine pass 2**: implement the ramble / teach /
-pretest modes as plugins, add the HTTP surface to drive a retrieval session
-(generate → capture predicted confidence → evaluate → record), and fire the
-calibration + recognition events off each attempt. The frame from pass 1 is in place,
-so each of these is additive. See [`product-map.md`](./product-map.md) §3 and the
-communal "recognition loop" pillar (§7) for what the events feed.
+Pass 2 is done (see §2). The engine now has four modes, an HTTP session surface, live
+calibration, and a dormant recognition seam.
+
+**Two design rounds — now decided (2026-07-09), ready to build:**
+
+- **Recap mode** (a fifth mode) + the **session concept** it needs. Session = a bout of
+  retrieval, clustered by a **15-min idle gap**, derived from the `RetrievalAttempt` log
+  (no session table yet). Recap = free recall of the last session; **topic-scoped first**,
+  spanning is the same machinery unfiltered; offered never forced. Full spec: product-map
+  recap note.
+- **Invitation model** — finalized in the architecture doc (§"The invitation model"). Net:
+  add a **personal roster link** (invite a *person* → they multi-pick from your
+  current-term courses → nothing auto-enrolled); keep the permanent per-course
+  `invite_code` for the single-course case; unify the logged-out signup→enroll path; and
+  connection-created courses **bypass the activity gate** to surface prominently.
+
+Then, natural next moves in rough priority:
+
+1. **Multi-turn Socratic ramble/teach.** Today these are single-shot (one open prompt →
+   one graded response). Real dialogue needs a session/turns concept the engine doesn't
+   model yet — the one genuinely non-additive extension. Design it as a wrapper over the
+   existing single-shot attempt so history stays append-only.
+2. **Recognition, live.** The seam (`services/retrieval/recognition.py`) resolves
+   beneficiaries but delivers nothing. Wiring it up means building the §11
+   attribution/consumption layer and the §9 notification digest, then flipping
+   `ENABLE_RECOGNITION`. Warmth rules (§7) before it pings anyone.
+3. **Subject-aware mode mixing.** `subject_weight` exists per mode and `GET
+   /api/retrieval/modes?subject_type=` returns it — nothing yet *chooses* a mode mix
+   from it. That's the "subject-awareness is a knob on the engine" bet (product-map
+   cross-cutting).
+
+See [`product-map.md`](./product-map.md) §3 and the "recognition loop" pillar (§7).
