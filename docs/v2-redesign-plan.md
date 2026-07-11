@@ -5,7 +5,14 @@
 > [`NotesOS_Architecture_NextPhase.md`](../NotesOS_Architecture_NextPhase.md)
 > (canonical on conflict) and [`NotesOS—Product_Brief.md`](../NotesOS—Product_Brief.md).
 >
-> Last updated: 2026-07-05.
+> Last updated: 2026-07-11.
+>
+> **Launch definition:** the product design is finalized (see the locked notes in
+> [`product-map.md`](./product-map.md)). The **Launch build queue** below turns every
+> locked decision into a checkable workstream. **When the queue is all green, we are done —
+> we stop and ship.** "Green" = built + tested (real-Postgres per the conventions) +
+> documented. The system-behaviour contract the native client designs against lives in
+> [`system-spec.md`](./system-spec.md).
 
 ## Anchor
 
@@ -139,7 +146,83 @@ discovery (phone-hash matching) seeds cold start. Awaiting designs.
 
 ### ⏳ Phase 6 — Coordination mode + pricing infra
 Proximity-check mode 2 ("someone's already building this test, want in?"); group-
-dynamic pricing scaffolding (present, not pushed).
+dynamic pricing scaffolding (present, not pushed). **Note:** sharded/scale pricing was
+**retired** (product-map Access model) — it only held when NotesOS was a pure shared-read
+product; retrieval is per-seat and doesn't amortize. Launch is **free** (observe cost +
+behaviour first), so pricing infra is post-launch.
+
+### ✅ Retrieval engine track (ran parallel to Phases 0–6)
+The product's center of gravity. **Pass 1 & 2 done, tested (114 green).**
+- **Substrate:** `Concept` / `ConceptState` (FSRS) / `RetrievalAttempt` (append-only).
+- **Scheduler:** FSRS (`services/retrieval/scheduler.py`), the only fsrs-touching file.
+- **Modes (plugins over one Protocol):** quiz · ramble · teach · pretest.
+- **HTTP surface:** `POST /api/retrieval/next` → `/attempt`, `GET /modes`; per-attempt
+  **calibration** (predicted vs actual) in the response.
+- **Dormant recognition seam** (`services/retrieval/recognition.py`, topic-level
+  attribution, gated behind `ENABLE_RECOGNITION=false` — resolves beneficiaries, delivers
+  nothing until §11 + the notification digest land).
+
+## Launch build queue (the product build — "all green ⇒ ship")
+
+> Turns the locked product design ([`product-map.md`](./product-map.md)) into an ordered,
+> checkable queue. **Three phases by dependency.** Launch = **Phase A + the needed Phase B**
+> green, then the **native client (Phase C)** built on top. Each item's *Green when* is its
+> acceptance bar. Behaviour details for every item are in [`system-spec.md`](./system-spec.md).
+
+### Phase A — backend, no native dependency (start here)
+
+- [ ] **A1 · Streaming + model tiering.** `call_llm_stream()` beside `call_llm`; wire the
+  text surfaces (tutor, synthesis, quiz/feedback); add a fast tier + sharpen the task→provider
+  map. *Green when:* streamed responses on every text surface; tiering configurable per task;
+  tests. *(Speed + cost double-pay; do first — de-risks everything.)*
+- [ ] **A2 · Capture overhaul.** Audio/lecture ingestion (expose the existing Whisper path as
+  an input); **dump-then-auto-organize** (classify a bulk upload into topics); **course-outline
+  scaffold** (paste/snap syllabus → canonical topics; classify into known buckets when present,
+  cluster-and-propose when not); preserve visuals (keep figures referenced); low-confidence OCR
+  flag. *Green when:* audio → note pipeline works; a bulk dump auto-files into topics (outline
+  and no-outline paths); low-confidence flagged; tests. *(Highest felt value — the front door.)*
+- [ ] **A3 · Session + Recap.** Derive the session from the append-only attempt log (≥15-min
+  idle gap closes it — no session table). Recap mode (free recall of last session; topic-scoped
+  first). *Green when:* session boundaries derived + queryable; recap generates/grades an
+  attempt-per-concept; tests. *(Keystone — also unblocks multi-turn later.)*
+- [ ] **A4 · Incremental synthesis.** Append-merge new material into the existing note instead
+  of full rebuild; debounce bursty uploads. *Green when:* re-synthesis is incremental (not
+  whole-corpus); "what changed" derivable; cost drop measured; tests. *(Kills the
+  write-amplification cost bomb.)*
+
+### Phase B — backend, has prerequisites
+
+- [ ] **B1 · Attribution/consumption layer (§11) → recognition live.** The consume-event
+  substrate (who-made-the-thing tagged on each consume). Then flip `ENABLE_RECOGNITION`.
+  Warmth rules first (aggregate passive, warm active).
+- [ ] **B2 · Notification / habit delivery.** Decay digest (next-best-action selector, shared
+  with the home card); batching; warm+mild voice; timing off the session log; preferences.
+- [ ] **B3 · Next-best-action selector.** "Highest-value retrieval right now" from FSRS due +
+  calibration gaps + what's new. Powers the home card (pull) and the digest (push) — one engine.
+- [ ] **B4 · Subject profiles (STEM first).** Profile = {rendering + mode-mix + grading}.
+  Worked-example + self-graded-calibration STEM modes; wire `subject_weight`. Language is a
+  later profile — build the abstraction to hold it.
+- [ ] **B5 · Real-time voice lane (premium).** Streaming STT + LLM + TTS, overlapped; VAD
+  endpointing; barge-in; the grade emitted off-turn by the same streaming call. Separate from
+  the batch voice workers.
+- [ ] **B6 · Offline sync endpoints.** Bulk course pull; delta invalidation (`last_synced_at` →
+  changed IDs); append-only event push. Event-sourced (derive `ConceptState` from the log).
+
+### Phase C — needs the native client (Phase 5 designs)
+
+- [ ] **C1 · Home / one-card entry** (doorway-not-dashboard; review-default hero).
+- [ ] **C2 · Active-surface note canvas** (note↔concept linking, rendered math, "says who?" X-ray).
+- [ ] **C3 · Spatial progress** (notes lit by mastery; calibration surfaced when needed).
+- [ ] **C4 · Capture dump UX** (drag/snap/record → confirm the proposed topic structure).
+- [ ] **C5 · Offline local store + background sync** (cache-first; boundary + 10–15 min poll).
+- [ ] **C6 · Voice conversational UI** (co-presence, active-listen seams).
+- [ ] **C7 · Onboarding flow** (gap-first pretest opening; hybrid demo-while-processing).
+- [ ] **C8 · Contribution visibility** (§6 — "N built this note," no leaderboard).
+
+### Explicitly deferred past launch (🔮)
+Video embed · live study rooms / competitive quizzing · coordination-mode polish · language
+subject profile · timing/sleep-aware delivery · speech-emotion calibration · gift-a-connection
++ pricing infra (launch is free) · automated STEM method-grading (self-graded ships first).
 
 ## Current v2 schema (new/changed)
 

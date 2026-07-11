@@ -112,6 +112,12 @@ Ramble, teach, and voice-quizzes all ride the **same voice substrate** (transcri
 >   Split the two acts: **capture = instant + dumb** (throw the whole pile in, one action, zero
 >   filing); **organization = deferred + smart** (system sorts the pile into topics). Friction
 >   collapses from "course → topic → file ×N" to **"course → dump → confirm."**
+>   - **Two entry points — the destination is implied by *where you add from* (don't forbid
+>     filing, just never force it).** *Course-level add* = unsorted pile, destination unknown →
+>     auto-organize → confirm. *Topic-level add* (you're inside "Programming Languages," hit add)
+>     = destination known → **straight in, no sorting, no confirm.** Navigating to a topic *is* a
+>     cheap, natural act of organizing — honor it, don't override it. (A direct-add that clearly
+>     doesn't fit gets a **gentle flag** — "looks like X, move it?" — a suggestion, never a block.)
 >   - **Course-outline scaffold (when available).** Paste/snap the syllabus → system creates the
 >     canonical topics up front. This turns auto-filing from **clustering** (invent + name +
 >     assign — error-prone, the misfiring risk) into **classification** (assign each file to one
@@ -285,7 +291,16 @@ Ramble, teach, and voice-quizzes all ride the **same voice substrate** (transcri
    regulator ("name on it") — the positive side. **Needs an attribution/consumption
    data layer** linking every consume event back to a contributor.
 8. **Discovery & coordination** — discovery + proximity ✅ (Phases 2–3);
-   coordination ("someone's building a test, want in?") 🔮.
+   coordination ("someone's building a test, want in?") 🔮. Synchronous-communal stance below.
+
+> **Synchronous communal — LOCKED (2026-07-11).** We've designed the **async** communal layer
+> exhaustively (shared notes, recognition, discovery, join-propagation, invitations); this is
+> the **live** side. Launch = the cheap, warm slice only: **ambient co-presence** ("3 classmates
+> studying Alkenes right now") — rides existing WebSocket presence, the synchronous twin of the
+> recognition loop (aggregate, seen-not-surveilled) — **+ coordination** ("someone's building a
+> test, want in?"), already the *second mode of the proximity check*, not a new system.
+> **Deferred 🔮:** live study rooms / real-time competitive quizzing — heavy, and it flirts with
+> the comparison/leaderboard anxiety we ruled out, so if ever, a separate opt-in game mode.
 9. **Notifications** 🟡 — the delivery channel for 6/7/8 **and** spacing nudges
    ("5 days since you reviewed X"). *Aim:* preferences + **digest/batching** so it's
    signal not spam; **aggregate + anonymous for passive consumption** (reads),

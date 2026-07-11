@@ -4,7 +4,7 @@
 > transfer automatically, where the project stands, how to get it running on macOS
 > from a fresh clone, and where to pick up. Everything else is linked from here.
 >
-> Last updated: 2026-07-09. Branch: `v2`.
+> Last updated: 2026-07-11. Branch: `v2`.
 
 ---
 
@@ -30,7 +30,8 @@ Git carries the code and these docs. It does **not** carry:
 | [`NotesOS_Architecture_NextPhase.md`](../NotesOS_Architecture_NextPhase.md) | **Canonical architecture** — the emergent-set model. Wins on any conflict. |
 | [`Learning_Science—NotesOS_Design_Constraints.md`](../Learning_Science—NotesOS_Design_Constraints.md) | Learning-science principles as design constraints (retrieval, spacing, calibration). |
 | [`docs/product-map.md`](./product-map.md) | Target feature surface + build status. The retrieval-engine bet lives here. |
-| [`docs/v2-redesign-plan.md`](./v2-redesign-plan.md) | Execution plan, phase-by-phase status, and the infra runbook. |
+| [`docs/v2-redesign-plan.md`](./v2-redesign-plan.md) | Execution plan + the **Launch build queue** ("all green ⇒ ship"), phase status, infra runbook. |
+| [`docs/system-spec.md`](./system-spec.md) | **System-behaviour spec for the native-client designer** — how the systems work, states, timing, live vs. cached. |
 | [`CLAUDE.md`](../CLAUDE.md) | Project structure + working conventions (auto-loaded by Claude Code). |
 | **This file** | Machine handoff + Mac setup. |
 
@@ -159,35 +160,25 @@ These were the standing rules for the whole v2 effort. Keep them:
 
 ## 6. Pick up here
 
-Pass 2 is done (see §2). The engine now has four modes, an HTTP session surface, live
-calibration, and a dormant recognition seam.
+**The product design phase is complete (2026-07-11).** The whole surface was walked and every
+decision is captured as a `LOCKED` note in [`product-map.md`](./product-map.md) — the
+notification/habit model, access & payment, the Consolidated Note, retrieval session feel,
+daily entry point, progress-without-streaks, Listen + tutor, onboarding, capture
+(dump-then-auto-organize + outline scaffold + audio), STEM parity / subject families,
+offline/sync, and synchronous-communal. **We are done planning; now we build.**
 
-**Two design rounds — now decided (2026-07-09), ready to build:**
+Two docs carry it forward:
+- **What to build, in order:** the **Launch build queue** in
+  [`v2-redesign-plan.md`](./v2-redesign-plan.md) — a checkable "all green ⇒ ship" list.
+  **Start at Phase A** (backend, no native dependency):
+  1. **A1 · Streaming + model tiering** (`call_llm_stream`; fast/heavy routing) — the cheap
+     warm-up; speed *and* cost.
+  2. **A2 · Capture overhaul** (audio ingestion; dump→auto-organize; outline scaffold) — the
+     highest-felt build; the front door.
+  3. **A3 · Session + Recap** (session from the attempt log; recap mode) — keystone.
+  4. **A4 · Incremental synthesis** (append-merge, not rebuild) — kills the cost bomb.
+- **How the systems behave** (for the native-client designer, and as the build contract):
+  [`system-spec.md`](./system-spec.md).
 
-- **Recap mode** (a fifth mode) + the **session concept** it needs. Session = a bout of
-  retrieval, clustered by a **15-min idle gap**, derived from the `RetrievalAttempt` log
-  (no session table yet). Recap = free recall of the last session; **topic-scoped first**,
-  spanning is the same machinery unfiltered; offered never forced. Full spec: product-map
-  recap note.
-- **Invitation model** — finalized in the architecture doc (§"The invitation model"). Net:
-  add a **personal roster link** (invite a *person* → they multi-pick from your
-  current-term courses → nothing auto-enrolled); keep the permanent per-course
-  `invite_code` for the single-course case; unify the logged-out signup→enroll path; and
-  connection-created courses **bypass the activity gate** to surface prominently.
-
-Then, natural next moves in rough priority:
-
-1. **Multi-turn Socratic ramble/teach.** Today these are single-shot (one open prompt →
-   one graded response). Real dialogue needs a session/turns concept the engine doesn't
-   model yet — the one genuinely non-additive extension. Design it as a wrapper over the
-   existing single-shot attempt so history stays append-only.
-2. **Recognition, live.** The seam (`services/retrieval/recognition.py`) resolves
-   beneficiaries but delivers nothing. Wiring it up means building the §11
-   attribution/consumption layer and the §9 notification digest, then flipping
-   `ENABLE_RECOGNITION`. Warmth rules (§7) before it pings anyone.
-3. **Subject-aware mode mixing.** `subject_weight` exists per mode and `GET
-   /api/retrieval/modes?subject_type=` returns it — nothing yet *chooses* a mode mix
-   from it. That's the "subject-awareness is a knob on the engine" bet (product-map
-   cross-cutting).
-
-See [`product-map.md`](./product-map.md) §3 and the "recognition loop" pillar (§7).
+**Recommended first move:** A1, then A2. Each item's acceptance bar ("Green when…") is in the
+build queue; behaviour details are in the system spec.
