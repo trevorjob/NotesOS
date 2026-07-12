@@ -32,6 +32,7 @@ Git carries the code and these docs. It does **not** carry:
 | [`docs/product-map.md`](./product-map.md) | Target feature surface + build status. The retrieval-engine bet lives here. |
 | [`docs/v2-redesign-plan.md`](./v2-redesign-plan.md) | Execution plan + the **Launch build queue** ("all green ⇒ ship"), phase status, infra runbook. |
 | [`docs/system-spec.md`](./system-spec.md) | **System-behaviour spec for the native-client designer** — how the systems work, states, timing, live vs. cached. |
+| [`docs/build-guide.md`](./build-guide.md) | **Architect's guide for implementing agents** — invariants, codebase map, per-item traps, escalation triggers. Read before building a queue item. |
 | [`CLAUDE.md`](../CLAUDE.md) | Project structure + working conventions (auto-loaded by Claude Code). |
 | **This file** | Machine handoff + Mac setup. |
 

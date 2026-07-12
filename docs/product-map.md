@@ -462,6 +462,19 @@ Ramble, teach, and voice-quizzes all ride the **same voice substrate** (transcri
 > (launch), language is a recognized family for **later** — but designing the profile abstraction
 > right now makes language additive, not a repaint. Don't build language yet; make the
 > abstraction able to hold it.
+>
+> **The controlled taxonomy — LOCKED (2026-07-11).** The pass-2 `subject_weight` is a **loose
+> placeholder** — `subject_type` is an *unbound free string with no producer* (nothing computes or
+> stores it; the client passes a hint), and each mode ad-hoc string-matches inconsistent lists
+> ("stem"/"science"/"math"/"engineering" = one family typed four ways). Replace it with:
+> - **A closed enum — `SubjectFamily = STEM · LANGUAGE · HUMANITIES · GENERAL(default)`.** Coarse
+>   on purpose (families = profiles); unknown → GENERAL; extensible later as new profiles.
+> - **A real producer:** infer the family **once at synthesis** (the system already reads the
+>   material — one cheap classification), **store `subject_family` on the Topic**, user-overridable;
+>   concepts inherit their topic's family. *That* is "where it comes from / how it's computed."
+> - **Centralize the mix:** one `family → {mode weights, rendering, grading}` **profile map** — the
+>   `SubjectProfile` itself. Modes stop knowing about subjects; the profile owns the affinity
+>   (exhaustive over the enum — no silent typo-misses). This is launch-plan **B4**.
 - **Voice substrate** — shared by every voice mode; optimizing it lifts all of them.
   Full architecture in "Speed & voice" below.
 

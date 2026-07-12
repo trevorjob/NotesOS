@@ -7,8 +7,7 @@
 > what it asks the user. Design *against* this and your screens plug straight into a backend
 > that already works a certain way.
 >
-> The *why* behind every decision lives in [`product-map.md`](./product-map.md) and
-> [`NotesOS_Architecture_NextPhase.md`](../NotesOS_Architecture_NextPhase.md). The **entire
+> The **entire
 > visual / aesthetic language is yours** — this doc deliberately says nothing about how anything
 > *looks*, only how it *behaves*.
 >
@@ -45,16 +44,23 @@ The universal spine is **School → Course → Topic → Resources**.
 **There is no "class" or "cohort" object.** Your classmates are simply *the people in your
 courses* — computed live from shared enrollment. Where a school runs tight cohorts the same faces
 recur across your courses (dense graph); where it's credit-based it stays loose. **One design
-serves both** — don't build a "my cohort" screen; build "the people in this course" and let
-density emerge.
+serves both** — there's no cohort *object* to represent; what's real is **"the people in this
+course,"** and cohort density emerges from course overlap on its own.
 
 ---
 
 ## 2. Identity, access & invitations
 
-- **Auth:** email/password + Google. Access tokens are short-lived (15 min) and refresh silently
-  in the background — the user should essentially never see a session expire. Assume a logged-in
-  session unless the refresh hard-fails.
+- **Auth:** **the phone number is the primary identity** — the unique key *and* the login,
+  verified by **OTP** (likely WhatsApp in the core market, where SMS is costly/flaky). This fits
+  what NotesOS is (a communal tool whose social graph already runs on phone — see contact
+  discovery, §9/§14) and its market (where phone *is* identity and phone-first signup is the norm,
+  which also lowers invite-funnel friction). **Google sign-in stays** as a low-friction path, but
+  it's a convenience *into* the account, not the identity — an OAuth signup still requires the user
+  to **enter and OTP-verify a phone themselves.** The phone is **never inferred from Google** (that
+  number may be stale) — the user types their current, main one, so we know it's really theirs. **Email is optional** (recovery + whatever sign-in provides); push (§8) does the
+  notifying, so email is no longer load-bearing. Access tokens are short-lived (15 min) and refresh
+  silently — the user should essentially never see a session expire.
 - **No public/private, no roles, no approval, no moderators.** The only access control is the
   **invite link** — a valid link means you're in. There is nothing to "request access" to.
 - **Two doors into a course:**
@@ -96,7 +102,7 @@ in-app or upload a file → transcribed → becomes notes).
    - *If not:* it **clusters** the pile and **proposes** a topic breakdown with names.
 5. User sees the proposed structure and **confirms or tweaks** (drag a file, merge, rename). This
    is **review-and-adjust (opt-out)**, never file-it-yourself — the default is usually right, so
-   most users just tap accept.
+   most of the time the user just accepts it.
 
 **Two entry points — destination is implied by *where* you "add" from.** The flow above is the
 **course-level bulk** path (unsorted pile → auto-organize → confirm). There is also a **direct
@@ -144,7 +150,7 @@ scattered materials.
   section"** are real, surfaceable states.
 - **Trust is quiet, never a debate.** The note always reads as **one authoritative voice** — it
   never shows "Source A vs. Source B disagree" inline. Two trust affordances only: a **"says who?"**
-  tap that X-rays a single line's provenance *on demand* (for the skeptic), and a warm **"your
+  affordance that reveals a single line's provenance *on demand* (for the skeptic), and a warm **"your
   cohort built this"** signal (real classmates, not a faceless AI). Corroboration happens silently
   during synthesis.
 - **States:** a topic's note can be `empty` (no uploads yet — scaffold exists but no content),
@@ -169,12 +175,21 @@ measures **concepts**; the user consumes **topics**.
 
 **The moment-to-moment loop — the signature interaction (design this carefully):**
 1. **Challenge** — the mode poses something.
-2. **Predict confidence** — *before* revealing the answer, the user says how sure they are.
+2. **Predict confidence** *(optional, contextual — see below)* — *before* revealing the answer, the
+   user says how sure they are.
 3. **Answer.**
-4. **Reveal + calibration** — the user sees if they were right **and** how their confidence
-   compared: *"you were 90% sure, you got it — calibrated"* / *"90% sure, but missed — you're
-   overconfident here."* This calibration beat is the product's personality; it's honesty made
-   interactive. **It should feel gentle and revealing, not punishing.**
+4. **Reveal (+ calibration if a prediction was given)** — the user sees if they were right; if they
+   predicted, *also* how their confidence compared: *"90% sure, you got it — calibrated"* / *"90%
+   sure, but missed — you're overconfident here."* The calibration beat is the product's
+   personality; it's honesty made interactive. **Gentle and revealing, never punishing.**
+
+> **The confidence beat is NOT compulsory.** Forcing "how sure are you?" on *every* attempt is
+> friction that turns a signature moment into a nag. It's the **whole point of a pretest**, and
+> valuable on **new / shaky** concepts and deliberate open-ended modes — but a **tax on rapid review
+> of near-mastered concepts** and quick drills, where it breaks flow. Surface it **where it earns
+> its place; let the user just answer everywhere else.** (Backend already supports this:
+> `predicted_confidence` is optional, and calibration is only computed/shown when a prediction was
+> given — so this is purely a *when-to-ask* design call, not a data requirement.)
 
 **A session** is a *bout of retrieval* — the app clusters attempts into a session automatically
 (a ≥15-minute idle gap ends one). No "start/stop session" ceremony required; it's derived. A
@@ -189,7 +204,7 @@ which is why it stuck"), never as the app being broken.
 can interleave modes and adjust — design for a responsive flow, not a rigid quiz.
 
 **Scheduling:** every attempt advances a spaced-repetition schedule (FSRS). Each concept has a
-**due** time; the system always knows what's slipping. This powers the home card and notifications.
+**due** time; the system always knows what's slipping. This powers the home and notifications.
 
 ---
 
@@ -291,10 +306,10 @@ to specific on inspection.
   back **IDs to mark stale**. Fresh items serve **instantly from cache**; stale items **refetch on
   navigation**. The system **pre-fetches likely-next items** (current course, recent topic) in the
   background, so navigation usually finds fresh data already there.
-- Sync happens **at boundaries + a 10–15 min background poll**, *not* on every tap. A classmate's
+- Sync happens **at boundaries + a 10–15 min background poll**, *not* on every interaction. A classmate's
   mid-session upload isn't urgent — it arrives on the next poll, no interrupting loading state.
 - **States to represent:** `fresh` (serve now), `stale` (refetch on open), `syncing`, `offline`,
-  `queued` (a local attempt waiting to push). The user should rarely see a spinner — prefer
+  `queued` (a local attempt waiting to push). The user should rarely see a blocking wait — prefer
   instant-from-cache + quiet background refresh.
 
 ---
@@ -310,16 +325,17 @@ these arrive — no manual refresh:
 - Presence — `active_users` / user joined / left (co-presence).
 - Notifications — recognition, decay nudges, quick-info.
 
-Design implication: **most data can change while the user is looking at it**, gently. Plan for
-live-updating counts, "updated" badges, and content that can refresh under the user without
-yanking their place.
+Design implication: **most data can change while the user is looking at it**, gently. Content should
+be able to update and mark-itself-changed under the user, and counts should live-update — without
+ever yanking their place or interrupting what they're doing.
 
 ---
 
 ## 12. Cross-cutting states & timing (a designer's cheat-sheet)
 
-**Perceived speed is a design decision.** Nothing should spin for more than ~400ms — it should
-**stream** or be **optimistic**.
+**Perceived speed is a behavioural target.** Nothing user-facing should present a *blocking* wait
+longer than ~400ms — it should **stream** as it arrives or be **optimistic** (act done, reconcile
+after).
 
 | Interaction | Timing behaviour |
 |---|---|
@@ -347,7 +363,218 @@ paywall UI (**launch is entirely free**). These are real, later — not launch.
 
 ---
 
-## 14. One-paragraph summary
+## 14. Flows, screens & states the feature sections assume
+
+The sections above describe each *feature's* behaviour. This one fills the **connective tissue** —
+the screens and flows *between* them, and states that hadn't been named. Still behaviour, not
+visual direction.
+
+### 14.1 App shape & the home
+
+- **The spine of navigation:** Home → your **Courses** (grouped by term) → a **Topic** (the study
+  hub — note, key points, concepts, quizzes, Listen, chat all live here) → a **study session**. How
+  that's expressed is entirely yours — the only fixed thing is the *graph* (what leads to what).
+- **The home is a doorway, not a dashboard.** Its job is to **remove the "what should I study?"
+  decision** — the moment where sessions die before they start. It surfaces the single
+  highest-value thing to do right now (usually **review** what's fading) and makes starting it
+  effortless. **New** material (a classmate uploaded, the note grew) is present but *secondary* — it
+  must not displace review as what leads. **Never empty-handed** — if nothing's due there's still a
+  next move (a pretest, getting ahead, fresh material). Opened *from a push nudge*, the user lands
+  **straight in** the promised session, not back on home.
+- **No global search / no public browse *exists*.** There's no "find any course in the world"
+  capability — courses are reached only through the classmate graph (§9) and invitations (§2). The
+  *only* search anywhere in the product is the **school typeahead at signup**. (A fact about what
+  the system can do — not a design constraint.)
+
+### 14.2 First-run is two different flows
+
+- **Creator first-run:** create course → *(snap syllabus)* → **dump** material → **gap-first
+  pretest** ("let's see what you know" *before* the note) → then the note. The aha is the **honest
+  catch**, not the pretty summary. Activation = **completed first retrieval**, not "uploaded." A
+  **demo topic** can give instant magic while their own upload processes.
+- **Joiner first-run:** you join a classmate's course that **already has a note** — your first
+  experience is **consuming a ready note**, not capturing. Warmer and instant; design for value on
+  arrival. (A just-joined course may still be **processing** — show it building, don't show empty.)
+- **Cold start (no courses yet):** contact discovery ("3 of your contacts are here") + a coarse set
+  from school/program seed the graph. The home is **never a dead empty state** for a new user.
+
+### 14.3 Inviting & the people around you (the sender side)
+
+- **Invite a person:** generate a link and share it (however sharing works on the platform). The
+  receiver side (roster picker) is §2. There's also **"share this course"** (the per-course code)
+  for the single-course case.
+- **People are per-course, not a global cohort.** "The people in this course" is a real surface; a
+  **"my whole cohort" screen is not** (the set is emergent — §1). A person view stays minimal
+  (shared courses). Everything else about classmates is ambient/aggregate (§9).
+
+### 14.4 Instant vs. delayed feedback (this shapes the session screen)
+
+The 3-beat loop (§5) isn't uniformly instant:
+- **Objective retrieval** (MCQ, pretest, self-graded STEM) — graded **instantly / locally**, so the
+  reveal + calibration are immediate. **Works offline.**
+- **AI-graded** (ramble, teach, voice) — grading is a **server LLM call**: a short in-flow wait,
+  ideally **streamed** ("scoring your answer…" → feedback streams in), *not* fire-and-forget.
+  **Online-only.** Design a graceful brief-wait state for these; don't assume instant.
+
+### 14.5 Voice interaction states
+
+Voice (conversational ramble/teach) is a **live exchange, not record-then-submit**. States to
+design: **mic-permission** (asked in context, first use) → `idle` → `listening` (user speaking) →
+`thinking` → `speaking` (system responding) → `interrupted` (user barges in — it stops and listens)
+→ `done`. A live transcript is optional. **Offline / no signal → a clear "voice needs a connection"
+state** (voice is online-only).
+
+### 14.6 Native permissions & push
+
+- **Permissions are requested *in context*, never all upfront:** microphone (voice + lecture
+  recording), camera (snapping notes/syllabus), contacts (contact discovery — optional, cold-start
+  only), notifications (push). Each needs a graceful *denied* path (e.g. camera denied → still allow
+  file upload).
+- **Push notifications** carry the decay nudge / recognition to the OS. **Tapping one deep-links
+  straight to the thing** (the exact session / note / course) — it must not dump the user on the
+  home screen to re-find it.
+
+### 14.7 Managing & deleting (and the consequences)
+
+- **Leave a course:** your enrollment ends; **your past contributions stay** in the shared note (it's
+  communal — leaving doesn't gut it).
+- **Delete a resource:** allowed, but it **re-triggers synthesis** — the note re-merges *without* it,
+  so the user sees a "note updating" consequence, not a silent removal.
+- **Topics:** rename / merge / move resources between them (never required — §3).
+- **Delete account:** signs out and removes the person. **Their contributions to shared notes
+  remain, de-identified** — the communal note isn't destroyed when one person leaves. Not a hard
+  cascade.
+
+### 14.8 The notification inbox
+
+Beyond OS push, there's an **in-app inbox**: notifications with **read/unread**, **digested/grouped**
+(not a firehose), same tone rules as §8 (aggregate for passive, warm for active). Clearing/marking
+read is a real interaction.
+
+### 14.9 A few more states to have on hand
+
+- **Empty scaffolded topic** — exists (from the outline) but has no material yet → offer "add material."
+- **First-ever synthesis** — a brand-new note assembling for the first time (streams in; distinct
+  from an *update* to an existing note).
+- **Failed processing** — a resource failed OCR/transcription/synthesis → offer **retry or remove**.
+- **Invite edge cases** — invalid link, or **"you're already in this course."**
+- **School search no-results** → "type it in" (free entry, canonicalised).
+- **Attempt didn't sync** — an offline-queued attempt still pending push (rare, but a state).
+
+### 14.10 Contact discovery (the cold-start social seed)
+
+- **Purpose:** turn phone contacts into a starting social surface so a **new user** (zero course
+  overlap → empty classmate graph) isn't alone on day one — the bridge from *phone friend* →
+  *coursemate*. Reliable now that phone is verified for everyone (§2).
+- **Mechanism (privacy-sensitive):** opt-in contacts permission (**skippable** — the school/program
+  seed still covers cold-start) → the client normalizes numbers to canonical form and **SHA-256
+  hashes** them → sends **hashes only** (never raw numbers or names) → the server matches against
+  its verified-users' hash index → returns matched user IDs + minimal profile → the client shows
+  each by *your own* contact name. Non-matches are discarded; non-users are never stored.
+- **Hard rules:** **never message or auto-invite non-user contacts** (no spam-your-address-book
+  growth hack — it surfaces *only people already on NotesOS*); opt-in and transparent (numbers
+  hashed, contacts not stored, nobody messaged).
+- **Honest limits:** hashing is the pragmatic standard, not cryptographically strong (phone-number
+  space is brute-forceable) — acceptable for launch. And it's **thin early, compounds later** — few
+  contacts are on a small new app; value grows with the user base.
+- **Ties it creates:** a discovered contact who's a user becomes a lightweight **connection** (feeds
+  invitation targeting + "a connection created a course → it surfaces"), distinct from a
+  **classmate** (shared course). Two tie sources: *classmates* (course overlap) · *connections*
+  (contacts + people you've invited).
+
+---
+
+## 15. Data the system collects — inputs, fields & the values behind the screens
+
+The behaviour sections above describe *flows*; this one is the **data** underneath them — what the
+user submits, what's required vs. optional, and the fixed value-sets the UI renders. (Field *names*
+are indicative, not the API contract — that's in the backend.)
+
+### 15.1 Signup & profile (the emergent-set signals)
+
+| Field | Required? | Notes |
+|---|---|---|
+| **Phone** | ✅ **(primary identity)** | the unique key **and** the login; **OTP-verified** (WhatsApp/SMS). Also powers **contact discovery** ("3 of your contacts are here") — now a reliable cold-start seed because everyone has one. |
+| Name | ✅ | |
+| **School** | ✅ | picked from a **curated list via typeahead search**, or typed in (the system canonicalises "Unilag"/"UNILAG"/"University of Lagos" to one). School is the top of the spine + the proximity hard-filter. |
+| **Email** | ⬜ optional | recovery + whatever **Google sign-in** provides. *No longer the primary key* — push does the notifying. |
+| Password | ⬜ optional | phone is OTP-verified and Google is an option, so a password isn't strictly required. |
+| **Program / major** | ⬜ optional | a grouping + proximity-ranking signal. **Kept optional on purpose** — a US first-year often can't answer; blank is fine. |
+| **Entry year / rough entry window** | ⬜ optional | ranking signal (weaker where cohorts are loose). |
+
+> **Design implication:** signup is **phone-first** (number → OTP), with **Google sign-in** as a
+> fast alternative that still collects a phone. Onboarding stays *minimal and skippable* past the
+> required set (phone, name, school); the optional signals sharpen discovery but never gate it.
+> (A password isn't required — phone is OTP-verified — so don't assume a password field is mandatory.)
+
+### 15.2 Creating a course / term / topic
+
+- **Course:** name (✅), course code (⬜ — *one hint, never the key*; codes disagree across
+  schools), the **term** it's filed under, school (inherited). Creating a course **runs the
+  proximity check** → see the flow below.
+- **Term:** not free text — composed from **`division_type` + `division_value` + optional
+  `study_level`** into one canonical label ("200 Level · Second Semester", "Year 1 · Term 2",
+  "Fall Semester"). User-created, reusable, personal. The UI offers the controlled vocabulary; the
+  label is computed.
+- **Topic:** normally **auto-created** (outline scaffold or auto-organize, §3). Manual create/
+  rename/merge is available but never *required*.
+
+### 15.3 The proximity "did you mean this?" flow (an interactive input moment)
+
+When a user creates a course, the system may find near-matches at their school and **offer them
+instead of creating blindly**. It returns candidate courses each with a **member count** and the
+**reasons it matched** (same program / entry year / shared classmates). The user then either
+**joins an existing one** or **"make my own"** (forks deliberately). *The offer never forces a
+merge* — "make my own" is always live. The same pattern reappears as coordination ("someone's
+already building this test — want in?"). Design this as a first-class branch of creation, not an
+error state.
+
+### 15.4 Settings & preferences the user controls
+
+- **AI personality** (tunes the tutor, §7): tone (**encouraging / direct / humorous**), explanation
+  style (**concise / detailed / example-heavy**), emoji on/off.
+- **Notifications:** preferences over which nudges to receive; the digest is on by default.
+- **Profile / account:** edit name, change password, sign out, delete account.
+
+### 15.5 What the user submits *during study*
+
+- **A retrieval attempt:** the chosen **mode**, the **scope** (topic / course / concept), a
+  **predicted-confidence** (before the reveal), and the **response** — typed text **or voice
+  audio** (both are graded).
+- **Test generation** (where offered): course, **topics (multi-select)**, number of questions,
+  type (MCQ / short-answer / mixed), difficulty.
+
+### 15.6 The fixed value-sets the UI renders
+
+The screens display these system enums — design needs a treatment for each value:
+
+| Thing | Values |
+|---|---|
+| Predicted confidence | a 0–1 value (the *form* it's captured in is entirely yours) |
+| Grade (spaced-rep) | `again` · `hard` · `good` · `easy` |
+| Calibration verdict | `underconfident` · `calibrated` · `overconfident` |
+| Concept / knowledge state | `solid` · `fading` · `shaky` (+ a "due" time) |
+| Answer status | `correct` · `partial` · `needs-review` |
+| Resource state | `uploading` · `processing` · `ready` · `failed` · `needs-review` (low-confidence) · `quarantined` (uploader-only) |
+| Sync state | `fresh` · `stale` · `syncing` · `offline` · `queued` |
+
+### 15.7 Editable vs. system-owned, limits, and roles
+
+- **System-owned (not user-editable):** the consolidated note, key points, concepts — they're
+  *synthesized*. You influence them by **uploading**, never by editing the text.
+- **User-manageable:** topics (rename / merge / move resources between), resources (add / delete /
+  move), a course's name+term, your own terms, your settings. **Retrieval attempts are append-only**
+  — history is never rewritten.
+- **Accepted uploads:** text, PDF, DOC/DOCX, images (jpg/jpeg/png/webp/tiff/bmp), audio. Images are
+  compressed (→ webp) on the way in; **per-file size and per-upload count limits apply** — there's a
+  clear over-limit state to handle.
+- **No roles, no admins, no permissions tiers.** Everyone in a course is equal; access is purely
+  "holds a valid invite / is enrolled." There is nothing to administer, approve, or moderate — so
+  no such surface exists to design.
+
+---
+
+## 16. One-paragraph summary
 
 A student creates a course, snaps their syllabus, and dumps a semester of messy notes in one go; the
 system quietly sorts it into topics and synthesizes each into a single trustworthy note that grows as

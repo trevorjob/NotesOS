@@ -12,6 +12,11 @@ NotesOS is a collaborative AI-powered study platform. Students upload course res
 > (wins on conflict); the feature target is [`docs/product-map.md`](docs/product-map.md);
 > execution status is [`docs/v2-redesign-plan.md`](docs/v2-redesign-plan.md).
 >
+> **Building a queue item? Read [`docs/build-guide.md`](docs/build-guide.md) first** — the
+> architect's guide: the non-negotiable invariants, how the codebase actually behaves, per-item
+> traps, and when to escalate an architecture decision instead of deciding solo. The
+> designer-facing behaviour contract is [`docs/system-spec.md`](docs/system-spec.md).
+>
 > **v2 working conventions (keep these):** backend-only (don't touch the Next.js
 > frontend — v2's client is a native app); v1 is a separate branch/env; **never
 > hand-write Alembic migrations** (keep models correct, run `alembic revision
