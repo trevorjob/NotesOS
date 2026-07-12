@@ -17,11 +17,12 @@ from app.config import settings
 from app.models import Concept, Course, Topic, User
 from app.models.resource import Resource
 from app.services.retrieval import recognition
+from tests.conftest import unique_phone
 
 
 async def _fixture(db, *, n_other_resources=1, quarantined=False, learner_also_uploads=False):
-    learner = User(email=f"l_{uuid.uuid4().hex[:8]}@t.dev", full_name="L", password_hash="x")
-    contributor = User(email=f"c_{uuid.uuid4().hex[:8]}@t.dev", full_name="C", password_hash="x")
+    learner = User(email=f"l_{uuid.uuid4().hex[:8]}@t.dev", full_name="L", password_hash="x", phone=unique_phone())
+    contributor = User(email=f"c_{uuid.uuid4().hex[:8]}@t.dev", full_name="C", password_hash="x", phone=unique_phone())
     db.add_all([learner, contributor])
     await db.flush()
     course = Course(code="C1", name="C", created_by=contributor.id)

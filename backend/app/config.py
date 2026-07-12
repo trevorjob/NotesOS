@@ -35,8 +35,9 @@ class Settings(BaseSettings):
     # AI Provider Keys
     DEEPSEEK_API_KEY: str = ""
 
-    # Per-task LLM provider overrides (openai | deepseek).
-    # Defaults are set in app/services/llm.py. Set these in .env to override.
+    # Per-task LLM overrides. Set to a provider (openai | deepseek) or a model
+    # tier (fast | standard | heavy). Defaults + tier specs live in
+    # app/services/llm.py. Empty = use the task's mapped default.
     LLM_QUESTION_GEN: str = ""
     LLM_GRADING: str = ""
     LLM_STUDY_CHAT: str = ""
@@ -44,6 +45,7 @@ class Settings(BaseSettings):
     LLM_FACT_CHECK: str = ""
     LLM_RESEARCH: str = ""
     LLM_OCR_CLEAN: str = ""
+    LLM_AUDIO_SCRIPT: str = ""
 
     # File Storage (Cloudinary)
     CLOUDINARY_CLOUD_NAME: str = ""
@@ -92,6 +94,15 @@ class Settings(BaseSettings):
     RESEND_API_KEY: str = ""
     EMAIL_FROM: str = "NotesOS <onboarding@resend.dev>"
     PASSWORD_RESET_URL: str = "http://localhost:3000/reset-password"
+
+    # Phone OTP verification (phone is the primary identity).
+    # OTP_PROVIDER is swappable — "console" logs the code (dev/test); the owner
+    # wires WhatsApp/SMS in services/otp.py without touching call sites.
+    OTP_PROVIDER: str = "console"
+    OTP_EXPIRE_MINUTES: int = 10
+    # Short-lived token that carries a verified Google identity between the OAuth
+    # callback and the phone-collection step (OAuth never infers a phone).
+    OAUTH_REGISTER_TOKEN_EXPIRE_MINUTES: int = 15
 
     # Google OAuth
     GOOGLE_CLIENT_ID: str = ""

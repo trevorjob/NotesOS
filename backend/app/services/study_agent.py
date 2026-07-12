@@ -7,8 +7,10 @@ from typing import Dict, Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+from typing import AsyncIterator
+
 from app.services.rag import rag_service
-from app.services.llm import call_llm
+from app.services.llm import call_llm, call_llm_stream
 from app.models.progress import AIConversation, AIMessage, MessageRole
 
 
@@ -82,6 +84,62 @@ class StudyAgent:
             "conversation_id": str(conversation.id),
         }
 
+    async def ask_question_stream(
+        self,
+        db: AsyncSession,
+        user_id: str,
+        course_id: str,
+        question: str,
+        topic_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        personality: Optional[dict] = None,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """Streaming twin of ``ask_question``.
+
+        Yields structured events for the SSE surface:
+          - ``{"type": "meta", "conversation_id", "sources"}`` first,
+          - ``{"type": "token", "text"}`` per delta,
+          - ``{"type": "done", "conversation_id"}`` once persisted.
+        The full answer is accumulated and saved exactly like the blocking path,
+        so the attempt/history record is identical regardless of transport.
+        """
+        # 1. Get or create conversation
+        if conversation_id:
+            conversation = await self._get_conversation(db, conversation_id, user_id)
+        else:
+            conversation = await self._get_or_create_conversation(
+                db, user_id, course_id, topic_id
+            )
+
+        # 2. RAG context + 3. history
+        rag_result = await rag_service.query_notes(
+            db=db, question=question, course_id=course_id, topic_id=topic_id, max_chunks=5,
+        )
+        context = rag_result["context"]
+        sources = rag_result["sources"]
+        history = await self._get_conversation_history(db, conversation.id)
+
+        yield {"type": "meta", "conversation_id": str(conversation.id), "sources": sources}
+
+        # 4. Stream the answer, accumulating for persistence
+        messages = self._build_answer_messages(question, context, history, personality)
+        chunks: list[str] = []
+        async for delta in call_llm_stream(
+            "", task="study_chat", messages=messages, temperature=0.5, max_tokens=3000, timeout=45.0
+        ):
+            chunks.append(delta)
+            yield {"type": "token", "text": delta}
+
+        answer = "".join(chunks)
+
+        # 5. Persist question + answer, title on first message
+        await self._save_messages(db, conversation.id, question, answer)
+        if not conversation.title:
+            conversation.title = await self._generate_title(question)
+            await db.commit()
+
+        yield {"type": "done", "conversation_id": str(conversation.id)}
+
     async def _get_conversation(
         self, db: AsyncSession, conversation_id: str, user_id: str
     ) -> AIConversation:
@@ -150,8 +208,12 @@ class StudyAgent:
 
         return history
 
-    async def _generate_answer(self, question: str, context: str, history: list, personality: Optional[dict] = None) -> str:
-        """Generate answer using DeepSeek with RAG context and user personality."""
+    def _build_answer_messages(self, question: str, context: str, history: list, personality: Optional[dict] = None) -> list:
+        """Assemble the chat messages (system + history + user) for an answer.
+
+        Shared by the blocking and streaming paths so prompt construction lives in
+        one place.
+        """
         tone = (personality or {}).get("tone", "encouraging")
         emoji_usage = (personality or {}).get("emoji_usage", "moderate")
         explanation_style = (personality or {}).get("explanation_style", "detailed")
@@ -243,7 +305,11 @@ class StudyAgent:
         messages = [{"role": "system", "content": system_prompt}]
         messages.extend(history)
         messages.append({"role": "user", "content": user_prompt})
+        return messages
 
+    async def _generate_answer(self, question: str, context: str, history: list, personality: Optional[dict] = None) -> str:
+        """Generate a full answer (non-streaming) with RAG context + personality."""
+        messages = self._build_answer_messages(question, context, history, personality)
         return await call_llm("", task="study_chat", messages=messages, temperature=0.5, max_tokens=3000, timeout=45.0)
 
     async def _save_messages(

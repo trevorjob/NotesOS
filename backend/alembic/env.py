@@ -10,6 +10,10 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
 
+# Registers comparators so autogenerate detects Postgres enum value additions
+# (e.g. a new ResourceKind) and emits ALTER TYPE ... ADD VALUE.
+import alembic_postgresql_enum  # noqa: F401
+
 # Import your app's config and models
 import sys
 from pathlib import Path

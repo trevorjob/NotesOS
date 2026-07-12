@@ -14,6 +14,7 @@ from app.models import Concept, ConceptState, Course, RetrievalAttempt, Topic, U
 from app.services.retrieval import engine
 from app.services.retrieval.modes import ModeContext
 from app.services.retrieval.pretest_mode import PretestMode
+from tests.conftest import unique_phone
 
 
 class StubPretestMode(PretestMode):
@@ -66,7 +67,7 @@ async def test_high_open_score_capped_at_good():
 
 
 async def test_pretest_drives_engine(db_session):
-    user = User(email=f"u_{uuid.uuid4().hex[:8]}@t.dev", full_name="U", password_hash="x")
+    user = User(email=f"u_{uuid.uuid4().hex[:8]}@t.dev", full_name="U", password_hash="x", phone=unique_phone())
     db_session.add(user)
     await db_session.flush()
     course = Course(code="C1", name="C", created_by=user.id)

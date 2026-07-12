@@ -114,13 +114,30 @@ async def _clean_tables(engine):
 
 @pytest.fixture(autouse=True)
 def _no_outbound_email(monkeypatch):
-    """The register route fires a welcome email as a background task; stub it."""
+    """The verify-otp route fires a welcome email as a background task; stub it."""
     async def _noop(*args, **kwargs):
         return None
 
     monkeypatch.setattr(
         "app.services.email.send_welcome_email", _noop, raising=False
     )
+
+
+@pytest.fixture(autouse=True)
+def otp_codes(monkeypatch):
+    """Capture OTP codes instead of delivering them.
+
+    Patches the single provider seam (``services.otp.send_otp``) and records the
+    last code issued per phone, so tests can complete the verify step. Keyed by the
+    normalized phone the server stores.
+    """
+    store: dict[str, str] = {}
+
+    async def _capture(phone: str, code: str) -> None:
+        store[phone] = code
+
+    monkeypatch.setattr("app.services.otp.send_otp", _capture, raising=True)
+    return store
 
 
 @pytest_asyncio.fixture
@@ -157,20 +174,46 @@ async def client(session_factory):
     app.dependency_overrides.clear()
 
 
-@pytest_asyncio.fixture
-async def register_user(client):
-    """Factory: register a fresh user, return its tokens + auth headers."""
+def unique_phone() -> str:
+    """A fresh, already-normalized phone number for a test user."""
+    return "+234" + str(uuid.uuid4().int)[:9]
 
-    async def _make(email: str | None = None, password: str = "password123", full_name: str = "Test User"):
-        email = email or f"user_{uuid.uuid4().hex[:10]}@test.dev"
-        resp = await client.post(
-            "/api/auth/register",
-            json={"email": email, "password": password, "full_name": full_name},
-        )
+
+@pytest_asyncio.fixture
+async def register_user(client, otp_codes):
+    """Factory: register + OTP-verify a fresh phone-primary user.
+
+    Runs the full two-step flow (register → verify-otp) and returns the same
+    ``{id, headers, tokens}`` shape the rest of the suite relies on, plus ``phone``.
+    Extra keyword args (school_name, program, entry_year, email) pass through to
+    the register payload.
+    """
+
+    async def _make(
+        phone: str | None = None,
+        password: str = "password123",
+        full_name: str = "Test User",
+        email: str | None = None,
+        **extra,
+    ):
+        phone = phone or unique_phone()
+        payload = {"phone": phone, "password": password, "full_name": full_name}
+        if email is not None:
+            payload["email"] = email
+        payload.update(extra)
+
+        resp = await client.post("/api/auth/register", json=payload)
         assert resp.status_code == 201, resp.text
-        data = resp.json()
+
+        code = otp_codes[phone]
+        verify = await client.post(
+            "/api/auth/verify-otp", json={"phone": phone, "code": code}
+        )
+        assert verify.status_code == 200, verify.text
+        data = verify.json()
         return {
             "id": data["user"]["id"],
+            "phone": phone,
             "email": email,
             "password": password,
             "tokens": data,

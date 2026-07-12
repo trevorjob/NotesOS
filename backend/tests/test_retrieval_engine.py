@@ -14,6 +14,7 @@ from sqlalchemy import select
 from app.models import Concept, ConceptState, Course, RetrievalAttempt, Topic, User
 from app.services.retrieval import engine
 from app.services.retrieval.modes import Challenge, ModeContext, Outcome
+from tests.conftest import unique_phone
 
 
 class FakeMode:
@@ -37,7 +38,7 @@ class FakeMode:
 
 
 async def _seed(db, *, n_topics=1, per_topic=2):
-    user = User(email=f"u_{uuid.uuid4().hex[:8]}@t.dev", full_name="U", password_hash="x")
+    user = User(email=f"u_{uuid.uuid4().hex[:8]}@t.dev", full_name="U", password_hash="x", phone=unique_phone())
     db.add(user)
     await db.flush()
     course = Course(code="C1", name="Course", created_by=user.id)

@@ -14,6 +14,7 @@ from app.models import Course, Resource, ResourceChunk, Topic, User
 from app.models.resource import ResourceKind, SourceType
 from app.services import merge_gate
 from app.services.merge_gate import GateDecision, decide_quarantine
+from tests.conftest import unique_phone
 
 
 # ── Pure decision logic ───────────────────────────────────────────────────────
@@ -60,7 +61,7 @@ def _vec(idx: int) -> list[float]:
 
 
 async def _seed_topic(db):
-    user = User(email=f"u_{uuid.uuid4().hex[:8]}@t.dev", full_name="U", password_hash="x")
+    user = User(email=f"u_{uuid.uuid4().hex[:8]}@t.dev", full_name="U", password_hash="x", phone=unique_phone())
     db.add(user)
     await db.flush()
     course = Course(code="C1", name="C", created_by=user.id)

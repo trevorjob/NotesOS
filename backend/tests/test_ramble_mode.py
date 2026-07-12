@@ -15,6 +15,7 @@ from app.models import Concept, ConceptState, Course, RetrievalAttempt, Topic, U
 from app.services.retrieval import engine
 from app.services.retrieval.modes import ModeContext
 from app.services.retrieval.ramble_mode import RambleMode
+from tests.conftest import unique_phone
 
 
 class StubRambleMode(RambleMode):
@@ -63,7 +64,7 @@ async def test_blank_response_is_a_lapse_without_calling_llm():
 
 
 async def test_ramble_drives_engine(db_session):
-    user = User(email=f"u_{uuid.uuid4().hex[:8]}@t.dev", full_name="U", password_hash="x")
+    user = User(email=f"u_{uuid.uuid4().hex[:8]}@t.dev", full_name="U", password_hash="x", phone=unique_phone())
     db_session.add(user)
     await db_session.flush()
     course = Course(code="C1", name="C", created_by=user.id)

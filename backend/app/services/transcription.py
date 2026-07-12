@@ -17,12 +17,14 @@ class TranscriptionService:
         self.openai_api_key = settings.OPENAI_API_KEY
         self.whisper_base = "https://api.openai.com/v1/audio/transcriptions"
 
-    async def transcribe_audio(self, audio_url: str) -> Dict[str, Any]:
+    async def transcribe_audio(self, audio_url: str, file_ext: str = "") -> Dict[str, Any]:
         """
         Transcribe audio using OpenAI Whisper API.
 
         Args:
             audio_url: URL to audio file (must be accessible)
+            file_ext:  Original file extension (e.g. ".mp3") so Whisper sees the
+                       real container format; defaults to .webm when unknown.
 
         Returns:
             dict with:
@@ -34,7 +36,7 @@ class TranscriptionService:
         audio_data = await self._download_audio(audio_url)
 
         # 2. Send to Whisper API
-        transcription = await self._call_whisper_api(audio_data)
+        transcription = await self._call_whisper_api(audio_data, file_ext=file_ext)
 
         return {
             "text": transcription.get("text", ""),
@@ -49,19 +51,22 @@ class TranscriptionService:
             response.raise_for_status()
             return response.content
 
-    async def _call_whisper_api(self, audio_data: bytes) -> Dict[str, Any]:
+    async def _call_whisper_api(self, audio_data: bytes, file_ext: str = "") -> Dict[str, Any]:
         """
         Call OpenAI Whisper API with audio data.
 
         Args:
             audio_data: Raw audio bytes
+            file_ext:   Original extension; Whisper sniffs the container from the
+                        filename, so pass the real one where known.
 
         Returns:
             Transcription response from Whisper
         """
+        ext = (file_ext or ".webm").lstrip(".").lower()
         # Prepare multipart form data
         files = {
-            "file": ("audio.webm", BytesIO(audio_data), "audio/webm"),
+            "file": (f"audio.{ext}", BytesIO(audio_data), f"audio/{ext}"),
         }
         data = {
             "model": "whisper-1",

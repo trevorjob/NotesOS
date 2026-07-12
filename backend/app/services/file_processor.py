@@ -64,6 +64,14 @@ class FileProcessor:
                 "needs_cleaning": False,
             }
 
+        elif file_format.lower() in [".md", ".txt"]:
+            # Text-native formats — no extraction needed, just decode.
+            return {
+                "text": file_bytes.decode("utf-8", errors="replace"),
+                "source_type": "text",
+                "needs_cleaning": False,
+            }
+
         elif file_format.lower() in [".jpg", ".jpeg", ".png", ".tiff", ".bmp"]:
             # Images are now processed via GPT-4o Vision, which requires a URL.
             # Call vision_transcribe.transcribe_images([url]) directly from the

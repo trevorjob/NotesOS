@@ -33,6 +33,7 @@ class ResourceKind(str, Enum):
     PDF = "PDF"
     DOCX = "DOCX"
     IMAGE = "IMAGE"
+    AUDIO = "AUDIO"  # lecture recording / voice note — transcribed via Whisper
 
 
 class SourceType(str, Enum):
@@ -43,6 +44,7 @@ class SourceType(str, Enum):
     DOCX = "DOCX"
     HANDWRITTEN = "HANDWRITTEN"
     PRINTED = "PRINTED"
+    AUDIO = "AUDIO"
 
 
 class VerificationStatus(str, Enum):

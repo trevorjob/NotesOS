@@ -17,7 +17,10 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    email = Column(String(255), unique=True, nullable=False, index=True)
+    # Email is now optional (phone is the primary identity). Unique when present —
+    # Postgres allows multiple NULLs under a unique constraint, so OAuth-linking by
+    # email still works while phone-only users carry no email.
+    email = Column(String(255), unique=True, nullable=True, index=True)
     password_hash = Column(String(255), nullable=True)  # nullable for OAuth-only users
     full_name = Column(String(255), nullable=False)
     avatar_url = Column(Text, nullable=True)
@@ -37,8 +40,14 @@ class User(Base):
     # present in cohort-based systems (Nigeria), often blank elsewhere (US freshers).
     program = Column(String(255), nullable=True)  # degree / major, free text
     entry_year = Column(Integer, nullable=True)   # e.g. 2027
-    # Unique when present (multiple NULLs allowed) — powers contact discovery.
-    phone = Column(String(32), nullable=True, unique=True, index=True)
+
+    # Phone is the PRIMARY identity: required, unique, OTP-verified. Also the field
+    # contact discovery hashes on later.
+    phone = Column(String(32), nullable=False, unique=True, index=True)
+    phone_verified = Column(Boolean, default=False, nullable=False)
+    # Pending OTP challenge (hashed, mirrors the password_reset_* pattern below).
+    phone_otp = Column(String(255), nullable=True)
+    phone_otp_expires = Column(DateTime, nullable=True)
 
     # Google OAuth
     google_id = Column(String(255), unique=True, nullable=True, index=True)

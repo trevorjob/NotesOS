@@ -18,6 +18,7 @@ from app.workers.grading_worker import start_grading_worker
 from app.workers.knowledge_worker import knowledge_worker
 from app.workers.audio_worker import audio_worker
 from app.workers.test_generation_worker import test_generation_worker
+from app.workers.capture_worker import capture_worker
 
 WORKERS = {
     "chunking": chunking_worker,
@@ -27,6 +28,7 @@ WORKERS = {
     "knowledge": knowledge_worker,
     "audio": audio_worker,
     "test_generation": test_generation_worker,
+    "capture": capture_worker,
 }
 
 

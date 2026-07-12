@@ -6,10 +6,11 @@ from sqlalchemy import select
 
 from app.models import Concept, Course, Topic, User
 from app.services.retrieval.concepts import sync_concepts
+from tests.conftest import unique_phone
 
 
 async def _course_with_topic(db):
-    user = User(email=f"u_{uuid.uuid4().hex[:8]}@t.dev", full_name="U", password_hash="x")
+    user = User(email=f"u_{uuid.uuid4().hex[:8]}@t.dev", full_name="U", password_hash="x", phone=unique_phone())
     db.add(user)
     await db.flush()
     course = Course(code="HIS101", name="History", created_by=user.id)

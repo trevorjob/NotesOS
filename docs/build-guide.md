@@ -77,21 +77,66 @@ reflects the state as of the design sessions, and memory drifts.
   calibration is derived in the response. `recognition.py` = **dormant seam** (topic-level, gated
   behind `ENABLE_RECOGNITION=false`).
 - **Workers — `run_workers.py` (`asyncio.gather`) + `workers/`.** All drain Redis queues via the
-  shared `run_worker_loop` (retry / backoff / dead-letter) using `worker_session()`. Queue-based =
-  **batch/throughput**, correct for: `chunking`, `knowledge` (synthesis), `fact_check`, `grading`
-  (voice answers, batch), `transcription` (Whisper), `audio` (TTS). **The realtime voice lane (B5)
-  is a NEW pipeline — do not build it on these workers.**
+  shared `run_worker_loop` (retry / backoff / dead-letter / orphan-recovery) using `worker_session()`.
+  The **machine (`base.py`) is correct — don't touch it.** The **roster is a v1 inheritance** — see
+  §2a for keep/retire/add. **The realtime voice lane (B5) is a NEW pipeline — do not build it on
+  these workers.**
 - **Capture pipeline.** upload → `transcription_worker` (vision / `file_processor`) → enqueue
   `chunking` → `chunking_worker` (chunks + Voyage embeddings) → `knowledge_worker` (merge-gate →
   synthesis). Accepted types are allow-listed in `api/resources.py` (images + docs today; **A2 adds
   audio**). `transcription.py` (Whisper) exists but is currently wired **only to grade voice
-  answers** — A2 exposes it as an *ingestion* path.
+  answers** — A2 exposes it as an *ingestion* path (the front door of this pipeline), **not** a
+  grading feeder.
 - **DB — `database.py`.** Async engine, `pool_size=2, max_overflow=3` **per process** (each worker/
   API process owns its pool). `init_db()` creates tables + the `vector` / `pg_trgm` extensions.
 - **Cache — Redis.** Keys follow `{resource}:{id}`; invalidate with `cache.delete(key)` in the
   handler *after* the DB commit on any write.
 - **Realtime — Redis pub/sub → WebSocket** (`course_updates` channel, one connection per course).
   Events include `processing_status`, `grading:complete`, note/knowledge updates, presence.
+
+---
+
+## 2a. Workers: keep / retire / add (do NOT cargo-cult the v1 roster)
+
+The seven workers in `run_workers.py` were built for v1's feature set. The **loop machinery is
+right**; the **set is not**. Against v2, the roster splits three ways. Verify against current code,
+but this is the intended target:
+
+**Keep — core to v2 (two change under the hood):**
+
+| Worker | Status in v2 |
+|---|---|
+| `chunking` | Unchanged — capture-pipeline spine. |
+| `knowledge` | Same worker, **A4 rewrites the guts** full-rebuild → incremental append-merge. |
+| `audio` | Listen's engine. Emits **N rotating variants** per topic, not one (locked design). |
+| `transcription` | **A2 promotes it** to a first-class *ingestion* front door (feeds chunking), not a grading feeder. |
+
+**Retire — superseded by the retrieval engine (they have no v2 caller):**
+
+| Worker | Why it dies |
+|---|---|
+| `test_generation` | v2 generates challenges **on demand** in `POST /retrieval/next` via `mode.generate()`. The batch pre-gen model is gone. |
+| `grading` | v2 evaluates **synchronously** in `POST /retrieval/attempt` via `mode.evaluate()`. See the voice decision below. |
+
+**Parked — deferred, leave dormant:** `fact_check` (flag-gated, not a live worker).
+
+**Add — for the launch queue:**
+
+- **B2 notifications / daily digest** — the habit engine (decay-driven "you're about to forget X",
+  next-best-action). This is a **new *kind* of worker: periodic, not reactive.** `base.py` only knows
+  how to drain a queue when an event arrives; the digest must fire on a schedule per user regardless
+  of events. **Do not bolt `sleep(86400)` onto the reactive loop.** Add **APScheduler** (async-native,
+  lightweight) as the periodic tick alongside the queue workers. See §5 for why not Celery.
+- **B1 recognition delivery** — the `recognition.py` seam already computes beneficiaries live but
+  delivers nothing (flag off). When it goes live it **folds into the notifications worker** (aggregate
+  + push); it is not a standalone worker.
+
+> **LOCKED — voice transcription is client-side.** A retrieval `/attempt` evaluates **synchronously**
+> and returns `outcome + calibration` in one response. That is incompatible with server-side Whisper
+> (can't transcribe-then-eval in one request). Resolution: **the client transcribes; `/attempt` only
+> ever receives text.** This keeps the retrieval contract synchronous and fast, retires the `grading`
+> worker, and makes voice purely a *capture* concern (`transcription` worker), never a *grading* one.
+> Do not add an async voice-eval path to retrieval.
 
 ---
 
@@ -118,10 +163,14 @@ reflects the state as of the design sessions, and memory drifts.
   swappable and stubbed in tests** (owner picks WhatsApp vs SMS; don't block on it). Google OAuth
   stays but the user still **enters + OTP-verifies a phone** — never infer it from Google. The phone
   field that contact discovery (later) hashes on lands here.
-- **A1 · Streaming + tiering.** Add `call_llm_stream()` (async generator) beside `call_llm`; expose
-  it over the API as SSE; extend the task→provider map with a **fast tier** (Haiku or deepseek) for
-  the light/high-frequency tasks. Keep the single-call-site rule. **No UI consumes streams yet** —
-  validate with tests / curl. Small; do it first; it de-risks everything.
+- **A1 · Streaming + tiering.** ✅ *done (2026-07-12).* `call_llm_stream()` + tiering (task→(provider,
+  model), `fast|standard|heavy`, per-task `LLM_<TASK>` override) live in `services/llm.py`; SSE on
+  the **tutor** (`POST /api/study/ask/stream`). **Streaming coverage is deliberately tutor-only** —
+  it's the only free-prose surface. The rest are **structured-JSON** (synthesis, question-gen,
+  research, grading — must parse the whole blob) or **record-bound** (retrieval `/next` + `/attempt`
+  parse the grade *before* writing the append-only attempt). Do **not** bolt token-streaming onto
+  those — partial JSON is un-renderable and it breaks the record flow. Deferred plan below (A4) and
+  in §5.
 - **A2 · Capture (give it its own short plan before diving — it's the meatiest).** Three pieces:
   *(a) audio ingestion* — add audio to the accepted types + a resource kind, enqueue
   `transcription` → `chunking` (reuse `transcription.py`); *(b) dump→auto-organize* — Voyage
@@ -139,6 +188,12 @@ reflects the state as of the design sessions, and memory drifts.
   note. The merge must still **reconcile/dedupe** and **respect the quarantine gate** (never merge a
   quarantined resource). Debounce bursty uploads (one synth per burst, not per file). "What changed"
   should be derivable. **This is the trickiest item for correctness — test the merge hard.**
+  **Streaming lands here (deferred from A1):** synthesis is the home for *progressive note delivery*
+  — stream the note body via `call_llm_stream` and broadcast deltas over the existing course
+  WebSocket (`course_updates`), so the client watches the note write itself. It's worker-driven (no
+  HTTP/SSE) and today the output is one JSON blob (`note`+`key_points`+`concepts`) parsed whole, so
+  reshape the prompt to **emit the prose body first (streamable), metadata after.** Not done in A1
+  because A4 rewrites this pipeline anyway — doing it earlier is throwaway.
 - **B1 · Recognition live** needs the §11 attribution/consumption layer *first*; then flip
   `ENABLE_RECOGNITION`. Warmth rules (aggregate passive / warm active) before it pings anyone.
 - **B3 · Next-best-action** is **one selector**, shared by the home (pull) and the decay digest
@@ -164,6 +219,11 @@ reflects the state as of the design sessions, and memory drifts.
 - **The `subject_weight` strings** are a placeholder B4 replaces — don't build features on them.
 - **Cost == speed.** Prefer pre-generation / caching / model-tiering / debouncing — each is
   *simultaneously* cheaper and faster. When choosing, take the double-paying option.
+- **Streaming is prose-only, on purpose.** `call_llm_stream` fits free-text surfaces (the tutor).
+  Structured-JSON surfaces (synthesis, question-gen, research, grading) must arrive whole, and
+  retrieval `/attempt` parses the grade *before* recording the append-only attempt — so streaming
+  challenge/feedback prose would change the mode `evaluate`/record flow. That's a **mode-Protocol
+  change → escalate (§7)**, not a solo reshape. Synthesis's progressive-note streaming is A4's job.
 - **North star: defeat the fluency illusion.** Retrieval > rereading; decay is the metric, **not
   streaks**; difficulty is a feature. Don't optimize retrieval surfaces for engagement over
   learning — that's the one thing the product refuses to do.
@@ -171,6 +231,16 @@ reflects the state as of the design sessions, and memory drifts.
   *contextual* UI call (asked on pretest / new / shaky, skipped on rapid review), not a data
   requirement. Attempts record with or without it; calibration is derived only when it's present.
   Don't gate `/attempt` on it or force it in a session flow.
+- **Hand-rolled workers over Celery — deliberate, not NIH.** The codebase is async end-to-end
+  (async SQLAlchemy, `worker_session`, `call_llm`); Celery's core is sync prefork and its async
+  story is a bolt-on. We already own retry / backoff / dead-letter / orphan-recovery in `base.py`
+  (~130 legible lines) on the Redis we already run. Celery would re-buy that with an opaque broker
+  layer + result backend + prefork footguns (`visibility_timeout`, lost tasks). **The one thing we
+  lack is periodic scheduling** — add **APScheduler** for the B2 digest tick, *not* Celery. Horizontal
+  scale is already available (`BRPOPLPUSH` is multi-consumer-safe → run `run_workers.py` on N boxes).
+  If we ever truly outgrow this, the async-first successors are **arq** (drop-in for `base.py`) or
+  **Temporal** (durable workflows) — reach for those before Celery. Escalate before adopting any
+  external task framework (§7).
 
 ---
 

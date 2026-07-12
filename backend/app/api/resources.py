@@ -24,6 +24,15 @@ from app.models.resource import Resource, ResourceFile, ResourceKind, SourceType
 from app.models.course import Topic
 from app.api.auth import get_current_user, verify_course_enrollment
 from app.models.user import User
+from app.services.capture import needs_review as capture_needs_review
+from app.services.capture_types import (
+    ALL_ACCEPTED_EXTS,
+    AUDIO_EXTS,
+    IMAGE_EXTS,
+    doc_resource_kinds,
+    ext_of,
+    kind_of,
+)
 from app.services.storage import storage_service
 from app.services.vision_transcribe import vision_transcribe
 from app.services.redis_client import redis_client
@@ -78,6 +87,8 @@ class ResourceResponse(BaseModel):
     quarantine_reason: Optional[str] = None
     ocr_confidence: Optional[float] = None
     ocr_provider: Optional[str] = None
+    # Honesty seam: derived (never stored) — "this was hard to read, check it?"
+    needs_review: bool = False
     files: List[ResourceFileResponse] = []
     created_at: str
     updated_at: str
@@ -134,6 +145,7 @@ def build_resource_response(resource: Resource, uploader_name: str) -> ResourceR
         if resource.ocr_confidence
         else None,
         ocr_provider=resource.ocr_provider,
+        needs_review=capture_needs_review(resource.ocr_confidence),
         files=files,
         created_at=resource.created_at.isoformat(),
         updated_at=resource.updated_at.isoformat(),
@@ -340,20 +352,19 @@ async def upload_resources_from_urls(
 
     await verify_course_enrollment(db, current_user.id, topic.course_id)
 
-    IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".tiff", ".bmp"}
-    DOC_EXTS = {".pdf", ".doc", ".docx"}
-
     image_files = []
     doc_files = []
+    audio_files = []
 
     for item in body.files:
-        ext = os.path.splitext(item.filename or item.url.split("?")[0])[1].lower()
-        if ext in IMAGE_EXTS:
-            image_files.append(item)
-        elif ext in DOC_EXTS:
+        ext = ext_of(item.filename, item.url)
+        kind = kind_of(ext)
+        if kind == "doc":
             doc_files.append(item)
+        elif kind == "audio":
+            audio_files.append(item)
         else:
-            # Unknown ext — treat as image (Cloudinary accepted it)
+            # Images, plus unknown exts (Cloudinary accepted it — treat as image)
             image_files.append(item)
 
     created_resources = []
@@ -397,9 +408,8 @@ async def upload_resources_from_urls(
     # ── Documents → 1 Resource each ────────────────────────────────────────────
     doc_meta: list[tuple] = []
     for item in doc_files:
-        ext = os.path.splitext(item.filename or "")[1].lower()
-        resource_type = ResourceKind.PDF if ext == ".pdf" else ResourceKind.DOCX
-        source_type = SourceType.PDF if ext == ".pdf" else SourceType.DOCX
+        ext = ext_of(item.filename, item.url)
+        resource_type, source_type = doc_resource_kinds(ext)
 
         doc_title = body.title or os.path.splitext(item.filename or "document")[0]
         doc_resource = Resource(
@@ -416,6 +426,26 @@ async def upload_resources_from_urls(
         db.add(doc_resource)
         created_resources.append(doc_resource)
         doc_meta.append((doc_resource, item.url, ext))
+
+    # ── Audio → 1 Resource each (lecture recording / voice note) ───────────────
+    audio_meta: list[tuple] = []
+    for item in audio_files:
+        ext = ext_of(item.filename, item.url)
+        audio_title = body.title or os.path.splitext(item.filename or "recording")[0]
+        audio_resource = Resource(
+            topic_id=topic.id,
+            uploaded_by=current_user.id,
+            title=audio_title,
+            content="",  # Filled by transcription worker (Whisper)
+            resource_type=ResourceKind.AUDIO,
+            file_url=item.url,
+            file_name=item.filename,
+            source_type=SourceType.AUDIO,
+            is_processed=False,
+        )
+        db.add(audio_resource)
+        created_resources.append(audio_resource)
+        audio_meta.append((audio_resource, item.url, ext))
 
     await db.commit()
 
@@ -451,6 +481,18 @@ async def upload_resources_from_urls(
             {
                 "type": "document",
                 "resource_id": str(doc_resource.id),
+                "file_url": file_url,
+                "file_ext": file_ext,
+                "course_id": course_id_str,
+            },
+        )
+
+    for audio_resource, file_url, file_ext in audio_meta:
+        await redis_client.enqueue_job(
+            "transcription",
+            {
+                "type": "audio",
+                "resource_id": str(audio_resource.id),
                 "file_url": file_url,
                 "file_ext": file_ext,
                 "course_id": course_id_str,
@@ -503,23 +545,22 @@ async def upload_resources(
 
     await verify_course_enrollment(db, current_user.id, topic.course_id)
 
-    IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".tiff", ".bmp"}
-    DOC_EXTS = {".pdf", ".doc", ".docx"}
-    ALLOWED = IMAGE_EXTS | DOC_EXTS
-
-    # Separate files by type
+    # Separate files by type (shared allow-list — images + docs + audio)
     image_files = []
     doc_files = []
+    audio_uploads = []
 
     for file in files:
         ext = os.path.splitext(file.filename or "")[1].lower()
-        if ext not in ALLOWED:
+        if ext not in ALL_ACCEPTED_EXTS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Unsupported file format: {ext}",
             )
         if ext in IMAGE_EXTS:
             image_files.append(file)
+        elif ext in AUDIO_EXTS:
+            audio_uploads.append(file)
         else:
             doc_files.append(file)
 
@@ -550,6 +591,19 @@ async def upload_resources(
         )
         created_resources.append(doc_resource)
         doc_meta.append((doc_resource, file_url, file_ext))
+
+    # ── Process audio → 1 Resource per file (Whisper transcription) ──
+    audio_meta: list[tuple] = []  # (resource, file_url, file_ext)
+    for file in audio_uploads:
+        audio_resource, file_url, file_ext = await _create_audio_resource(
+            db=db,
+            topic=topic,
+            user=current_user,
+            title=title,
+            file=file,
+        )
+        created_resources.append(audio_resource)
+        audio_meta.append((audio_resource, file_url, file_ext))
 
     await db.commit()
 
@@ -587,6 +641,18 @@ async def upload_resources(
             {
                 "type": "document",
                 "resource_id": str(doc_resource.id),
+                "file_url": file_url,
+                "file_ext": file_ext,
+                "course_id": course_id_str,
+            },
+        )
+
+    for audio_resource, file_url, file_ext in audio_meta:
+        await redis_client.enqueue_job(
+            "transcription",
+            {
+                "type": "audio",
+                "resource_id": str(audio_resource.id),
                 "file_url": file_url,
                 "file_ext": file_ext,
                 "course_id": course_id_str,
@@ -695,8 +761,7 @@ async def _create_document_resource(
     file_url = upload_result["url"]
 
     # Determine resource type and default source_type
-    resource_type = ResourceKind.PDF if ext == ".pdf" else ResourceKind.DOCX
-    source_type = SourceType.PDF if ext == ".pdf" else SourceType.DOCX
+    resource_type, source_type = doc_resource_kinds(ext)
 
     # Auto-generate title from filename if not provided
     if not title:
@@ -712,6 +777,50 @@ async def _create_document_resource(
         file_url=file_url,
         file_name=file.filename,
         source_type=source_type,
+        is_processed=False,
+    )
+    db.add(resource)
+
+    return resource, file_url, ext
+
+
+async def _create_audio_resource(
+    db: AsyncSession,
+    topic: Topic,
+    user: User,
+    title: Optional[str],
+    file: UploadFile,
+) -> tuple:
+    """
+    Create a single Resource for an audio file (lecture recording / voice note).
+
+    Uploads the file to Cloudinary; Whisper transcription is enqueued by the
+    caller after db.commit().
+
+    Returns:
+        (Resource, file_url, file_ext)
+    """
+    file_content = await file.read()
+    ext = os.path.splitext(file.filename or "")[1].lower()
+
+    upload_result = await storage_service.upload_file(
+        file=file_content,
+        folder=f"notesos/{topic.course_id}/{topic.id}",
+    )
+    file_url = upload_result["url"]
+
+    if not title:
+        title = os.path.splitext(file.filename or "recording")[0]
+
+    resource = Resource(
+        topic_id=topic.id,
+        uploaded_by=user.id,
+        title=title,
+        content="",  # Filled by transcription worker (Whisper)
+        resource_type=ResourceKind.AUDIO,
+        file_url=file_url,
+        file_name=file.filename,
+        source_type=SourceType.AUDIO,
         is_processed=False,
     )
     db.add(resource)
@@ -814,6 +923,73 @@ async def update_resource(
 
     # Invalidate list cache and single resource cache
     await cache.delete_pattern(f"notesos:v1:resources:topic:{resource.topic_id}:")
+    await cache.delete(resource_key(resource_id))
+
+    return build_resource_response(resource, current_user.full_name)
+
+
+class ResourceMove(BaseModel):
+    topic_id: str
+
+
+@router.patch("/resources/{resource_id}/move", response_model=ResourceResponse)
+async def move_resource(
+    resource_id: str,
+    body: ResourceMove,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Move a resource to another topic in the same course (the capture "tweak").
+
+    Auto-organize files by default; this is the one-drag fix when it guessed
+    wrong. Uploader-only (same rule as edit/delete). Both topics' notes go stale,
+    so synthesis is re-enqueued for each.
+    """
+    resource_query = (
+        select(Resource)
+        .options(selectinload(Resource.files))
+        .where(Resource.id == uuid.UUID(resource_id))
+    )
+    resource_result = await db.execute(resource_query)
+    resource = resource_result.scalar_one_or_none()
+
+    if not resource:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found"
+        )
+    if resource.uploaded_by != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the uploader can move this resource",
+        )
+
+    source_topic = await db.get(Topic, resource.topic_id)
+    target_topic = await db.get(Topic, uuid.UUID(body.topic_id))
+    if not target_topic:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Target topic not found"
+        )
+    if target_topic.course_id != source_topic.course_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Target topic must be in the same course",
+        )
+
+    old_topic_id = str(resource.topic_id)
+    resource.topic_id = target_topic.id
+    await db.commit()
+    await db.refresh(resource)
+
+    # Both notes are now stale — re-synthesize each (merge gate re-runs inside).
+    if settings.ENABLE_KNOWLEDGE_SYNTHESIS:
+        course_id_str = str(target_topic.course_id)
+        for tid in (old_topic_id, str(target_topic.id)):
+            await redis_client.enqueue_job(
+                "knowledge", {"topic_id": tid, "course_id": course_id_str}
+            )
+
+    await cache.delete_pattern(f"notesos:v1:resources:topic:{old_topic_id}:")
+    await cache.delete_pattern(f"notesos:v1:resources:topic:{target_topic.id}:")
     await cache.delete(resource_key(resource_id))
 
     return build_resource_response(resource, current_user.full_name)

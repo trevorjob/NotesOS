@@ -13,6 +13,7 @@ from fastapi import (
     Query,
     Request,
 )
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from pydantic import BaseModel
@@ -331,6 +332,40 @@ async def ask_study_question(
     )
 
     return AskQuestionResponse(**result)
+
+
+@router.post("/study/ask/stream")
+async def ask_study_question_stream(
+    request: AskQuestionRequest,
+    course_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Ask a study question, streaming the answer token-by-token over SSE.
+
+    Emits ``data: {json}`` events: a ``meta`` frame (conversation_id + sources)
+    first, then ``token`` frames, then a final ``done`` frame. The full answer is
+    persisted server-side exactly as the blocking endpoint does.
+    """
+    await verify_course_enrollment(db, current_user.id, uuid.UUID(course_id))
+
+    async def event_source():
+        async for event in study_agent.ask_question_stream(
+            db=db,
+            user_id=str(current_user.id),
+            course_id=course_id,
+            question=request.question,
+            topic_id=request.topic_id,
+            conversation_id=request.conversation_id,
+            personality=current_user.study_personality,
+        ):
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/study/conversations", response_model=List[ConversationResponse])

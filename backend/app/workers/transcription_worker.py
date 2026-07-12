@@ -2,12 +2,13 @@
 NotesOS - Transcription Worker
 Background worker that handles AI text extraction for uploaded files.
 
-Offloads GPT-4o Vision (images) and Tesseract/mammoth (PDFs/DOCX) from the
-HTTP request cycle so uploads return immediately with 201.
+Offloads GPT-4o Vision (images), Tesseract/mammoth (PDFs/DOCX), and Whisper
+(audio) from the HTTP request cycle so uploads return immediately with 201.
 
 Job shape:
   Image:    {"type": "image",    "resource_id": str, "image_urls": [str], "course_id": str}
   Document: {"type": "document", "resource_id": str, "file_url": str,     "file_ext": str, "course_id": str}
+  Audio:    {"type": "audio",    "resource_id": str, "file_url": str,     "file_ext": str, "course_id": str}
 """
 
 import asyncio
@@ -49,7 +50,7 @@ async def process_transcription_job(job_data: dict) -> None:
     resource_id = job_data.get("resource_id")
     course_id = job_data.get("course_id", "")
 
-    if not resource_id or job_type not in ("image", "document"):
+    if not resource_id or job_type not in ("image", "document", "audio"):
         print(f"[TRANSCRIPTION WORKER] Invalid job data: {job_data}")
         return
 
@@ -86,6 +87,25 @@ async def process_transcription_job(job_data: dict) -> None:
                 resource.content = transcript
                 resource.ocr_provider = "gpt-vision"
                 resource.ocr_cleaned = False
+                # Honesty seam: score the transcript's own uncertainty markers so a
+                # blurry scan is flagged for review, never silently accepted.
+                from app.services.capture import estimate_confidence
+
+                resource.ocr_confidence = estimate_confidence(transcript)
+
+            elif job_type == "audio":
+                file_url = job_data.get("file_url", "")
+                if not file_url:
+                    print(
+                        f"[TRANSCRIPTION WORKER] Missing file_url for audio resource {resource_id}"
+                    )
+                    return
+                from app.services.transcription import transcription_service
+
+                whisper_result = await transcription_service.transcribe_audio(
+                    file_url, file_ext=job_data.get("file_ext", "")
+                )
+                resource.content = whisper_result["text"]
 
             else:  # document
                 file_url = job_data.get("file_url", "")

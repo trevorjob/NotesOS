@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.models import Course, CourseEnrollment, User
 from app.api.auth import hash_password
+from tests.conftest import unique_phone
 
 
 async def _seed_user_and_course(session):
@@ -22,6 +23,7 @@ async def _seed_user_and_course(session):
         email=f"enr_{uuid.uuid4().hex[:10]}@test.dev",
         full_name="Enrolment Tester",
         password_hash=hash_password("password123"),
+        phone=unique_phone(),
     )
     session.add(user)
     await session.flush()
@@ -49,6 +51,7 @@ async def test_same_course_different_users_allowed(db_session):
         email=f"enr_{uuid.uuid4().hex[:10]}@test.dev",
         full_name="Second Tester",
         password_hash=hash_password("password123"),
+        phone=unique_phone(),
     )
     db_session.add(user_b)
     await db_session.flush()

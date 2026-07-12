@@ -14,6 +14,7 @@ from app.models import Concept, ConceptState, Course, RetrievalAttempt, Topic, U
 from app.services.retrieval import engine
 from app.services.retrieval.modes import ModeContext
 from app.services.retrieval.teach_mode import TeachMode
+from tests.conftest import unique_phone
 
 
 class StubTeachMode(TeachMode):
@@ -61,7 +62,7 @@ async def test_blank_is_a_lapse():
 
 
 async def test_teach_drives_engine(db_session):
-    user = User(email=f"u_{uuid.uuid4().hex[:8]}@t.dev", full_name="U", password_hash="x")
+    user = User(email=f"u_{uuid.uuid4().hex[:8]}@t.dev", full_name="U", password_hash="x", phone=unique_phone())
     db_session.add(user)
     await db_session.flush()
     course = Course(code="C1", name="C", created_by=user.id)

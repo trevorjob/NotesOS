@@ -565,7 +565,8 @@ The screens display these system enums — design needs a treatment for each val
 - **User-manageable:** topics (rename / merge / move resources between), resources (add / delete /
   move), a course's name+term, your own terms, your settings. **Retrieval attempts are append-only**
   — history is never rewritten.
-- **Accepted uploads:** text, PDF, DOC/DOCX, images (jpg/jpeg/png/webp/tiff/bmp), audio. Images are
+- **Accepted uploads:** text, PDF, DOC/DOCX, Markdown/plain-text files (md/txt), images
+  (jpg/jpeg/png/webp/tiff/bmp), audio (mp3/m4a/wav/webm/ogg/aac/flac). Images are
   compressed (→ webp) on the way in; **per-file size and per-upload count limits apply** — there's a
   clear over-limit state to handle.
 - **No roles, no admins, no permissions tiers.** Everyone in a course is equal; access is purely

@@ -15,6 +15,7 @@ from app.models import Concept, ConceptState, Course, RetrievalAttempt, Topic, U
 from app.services.retrieval import engine
 from app.services.retrieval.modes import Challenge, ModeContext
 from app.services.retrieval.quiz_mode import QuizMode, score_to_grade
+from tests.conftest import unique_phone
 
 
 class StubQuizMode(QuizMode):
@@ -82,7 +83,7 @@ async def test_short_answer_uses_grader_score():
 
 
 async def test_quiz_mode_drives_engine(db_session):
-    user = User(email=f"u_{uuid.uuid4().hex[:8]}@t.dev", full_name="U", password_hash="x")
+    user = User(email=f"u_{uuid.uuid4().hex[:8]}@t.dev", full_name="U", password_hash="x", phone=unique_phone())
     db_session.add(user)
     await db_session.flush()
     course = Course(code="C1", name="C", created_by=user.id)

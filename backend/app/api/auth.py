@@ -36,20 +36,46 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 class RegisterRequest(BaseModel):
-    email: EmailStr
+    # Phone is the primary identity — required and OTP-verified.
+    phone: str
     password: str
     full_name: str
+    # Email is now optional (kept unique-when-present for OAuth linking).
+    email: Optional[EmailStr] = None
     study_personality: Optional[dict] = None
     # Proximity-check signals — all optional (a US fresher may know none of them).
     school_name: Optional[str] = None
     program: Optional[str] = None
     entry_year: Optional[int] = None
-    phone: Optional[str] = None
+
+
+class OtpPendingResponse(BaseModel):
+    """Returned by register / oauth-register — no tokens until the phone verifies."""
+    requires_otp: bool = True
+    phone: str
+
+
+class VerifyOtpRequest(BaseModel):
+    phone: str
+    code: str
+
+
+class ResendOtpRequest(BaseModel):
+    phone: str
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    phone: str
     password: str
+
+
+class OAuthRegisterRequest(BaseModel):
+    """Completes a Google sign-up by attaching + verifying a phone."""
+    oauth_token: str
+    phone: str
+    school_name: Optional[str] = None
+    program: Optional[str] = None
+    entry_year: Optional[int] = None
 
 
 class TokenResponse(BaseModel):
@@ -65,15 +91,16 @@ class RefreshRequest(BaseModel):
 
 class UserResponse(BaseModel):
     id: str
-    email: str
+    phone: str
+    phone_verified: bool
+    email: Optional[str] = None
     full_name: str
-    avatar_url: Optional[str]
-    study_personality: Optional[dict]
+    avatar_url: Optional[str] = None
+    study_personality: Optional[dict] = None
     university: Optional[str] = None
     school_id: Optional[str] = None
     program: Optional[str] = None
     entry_year: Optional[int] = None
-    phone: Optional[str] = None
 
 
 class PersonalityUpdate(BaseModel):
@@ -106,7 +133,8 @@ class ProfileUpdate(BaseModel):
     school_name: Optional[str] = None
     program: Optional[str] = None
     entry_year: Optional[int] = None
-    phone: Optional[str] = None
+    # Phone is the primary identity and is intentionally NOT editable here — a phone
+    # change must re-run OTP verification, not slip through a profile PATCH.
 
 
 class ChangePasswordRequest(BaseModel):
@@ -123,6 +151,8 @@ def serialize_user(user: User) -> dict:
     """Single source of truth for the user payload returned across auth endpoints."""
     return {
         "id": str(user.id),
+        "phone": user.phone,
+        "phone_verified": user.phone_verified,
         "email": user.email,
         "full_name": user.full_name,
         "avatar_url": user.avatar_url,
@@ -131,8 +161,22 @@ def serialize_user(user: User) -> dict:
         "school_id": str(user.school_id) if user.school_id else None,
         "program": user.program,
         "entry_year": user.entry_year,
-        "phone": user.phone,
     }
+
+
+def normalize_phone(raw: str) -> str:
+    """Trim and strip spaces/dashes/parens; preserve a leading '+'.
+
+    Intentionally light — international formats vary and we don't want to reject
+    a valid number. Just enough to keep the unique index from splitting on cosmetic
+    differences.
+    """
+    stripped = (raw or "").strip()
+    plus = stripped.startswith("+")
+    digits = "".join(ch for ch in stripped if ch.isdigit())
+    if not digits:
+        return ""
+    return ("+" if plus else "") + digits
 
 
 def hash_password(password: str) -> str:
@@ -169,6 +213,53 @@ async def create_refresh_token(user_id: uuid.UUID, db: AsyncSession) -> str:
     await db.commit()
 
     return token
+
+
+async def issue_otp(user: User, db: AsyncSession) -> None:
+    """Generate a fresh OTP, store its hash + expiry on the user, and send it."""
+    from app.services import otp as otp_service
+
+    code = otp_service.generate_code()
+    user.phone_otp = otp_service.hash_code(code)
+    user.phone_otp_expires = otp_service.code_expiry()
+    await db.commit()
+    await otp_service.send_otp(user.phone, code)
+
+
+OAUTH_REGISTER_PURPOSE = "oauth_register"
+
+
+def create_oauth_register_token(google_id: str, email: str, name: str, picture: Optional[str]) -> str:
+    """Short-lived token carrying a verified Google identity to the phone step."""
+    expire = datetime.utcnow() + timedelta(
+        minutes=settings.OAUTH_REGISTER_TOKEN_EXPIRE_MINUTES
+    )
+    payload = {
+        "purpose": OAUTH_REGISTER_PURPOSE,
+        "google_id": google_id,
+        "email": email,
+        "name": name,
+        "picture": picture,
+        "exp": expire,
+    }
+    return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
+
+
+def decode_oauth_register_token(token: str) -> dict:
+    """Validate an oauth-register token; raise 400 on tamper/expiry/wrong purpose."""
+    invalid = HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Invalid or expired OAuth registration token.",
+    )
+    try:
+        payload = jwt.decode(
+            token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM]
+        )
+    except JWTError:
+        raise invalid
+    if payload.get("purpose") != OAUTH_REGISTER_PURPOSE:
+        raise invalid
+    return payload
 
 
 async def get_current_user(
@@ -228,64 +319,119 @@ async def verify_course_enrollment(
 # =============================================================================
 
 
+async def _resolve_school_id(db: AsyncSession, school_name: Optional[str]):
+    """Canonicalise a typed school name to a row id (created if new)."""
+    if not school_name:
+        return None
+    from app.services.school import find_or_create_school
+
+    school = await find_or_create_school(db, school_name)
+    return school.id if school else None
+
+
 @router.post(
-    "/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED
+    "/register", response_model=OtpPendingResponse, status_code=status.HTTP_201_CREATED
 )
-async def register(request: RegisterRequest, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
-    """Register a new user account."""
-    # Check if email already exists
-    result = await db.execute(select(User).where(User.email == request.email))
-    if result.scalar_one_or_none():
+async def register(request: RegisterRequest, db: AsyncSession = Depends(get_db)):
+    """Register a new user (phone-primary). Sends an OTP; returns no tokens until
+    the phone is verified via /verify-otp."""
+    phone_value = normalize_phone(request.phone)
+    if not phone_value:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A valid phone number is required.",
         )
 
-    # Phone is unique-when-present; pre-check for a friendly error instead of a
-    # 500 from the unique index.
-    phone_value = (request.phone.strip() if request.phone else None) or None
-    if phone_value:
-        existing_phone = await db.execute(select(User).where(User.phone == phone_value))
-        if existing_phone.scalar_one_or_none():
+    # Email is optional but unique-when-present.
+    email_value = request.email or None
+    if email_value:
+        existing_email = await db.execute(select(User).where(User.email == email_value))
+        if existing_email.scalar_one_or_none():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Phone number already registered",
+                detail="Email already registered",
             )
 
-    # Resolve the typed school to a canonical row (created if new).
-    school_id = None
-    if request.school_name:
-        from app.services.school import find_or_create_school
-
-        school = await find_or_create_school(db, request.school_name)
-        school_id = school.id if school else None
-
-    # Create user
-    user = User(
-        email=request.email,
-        password_hash=hash_password(request.password),
-        full_name=request.full_name,
-        study_personality=request.study_personality
-        or {
-            "tone": "encouraging",
-            "emoji_usage": "moderate",
-            "explanation_style": "detailed",
-        },
-        school_id=school_id,
-        program=request.program,
-        entry_year=request.entry_year,
-        phone=phone_value,
+    # Phone conflict handling: a VERIFIED holder blocks re-use; an UNVERIFIED stale
+    # registration is overwritten so a typo can't lock a number forever.
+    existing_phone_res = await db.execute(
+        select(User).where(User.phone == phone_value)
     )
-    db.add(user)
+    existing = existing_phone_res.scalar_one_or_none()
+    if existing and existing.phone_verified:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Phone number already registered",
+        )
+
+    school_id = await _resolve_school_id(db, request.school_name)
+    personality = request.study_personality or {
+        "tone": "encouraging",
+        "emoji_usage": "moderate",
+        "explanation_style": "detailed",
+    }
+
+    if existing:
+        # Re-registration of an unverified number — refresh its details.
+        user = existing
+        user.email = email_value
+        user.password_hash = hash_password(request.password)
+        user.full_name = request.full_name
+        user.study_personality = personality
+        user.school_id = school_id
+        user.program = request.program
+        user.entry_year = request.entry_year
+    else:
+        user = User(
+            phone=phone_value,
+            phone_verified=False,
+            email=email_value,
+            password_hash=hash_password(request.password),
+            full_name=request.full_name,
+            study_personality=personality,
+            school_id=school_id,
+            program=request.program,
+            entry_year=request.entry_year,
+        )
+        db.add(user)
     await db.flush()
 
+    await issue_otp(user, db)
+
+    return {"requires_otp": True, "phone": user.phone}
+
+
+@router.post("/verify-otp", response_model=TokenResponse)
+async def verify_otp(request: VerifyOtpRequest, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
+    """Verify the OTP for a phone, mark it verified, and issue tokens."""
+    from app.services import otp as otp_service
+
+    phone_value = normalize_phone(request.phone)
+    result = await db.execute(select(User).where(User.phone == phone_value))
+    user = result.scalar_one_or_none()
+
+    if not user or not otp_service.verify_code(
+        request.code, user.phone_otp, user.phone_otp_expires
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired verification code.",
+        )
+
+    first_verification = not user.phone_verified
+    user.phone_verified = True
+    user.phone_otp = None
+    user.phone_otp_expires = None
+    user.last_login = datetime.utcnow()
     await db.commit()
     await db.refresh(user)
 
-    # Welcome email — runs after response is sent, never blocks registration
-    from app.services.email import send_welcome_email
-    background_tasks.add_task(send_welcome_email, user.email, user.full_name)
+    # Welcome email only for users who provided one, on first verification.
+    if first_verification and user.email:
+        from app.services.email import send_welcome_email
 
-    # Generate tokens
+        background_tasks.add_task(send_welcome_email, user.email, user.full_name)
+
     access_token = create_access_token(data={"sub": str(user.id)})
     refresh_token = await create_refresh_token(user.id, db)
 
@@ -297,16 +443,37 @@ async def register(request: RegisterRequest, background_tasks: BackgroundTasks, 
     }
 
 
+@router.post("/otp/resend", status_code=status.HTTP_200_OK)
+async def resend_otp(request: ResendOtpRequest, db: AsyncSession = Depends(get_db)):
+    """Re-issue an OTP for an unverified phone. Always 200 (no enumeration)."""
+    phone_value = normalize_phone(request.phone)
+    result = await db.execute(select(User).where(User.phone == phone_value))
+    user = result.scalar_one_or_none()
+    if user and not user.phone_verified:
+        await issue_otp(user, db)
+    return {"message": "If that number is pending verification, a code has been sent."}
+
+
 @router.post("/login", response_model=TokenResponse)
 async def login(request: LoginRequest, db: AsyncSession = Depends(get_db)):
-    """Login with email and password."""
-    result = await db.execute(select(User).where(User.email == request.email))
+    """Login with phone and password."""
+    phone_value = normalize_phone(request.phone)
+    result = await db.execute(select(User).where(User.phone == phone_value))
     user = result.scalar_one_or_none()
 
-    if not user or not verify_password(request.password, user.password_hash):
+    if not user or not user.password_hash or not verify_password(
+        request.password, user.password_hash
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
+            detail="Incorrect phone or password",
+        )
+
+    if not user.phone_verified:
+        # Nudge the client toward the OTP flow rather than a dead end.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Phone not verified",
         )
 
     # Update last login
@@ -440,8 +607,6 @@ async def update_profile(
         current_user.program = data.program.strip() or None
     if data.entry_year is not None:
         current_user.entry_year = data.entry_year
-    if data.phone is not None:
-        current_user.phone = data.phone.strip() or None
     await db.commit()
     return serialize_user(current_user)
 
@@ -604,51 +769,120 @@ async def google_callback(
             detail="Google account missing required fields.",
         )
 
-    # Find or create user
+    # Existing user? Log them straight in. Match by google_id, then by email.
     user: Optional[User] = None
-
-    # Try by google_id first
     result = await db.execute(select(User).where(User.google_id == google_id))
     user = result.scalar_one_or_none()
 
     if not user:
-        # Try by email (link existing account)
         result = await db.execute(select(User).where(User.email == email))
         user = result.scalar_one_or_none()
         if user:
             user.google_id = google_id
             if avatar_url and not user.avatar_url:
                 user.avatar_url = avatar_url
-        else:
-            user = User(
-                email=email,
-                full_name=full_name,
-                google_id=google_id,
-                avatar_url=avatar_url,
-                password_hash=None,
-            )
-            db.add(user)
-            await db.flush()
+            await db.commit()
+            await db.refresh(user)
 
-    user.last_login = datetime.utcnow()
-    await db.commit()
-    await db.refresh(user)
+    if user:
+        # A returning user must still have an OTP-verified phone; if a prior account
+        # somehow lacks one, route it through phone collection rather than logging in.
+        if not user.phone_verified:
+            return {
+                "requires_phone": True,
+                "oauth_token": create_oauth_register_token(
+                    google_id, email, full_name, avatar_url
+                ),
+                "email": email,
+                "full_name": full_name,
+                "avatar_url": avatar_url,
+            }
+        user.last_login = datetime.utcnow()
+        await db.commit()
+        await db.refresh(user)
+        access_token = create_access_token(data={"sub": str(user.id)})
+        refresh_token = await create_refresh_token(user.id, db)
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "bearer",
+            "user": serialize_user(user),
+        }
 
-    access_token = create_access_token(data={"sub": str(user.id)})
-    refresh_token = await create_refresh_token(user.id, db)
-
+    # New identity — never infer a phone from Google. Hand back a short-lived intent
+    # token; the client collects a phone and calls /oauth/register.
     return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "token_type": "bearer",
-        "user": {
-            "id": str(user.id),
-            "email": user.email,
-            "full_name": user.full_name,
-            "avatar_url": user.avatar_url,
-            "study_personality": user.study_personality,
-        },
+        "requires_phone": True,
+        "oauth_token": create_oauth_register_token(
+            google_id, email, full_name, avatar_url
+        ),
+        "email": email,
+        "full_name": full_name,
+        "avatar_url": avatar_url,
     }
+
+
+@router.post(
+    "/oauth/register", response_model=OtpPendingResponse, status_code=status.HTTP_201_CREATED
+)
+async def oauth_register(request: OAuthRegisterRequest, db: AsyncSession = Depends(get_db)):
+    """Attach + OTP-verify a phone to a Google identity, completing sign-up."""
+    intent = decode_oauth_register_token(request.oauth_token)
+    google_id = intent["google_id"]
+    email_value = intent.get("email") or None
+
+    phone_value = normalize_phone(request.phone)
+    if not phone_value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A valid phone number is required.",
+        )
+
+    # Phone conflict: verified holder blocks; unverified stale row is reused.
+    existing_res = await db.execute(select(User).where(User.phone == phone_value))
+    existing = existing_res.scalar_one_or_none()
+    if existing and existing.phone_verified:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Phone number already registered",
+        )
+
+    # Reuse an existing account for this Google identity if one is already pending.
+    gid_res = await db.execute(select(User).where(User.google_id == google_id))
+    user = gid_res.scalar_one_or_none() or existing
+
+    school_id = await _resolve_school_id(db, request.school_name)
+
+    if user:
+        user.google_id = google_id
+        user.phone = phone_value
+        user.phone_verified = False
+        if email_value and not user.email:
+            user.email = email_value
+        if request.program is not None:
+            user.program = request.program
+        if request.entry_year is not None:
+            user.entry_year = request.entry_year
+        if school_id is not None:
+            user.school_id = school_id
+    else:
+        user = User(
+            phone=phone_value,
+            phone_verified=False,
+            email=email_value,
+            google_id=google_id,
+            full_name=intent.get("name") or email_value or phone_value,
+            avatar_url=intent.get("picture"),
+            password_hash=None,
+            school_id=school_id,
+            program=request.program,
+            entry_year=request.entry_year,
+        )
+        db.add(user)
+    await db.flush()
+
+    await issue_otp(user, db)
+    return {"requires_otp": True, "phone": user.phone}
 
 
 @router.patch("/me/preferences")

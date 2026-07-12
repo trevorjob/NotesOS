@@ -113,6 +113,7 @@ from app.api.schools import router as schools_router
 from app.api.terms import router as terms_router
 from app.api.discovery import router as discovery_router
 from app.api.retrieval import router as retrieval_router
+from app.api.capture import router as capture_router
 from app.services.websocket import connection_manager
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
@@ -129,6 +130,7 @@ app.include_router(schools_router, prefix="/api/schools", tags=["schools"])
 app.include_router(terms_router, prefix="/api/terms", tags=["terms"])
 app.include_router(discovery_router, prefix="/api/discovery", tags=["discovery"])
 app.include_router(retrieval_router, tags=["retrieval"])  # self-prefixed /api/retrieval
+app.include_router(capture_router, prefix="/api", tags=["capture"])
 
 
 # WebSocket endpoint for user-scoped events (test generation, personal notifications)
