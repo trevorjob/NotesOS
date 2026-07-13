@@ -144,9 +144,11 @@ async def test_quarantined_resource_visible_only_to_uploader(client, register_us
     )
     course_id = course_resp.json()["course"]["id"]
     topic_resp = await client.post(
-        f"/api/courses/{course_id}/topics", headers=owner["headers"], json={"title": "Cells"}
+        f"/api/courses/{course_id}/topics",
+        headers=owner["headers"],
+        json={"course_id": course_id, "title": "Cells", "order_index": 0},
     )
-    topic_id = topic_resp.json()["topic"]["id"]
+    topic_id = topic_resp.json()["id"]
 
     classmate = await register_user()
     await client.post("/api/courses/join", headers=classmate["headers"], json={"course_id": course_id})

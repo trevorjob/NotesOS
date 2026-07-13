@@ -459,44 +459,11 @@ async def get_course(
     return payload
 
 
-@router.post("/{course_id}/topics", status_code=status.HTTP_201_CREATED)
-async def create_topic(
-    course_id: str,
-    request: TopicCreate,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Create a new topic in a course."""
-    enrollment = await db.execute(
-        select(CourseEnrollment)
-        .where(CourseEnrollment.user_id == current_user.id)
-        .where(CourseEnrollment.course_id == course_id)
-    )
-    if not enrollment.scalar_one_or_none():
-        raise HTTPException(status_code=403, detail="Not enrolled in this course")
-
-    topic = Topic(
-        course_id=course_id,
-        title=request.title,
-        week_number=request.week_number,
-        order_index=request.order_index,
-    )
-    db.add(topic)
-    await db.commit()
-    await db.refresh(topic)
-
-    # Invalidate course + topic list caches + the user's courses list (topics are now embedded)
-    await cache.delete(course_key(course_id))
-    await cache.delete(topics_list_key(course_id))
-    await cache.delete(courses_list_key(str(current_user.id)))
-
-    return {
-        "topic": {
-            "id": str(topic.id),
-            "title": topic.title,
-            "week_number": topic.week_number,
-        }
-    }
+# NOTE: single-topic creation lives on the topics router
+# (POST /api/courses/{course_id}/topics in api/topics.py). A duplicate route here
+# used to shadow it — registration order made this router win — while dropping
+# `description` and skipping classmates' cache invalidation. Removed 2026-07-12;
+# only the batch endpoint below is courses-router territory.
 
 
 @router.get("/{course_id}/summary")

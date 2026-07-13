@@ -27,10 +27,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import get_current_user, verify_course_enrollment
 from app.database import get_db
+from app.models.course import Topic
 from app.models.retrieval import Concept
 from app.models.user import User
 from app.services.redis_client import redis_client
-from app.services.retrieval import engine, recognition, registry
+from app.services.retrieval import engine, recap, recognition, registry, session
 from app.services.retrieval.modes import Challenge, ModeContext
 
 router = APIRouter(prefix="/api/retrieval", tags=["retrieval"])
@@ -86,6 +87,51 @@ class ModeInfo(BaseModel):
     subject_weight: float
 
 
+class SessionInfo(BaseModel):
+    started_at: str
+    ended_at: str
+    attempt_count: int
+    concept_ids: list[str]
+    modes: dict[str, int]
+
+
+class RecapNextRequest(BaseModel):
+    topic_id: uuid.UUID
+
+
+class RecapNextResponse(BaseModel):
+    challenge_id: str
+    topic_id: str
+    topic_title: str
+    prompt: str
+    concept_count: int
+
+
+class RecapAttemptRequest(BaseModel):
+    challenge_id: str
+    response: Any = None
+    predicted_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+
+
+class RecapConceptOutcome(BaseModel):
+    concept_id: str
+    concept_text: str
+    score: float
+    grade: str
+    feedback: Optional[str]
+    covered: list
+    missed: list
+    due: Optional[str]
+
+
+class RecapAttemptResponse(BaseModel):
+    mode: str
+    topic_id: str
+    concept_count: int
+    mean_score: float
+    outcomes: list[RecapConceptOutcome]
+
+
 # ── Challenge store (server-side, opaque handoff between the two requests) ─────
 
 def _challenge_key(challenge_id: str) -> str:
@@ -115,6 +161,36 @@ async def _load_challenge(challenge_id: str) -> Optional[dict]:
 async def _drop_challenge(challenge_id: str) -> None:
     client = await redis_client.get_client()
     await client.delete(_challenge_key(challenge_id))
+
+
+# Recap holds a *set* of concepts (not one), so it gets its own record shape under a
+# distinct key namespace — same opaque-handoff pattern as the single-concept store.
+def _recap_key(challenge_id: str) -> str:
+    return f"retrieval:recap:{challenge_id}"
+
+
+async def _store_recap(user_id, topic_id, challenge: recap.RecapChallenge) -> str:
+    challenge_id = uuid.uuid4().hex
+    record = {
+        "user_id": str(user_id),
+        "topic_id": str(topic_id),
+        "prompt": challenge.prompt,
+        "concept_ids": challenge.concept_ids,
+    }
+    client = await redis_client.get_client()
+    await client.set(_recap_key(challenge_id), json.dumps(record), ex=_CHALLENGE_TTL_SEC)
+    return challenge_id
+
+
+async def _load_recap(challenge_id: str) -> Optional[dict]:
+    client = await redis_client.get_client()
+    raw = await client.get(_recap_key(challenge_id))
+    return json.loads(raw) if raw else None
+
+
+async def _drop_recap(challenge_id: str) -> None:
+    client = await redis_client.get_client()
+    await client.delete(_recap_key(challenge_id))
 
 
 def _sanitize(payload: Optional[dict]) -> dict:
@@ -246,6 +322,114 @@ async def list_modes(
         ModeInfo(key=key, subject_weight=registry.get_mode(key).subject_weight(subject_type))
         for key in registry.available_modes()
     ]
+
+
+@router.get("/sessions", response_model=list[SessionInfo])
+async def list_sessions(
+    course_id: Optional[uuid.UUID] = None,
+    topic_id: Optional[uuid.UUID] = None,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """This user's study sessions, newest-first — derived from the attempt log.
+
+    There is no session table: a session is a run of attempts with no ≥15-min idle
+    gap. Optionally scoped to a course or topic.
+    """
+    sessions = await session.get_sessions(
+        db, user.id, course_id=course_id, topic_id=topic_id
+    )
+    return [
+        SessionInfo(
+            started_at=s.started_at.isoformat(),
+            ended_at=s.ended_at.isoformat(),
+            attempt_count=s.attempt_count,
+            concept_ids=s.concept_ids,
+            modes=s.modes,
+        )
+        for s in sessions
+    ]
+
+
+@router.post("/recap/next", response_model=RecapNextResponse)
+async def recap_next(
+    body: RecapNextRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Open a recap of the last session in a topic: one uncued free-recall prompt."""
+    topic = await db.get(Topic, body.topic_id)
+    if topic is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "topic not found")
+    await verify_course_enrollment(db, user.id, topic.course_id)
+
+    try:
+        challenge = await recap.build_recap(db, user.id, topic_id=body.topic_id)
+    except recap.NoRecapAvailable as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc))
+
+    challenge_id = await _store_recap(user.id, body.topic_id, challenge)
+    return RecapNextResponse(
+        challenge_id=challenge_id,
+        topic_id=str(body.topic_id),
+        topic_title=challenge.topic_title,
+        prompt=challenge.prompt,
+        concept_count=len(challenge.concept_ids),
+    )
+
+
+@router.post("/recap/attempt", response_model=RecapAttemptResponse)
+async def recap_attempt(
+    body: RecapAttemptRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Grade one free-recall response into an append-only attempt per concept."""
+    record = await _load_recap(body.challenge_id)
+    if record is None:
+        raise HTTPException(status.HTTP_410_GONE, "recap expired or not found")
+    if record["user_id"] != str(user.id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "not your recap")
+
+    topic_id = uuid.UUID(record["topic_id"])
+    topic = await db.get(Topic, topic_id)
+    if topic is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "topic no longer exists")
+    await verify_course_enrollment(db, user.id, topic.course_id)
+
+    results = await recap.grade_recap(
+        db,
+        user.id,
+        concept_ids=record["concept_ids"],
+        response=body.response,
+        prompt=record.get("prompt"),
+        predicted_confidence=body.predicted_confidence,
+    )
+    await _drop_recap(body.challenge_id)
+
+    outcomes = [
+        RecapConceptOutcome(
+            concept_id=str(r.concept.id),
+            concept_text=r.concept.text,
+            score=r.result.outcome.score,
+            grade=r.result.outcome.grade,
+            feedback=r.result.outcome.feedback,
+            covered=r.result.outcome.detail.get("covered", []),
+            missed=r.result.outcome.detail.get("missed", []),
+            due=r.result.state.due.isoformat() if r.result.state.due else None,
+        )
+        for r in results
+    ]
+    mean_score = (
+        sum(o.score for o in outcomes) / len(outcomes) if outcomes else 0.0
+    )
+    return RecapAttemptResponse(
+        mode=recap.RECAP_MODE,
+        topic_id=str(topic_id),
+        concept_count=len(outcomes),
+        mean_score=mean_score,
+        outcomes=outcomes,
+    )
 
 
 def _get_mode_or_400(key: str):

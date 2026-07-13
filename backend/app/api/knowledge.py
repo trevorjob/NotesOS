@@ -16,6 +16,7 @@ from app.models.course import CourseEnrollment, Topic
 from app.models.knowledge import AudioLesson, KnowledgeStatus, TopicKnowledge
 from app.models.user import User
 from app.services.redis_client import redis_client
+from app.services.synthesis_debounce import schedule_synthesis
 
 router = APIRouter()
 
@@ -130,20 +131,14 @@ async def regenerate_topic_knowledge(
 ):
     """
     Manually trigger knowledge re-synthesis for a topic.
-    Enqueues a knowledge job and returns 202 Accepted.
+    Forces a full rebuild (re-merges every resource) and returns 202 Accepted.
     """
     topic = await _get_topic_or_404(topic_id, db)
     await _assert_enrolled(db, current_user.id, topic.course_id)
 
-    job_id = await redis_client.enqueue_job(
-        "knowledge",
-        {
-            "topic_id": topic_id,
-            "course_id": str(topic.course_id),
-        },
-    )
+    await schedule_synthesis(topic_id, str(topic.course_id), force_full=True)
 
-    return {"message": "Knowledge synthesis queued", "job_id": job_id}
+    return {"message": "Knowledge synthesis queued"}
 
 
 # =============================================================================

@@ -36,6 +36,7 @@ from app.services.capture_types import (
 from app.services.storage import storage_service
 from app.services.vision_transcribe import vision_transcribe
 from app.services.redis_client import redis_client
+from app.services.synthesis_debounce import schedule_synthesis
 from app.services.cache import cache, resources_list_key, resource_key
 from app.config import settings
 from app.models.course import CourseEnrollment
@@ -977,16 +978,18 @@ async def move_resource(
 
     old_topic_id = str(resource.topic_id)
     resource.topic_id = target_topic.id
+    # Unmerged in its new home — the destination's next synth folds it in.
+    resource.synthesized_at = None
     await db.commit()
     await db.refresh(resource)
 
-    # Both notes are now stale — re-synthesize each (merge gate re-runs inside).
+    # Both notes are now stale. The source note still carries the moved resource's
+    # content, so it needs a full rebuild to drop it; the destination only needs to
+    # fold the newcomer in (incremental). Merge gate re-runs inside each.
     if settings.ENABLE_KNOWLEDGE_SYNTHESIS:
         course_id_str = str(target_topic.course_id)
-        for tid in (old_topic_id, str(target_topic.id)):
-            await redis_client.enqueue_job(
-                "knowledge", {"topic_id": tid, "course_id": course_id_str}
-            )
+        await schedule_synthesis(old_topic_id, course_id_str, force_full=True)
+        await schedule_synthesis(str(target_topic.id), course_id_str)
 
     await cache.delete_pattern(f"notesos:v1:resources:topic:{old_topic_id}:")
     await cache.delete_pattern(f"notesos:v1:resources:topic:{target_topic.id}:")

@@ -63,9 +63,31 @@ async def _make_topic(client, headers, course_id, title, order_index=0):
         json={"course_id": course_id, "title": title, "order_index": order_index},
     )
     assert resp.status_code == 201, resp.text
+    return resp.json()["id"]
+
+
+async def test_create_topic_route_is_not_shadowed(client, register_user):
+    """Regression: a duplicate route in the courses router used to shadow the
+    topics router's handler, dropping `description` and returning a wrapped
+    minimal payload. The topics-router handler must serve this path."""
+    user = await register_user()
+    course_id = await _make_course(client, user["headers"], code="SHDW1", name="Shadow")
+
+    resp = await client.post(
+        f"/api/courses/{course_id}/topics",
+        headers=user["headers"],
+        json={
+            "course_id": course_id,
+            "title": "Aromaticity",
+            "description": "Benzene, Hückel's rule",
+            "order_index": 0,
+        },
+    )
+    assert resp.status_code == 201, resp.text
     body = resp.json()
-    # The courses router's create-topic route wraps the payload; tolerate both.
-    return (body.get("topic") or body)["id"]
+    assert body["id"]  # top-level TopicResponse, not {"topic": {...}}
+    assert body["description"] == "Benzene, Hückel's rule"  # no longer dropped
+    assert body["course_id"] == course_id
 
 
 # ── Unit: shared type allow-list + confidence heuristic + clustering ─────────

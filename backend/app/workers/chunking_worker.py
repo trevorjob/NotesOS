@@ -13,6 +13,7 @@ from app.services.chunking import chunking_service
 from app.services.embeddings import embedding_service
 from app.services.vector_store import vector_store
 from app.services.websocket import broadcast_processing_status
+from app.services.synthesis_debounce import schedule_synthesis
 from app.models.course import Topic
 from app.config import settings
 from app.core.logging import get_logger
@@ -89,15 +90,10 @@ async def process_chunking_job(job_data: dict):
             if course_id:
                 await broadcast_processing_status(course_id, resource_id, "completed")
 
-            # Step 5: Enqueue knowledge synthesis for this topic
+            # Step 5: Request knowledge synthesis for this topic. Debounced — a bulk
+            # upload's chunking burst coalesces into one incremental synth pass.
             if resource.topic_id and settings.ENABLE_KNOWLEDGE_SYNTHESIS:
-                await redis_client.enqueue_job(
-                    "knowledge",
-                    {
-                        "topic_id": str(resource.topic_id),
-                        "course_id": course_id,
-                    },
-                )
+                await schedule_synthesis(str(resource.topic_id), course_id)
 
         except Exception:
             logger.error("Error processing resource", exc_info=True, extra={"resource_id": str(resource_id)})

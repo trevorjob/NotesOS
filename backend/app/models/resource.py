@@ -106,6 +106,15 @@ class Resource(Base):
     quarantine_reason = Column(Text, nullable=True)
     quarantined_at = Column(DateTime, nullable=True)
 
+    # Incremental synthesis (A4): stamped when this resource's content has been
+    # folded into the topic's consolidated note. NULL = not yet merged — so a new
+    # upload, a resource released from quarantine, or one moved into the topic is
+    # all expressed the same way (NULL → picked up by the next append-merge). The
+    # synthesizer sets this on exactly the resources it merged; nothing else touches
+    # it. Makes "what changed since last synthesis" derivable and kills the
+    # full-rebuild write-amplification.
+    synthesized_at = Column(DateTime, nullable=True)
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
