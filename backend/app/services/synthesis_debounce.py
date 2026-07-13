@@ -20,7 +20,7 @@ from app.services.redis_client import redis_client
 
 # One synth per topic per window. Long enough to swallow a chunking burst, short
 # enough that a lone upload's note appears promptly.
-SYNTH_DEBOUNCE_WINDOW_SEC = 100
+SYNTH_DEBOUNCE_WINDOW_SEC = 10
 
 _COOLDOWN_KEY = "synth:cooldown:{}"
 
