@@ -7,6 +7,7 @@ from app.models.refresh_token import RefreshToken
 from app.models.school import School
 from app.models.term import Term, DivisionType
 from app.models.course import Course, CourseEnrollment, Topic, CourseOutline
+from app.models.subject import SubjectFamily
 from app.models.resource import (
     Resource,
     ResourceFile,
@@ -34,7 +35,7 @@ from app.models.progress import (
     SessionType,
     MessageRole,
 )
-from app.models.notification import Notification, NotificationType
+from app.models.notification import Notification, NotificationType, NotificationPreference
 from app.models.knowledge import TopicKnowledge, AudioLesson, KnowledgeStatus
 from app.models.retrieval import Concept, ConceptState, RetrievalAttempt
 from app.models.consume import ConsumeEvent, ConsumeKind
@@ -54,6 +55,7 @@ __all__ = [
     "CourseEnrollment",
     "Topic",
     "CourseOutline",
+    "SubjectFamily",
     # Resource
     "Resource",
     "ResourceFile",
@@ -81,6 +83,7 @@ __all__ = [
     # Notifications
     "Notification",
     "NotificationType",
+    "NotificationPreference",
     # Knowledge
     "TopicKnowledge",
     "AudioLesson",

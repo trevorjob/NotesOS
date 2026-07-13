@@ -12,7 +12,7 @@ isolated behind ``_judge`` for testing.
 """
 
 import json
-from typing import Any, Optional
+from typing import Any
 
 from app.services.llm import call_llm
 from app.services.retrieval.modes import Challenge, ModeContext, Outcome, score_to_grade
@@ -56,12 +56,6 @@ class TeachMode:
                 "confusions": result.get("confusions", []),
             },
         )
-
-    def subject_weight(self, subject_type: Optional[str]) -> float:
-        # Teaching suits explanation-heavy subjects most; still valuable everywhere.
-        if subject_type in ("humanities", "history", "language"):
-            return 1.0
-        return 0.85
 
     # --- LLM boundary (overridden in tests) --------------------------------------
 

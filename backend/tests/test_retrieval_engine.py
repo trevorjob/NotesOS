@@ -33,9 +33,6 @@ class FakeMode:
         }
         return mapping[response]
 
-    def subject_weight(self, subject_type):
-        return 1.0
-
 
 async def _seed(db, *, n_topics=1, per_topic=2):
     user = User(email=f"u_{uuid.uuid4().hex[:8]}@t.dev", full_name="U", password_hash="x", phone=unique_phone())

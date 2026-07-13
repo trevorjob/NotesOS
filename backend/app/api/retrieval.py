@@ -29,9 +29,11 @@ from app.api.auth import get_current_user, verify_course_enrollment
 from app.database import get_db
 from app.models.course import Topic
 from app.models.retrieval import Concept
+from app.models.subject import SubjectFamily
 from app.models.user import User
 from app.services.redis_client import redis_client
-from app.services.retrieval import engine, recap, recognition, registry, session
+from app.services.retrieval import engine, next_action, recap, recognition, registry, session
+from app.services.retrieval import subject_profiles
 from app.services.retrieval.modes import Challenge, ModeContext
 
 router = APIRouter(prefix="/api/retrieval", tags=["retrieval"])
@@ -50,7 +52,6 @@ class NextRequest(BaseModel):
     topic_id: Optional[uuid.UUID] = None
     course_id: Optional[uuid.UUID] = None
     concept_id: Optional[uuid.UUID] = None  # skip selection, challenge a specific concept
-    subject_type: Optional[str] = None      # tunes the mode's subject weighting
 
 
 class NextResponse(BaseModel):
@@ -84,7 +85,20 @@ class AttemptResponse(BaseModel):
 
 class ModeInfo(BaseModel):
     key: str
-    subject_weight: float
+    affinity: float   # how strongly this mode suits the requested subject family (0..1)
+
+
+class SubjectProfileResponse(BaseModel):
+    topic_id: str
+    subject_family: SubjectFamily
+    overridden: bool
+    render: str
+    grading: str
+    mode_mix: dict[str, float]
+
+
+class SubjectFamilyUpdate(BaseModel):
+    subject_family: SubjectFamily
 
 
 class SessionInfo(BaseModel):
@@ -130,6 +144,17 @@ class RecapAttemptResponse(BaseModel):
     concept_count: int
     mean_score: float
     outcomes: list[RecapConceptOutcome]
+
+
+class NextActionResponse(BaseModel):
+    kind: str
+    course_id: str
+    topic_id: str
+    topic_title: str
+    concept_ids: list[str]
+    mode: str
+    reason: str
+    est_minutes: int
 
 
 # ── Challenge store (server-side, opaque handoff between the two requests) ─────
@@ -239,7 +264,10 @@ async def next_challenge(
 
     await verify_course_enrollment(db, user.id, concept.course_id)
 
-    ctx = ModeContext(db=db, user_id=user.id, extra={"subject_type": body.subject_type})
+    # The concept inherits its topic's subject family; hand it to the mode as context
+    # (forward hook for family-shaped generation — e.g. STEM worked-examples).
+    family = await _topic_family(db, concept.topic_id)
+    ctx = ModeContext(db=db, user_id=user.id, extra={"subject_family": family.value})
     challenge = await mode.generate(concept, ctx)
     challenge_id = await _store_challenge(user.id, concept, mode.key, challenge)
 
@@ -314,14 +342,65 @@ async def submit_attempt(
 
 @router.get("/modes", response_model=list[ModeInfo])
 async def list_modes(
-    subject_type: Optional[str] = None,
+    family: SubjectFamily = SubjectFamily.GENERAL,
     user: User = Depends(get_current_user),
 ):
-    """Available modes and how strongly each suits ``subject_type`` (the mode mix knob)."""
+    """Available modes and how strongly each suits a subject ``family`` (the mode mix knob)."""
     return [
-        ModeInfo(key=key, subject_weight=registry.get_mode(key).subject_weight(subject_type))
+        ModeInfo(key=key, affinity=subject_profiles.mode_affinity(family, key))
         for key in registry.available_modes()
     ]
+
+
+async def _topic_family(db: AsyncSession, topic_id) -> SubjectFamily:
+    """The subject family of a topic (GENERAL if the topic somehow can't be found)."""
+    fam = await db.scalar(select(Topic.subject_family).where(Topic.id == topic_id))
+    return fam or SubjectFamily.GENERAL
+
+
+@router.get("/topics/{topic_id}/profile", response_model=SubjectProfileResponse)
+async def get_subject_profile(
+    topic_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """A topic's subject profile: its family + the rendering / mode-mix / grading it drives."""
+    topic = await db.get(Topic, topic_id)
+    if topic is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "topic not found")
+    await verify_course_enrollment(db, user.id, topic.course_id)
+    return _profile_response(topic)
+
+
+@router.patch("/topics/{topic_id}/profile", response_model=SubjectProfileResponse)
+async def override_subject_family(
+    topic_id: uuid.UUID,
+    body: SubjectFamilyUpdate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Manually set a topic's subject family. Locks it — re-synthesis won't overwrite it."""
+    topic = await db.get(Topic, topic_id)
+    if topic is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "topic not found")
+    await verify_course_enrollment(db, user.id, topic.course_id)
+    topic.subject_family = body.subject_family
+    topic.subject_family_overridden = True
+    await db.commit()
+    await db.refresh(topic)
+    return _profile_response(topic)
+
+
+def _profile_response(topic: Topic) -> SubjectProfileResponse:
+    profile = subject_profiles.profile_for(topic.subject_family)
+    return SubjectProfileResponse(
+        topic_id=str(topic.id),
+        subject_family=topic.subject_family,
+        overridden=topic.subject_family_overridden,
+        render=profile.render,
+        grading=profile.grading,
+        mode_mix=profile.mode_mix,
+    )
 
 
 @router.get("/sessions", response_model=list[SessionInfo])
@@ -349,6 +428,39 @@ async def list_sessions(
         )
         for s in sessions
     ]
+
+
+@router.get("/next-action", response_model=Optional[NextActionResponse])
+async def get_next_action(
+    course_id: Optional[uuid.UUID] = None,
+    topic_id: Optional[uuid.UUID] = None,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The single highest-value thing to study now (the home doorway / digest engine).
+
+    Strict cascade: review (fading) → calibration (confident-but-missed) → new → get_ahead.
+    Optionally scoped to a course/topic. ``null`` when the user has no concepts yet — the
+    client sends them to capture rather than showing an empty study surface.
+    """
+    if course_id is not None:
+        await verify_course_enrollment(db, user.id, course_id)
+
+    action = await next_action.select_next_action(
+        db, user_id=user.id, course_id=course_id, topic_id=topic_id
+    )
+    if action is None:
+        return None
+    return NextActionResponse(
+        kind=action.kind,
+        course_id=str(action.course_id),
+        topic_id=str(action.topic_id),
+        topic_title=action.topic_title,
+        concept_ids=[str(c) for c in action.concept_ids],
+        mode=action.mode,
+        reason=action.reason,
+        est_minutes=action.est_minutes,
+    )
 
 
 @router.post("/recap/next", response_model=RecapNextResponse)

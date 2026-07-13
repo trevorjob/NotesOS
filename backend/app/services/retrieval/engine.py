@@ -105,12 +105,19 @@ async def record_attempt(
     challenge: Optional[dict] = None,
     response: Any = None,
     now: Optional[datetime] = None,
+    created_at: Optional[datetime] = None,
+    client_event_id=None,
 ) -> AttemptResult:
     """Log the event (append-only) and advance the concept's FSRS schedule.
 
     Creates the ``ConceptState`` on first contact. Flushes so ids are populated; the
     caller owns the transaction. Does not fire calibration/recognition side effects —
     the caller does, off the returned result.
+
+    For a replayed offline attempt (B6), pass ``now`` = ``created_at`` = the *original
+    device time*, so FSRS schedules and the recorded timestamp reflect when the user
+    actually studied, not when the push arrived. ``client_event_id`` is the offline
+    idempotency key (NULL for online attempts). Both default to the online behaviour.
     """
     review_at = now or datetime.now(timezone.utc)
 
@@ -123,7 +130,10 @@ async def record_attempt(
         grade=outcome.grade,
         challenge=challenge,
         response=response if isinstance(response, (dict, list)) else None,
+        client_event_id=client_event_id,
     )
+    if created_at is not None:  # replay keeps its original device time; online defaults to now
+        attempt.created_at = created_at.replace(tzinfo=None) if created_at.tzinfo else created_at
     db.add(attempt)
 
     state = await db.scalar(

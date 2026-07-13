@@ -106,9 +106,19 @@ class RetrievalAttempt(Base):
     challenge = Column(JSONB, nullable=True)  # the generated prompt/question, for audit
     response = Column(JSONB, nullable=True)   # the user's raw response
 
+    # Idempotency key for offline sync (B6): a client generates this per attempt on-device
+    # and replays it on reconnect. Unique so a retried push never double-applies. NULL for
+    # attempts made online (the server assigns identity). Append-only is preserved — the
+    # key dedupes the *replay*, it doesn't mutate.
+    client_event_id = Column(UUID(as_uuid=True), nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
 
     concept = relationship("Concept")
+
+    __table_args__ = (
+        UniqueConstraint("client_event_id", name="uq_retrieval_attempt_client_event"),
+    )
 
 
 class ConceptState(Base):

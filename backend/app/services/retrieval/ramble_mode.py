@@ -16,7 +16,7 @@ The LLM call lives behind ``_analyze`` so the mode is testable without a live mo
 """
 
 import json
-from typing import Any, Optional
+from typing import Any
 
 from app.services.llm import call_llm
 from app.services.retrieval.modes import Challenge, ModeContext, Outcome, score_to_grade
@@ -54,13 +54,6 @@ class RambleMode:
                 "missed": result.get("missed", []),
             },
         )
-
-    def subject_weight(self, subject_type: Optional[str]) -> float:
-        # Output-first modes carry content-heavy and language subjects; ramble is the
-        # highest-leverage mode there (Learning Science Part 12). Neutral elsewhere.
-        if subject_type in ("language", "humanities", "history"):
-            return 1.0
-        return 0.8
 
     # --- LLM boundary (overridden in tests) --------------------------------------
 

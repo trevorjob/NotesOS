@@ -13,7 +13,7 @@ first-ever exposure, so a correct answer (often a lucky guess, before any study)
 """
 
 from dataclasses import replace
-from typing import Any, Optional
+from typing import Any
 
 from app.services.retrieval.modes import Challenge, ModeContext, Outcome
 from app.services.retrieval.quiz_mode import QuizMode
@@ -37,10 +37,3 @@ class PretestMode(QuizMode):
             # Cap the upside: pre-study, don't let a correct answer push the concept out.
             outcome = replace(outcome, grade="good")
         return outcome
-
-    def subject_weight(self, subject_type: Optional[str]) -> float:
-        # Pretesting is highest-value for STEM (worked-example / applied setups); still
-        # useful elsewhere (Learning Science Part 12).
-        if subject_type in ("stem", "science", "math", "engineering"):
-            return 1.0
-        return 0.7

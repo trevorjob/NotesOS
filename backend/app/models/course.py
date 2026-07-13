@@ -13,11 +13,13 @@ from sqlalchemy import (
     Integer,
     ForeignKey,
     UniqueConstraint,
+    Enum as SQLEnum,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
 from app.database import Base
+from app.models.subject import SubjectFamily
 
 
 class Course(Base):
@@ -125,6 +127,19 @@ class Topic(Base):
     description = Column(Text, nullable=True)
     week_number = Column(Integer, nullable=True)
     order_index = Column(Integer, nullable=False, default=0)
+
+    # Subject family — inferred at synthesis, drives the retrieval mode mix / render /
+    # grading profile. ``subject_family_overridden`` locks a user's manual choice so
+    # re-synthesis never clobbers it. Concepts inherit the family from their topic.
+    subject_family = Column(
+        SQLEnum(SubjectFamily),
+        nullable=False,
+        default=SubjectFamily.GENERAL,
+        server_default=SubjectFamily.GENERAL.value,
+    )
+    subject_family_overridden = Column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

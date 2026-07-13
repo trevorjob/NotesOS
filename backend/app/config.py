@@ -86,6 +86,12 @@ class Settings(BaseSettings):
     # delivery only; consume events are always recorded.
     ENABLE_RECOGNITION: bool = True
 
+    # Real-time voice lane (B5, premium). A separate streaming conversational surface —
+    # NOT the batch voice workers, NOT retrieval /attempt (build-guide §82/§134). Off by
+    # default: launch is entirely free, so the premium lane stays dark until the owner
+    # flips it (or per-user entitlement lands in ``authorize_voice``).
+    ENABLE_VOICE_LANE: bool = False
+
     # Cache (Redis read-through for GET endpoints)
     CACHE_ENABLED: bool = True
     CACHE_TTL_COURSES: int = 90  # seconds

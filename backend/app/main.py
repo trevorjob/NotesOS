@@ -114,6 +114,8 @@ from app.api.terms import router as terms_router
 from app.api.discovery import router as discovery_router
 from app.api.retrieval import router as retrieval_router
 from app.api.capture import router as capture_router
+from app.api.sync import router as sync_router
+from app.api.voice import router as voice_router
 from app.services.websocket import connection_manager
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
@@ -131,6 +133,8 @@ app.include_router(terms_router, prefix="/api/terms", tags=["terms"])
 app.include_router(discovery_router, prefix="/api/discovery", tags=["discovery"])
 app.include_router(retrieval_router, tags=["retrieval"])  # self-prefixed /api/retrieval
 app.include_router(capture_router, prefix="/api", tags=["capture"])
+app.include_router(sync_router, tags=["sync"])  # self-prefixed /api/sync
+app.include_router(voice_router, tags=["voice"])  # WS /ws/voice/{course_id} (premium lane)
 
 
 # WebSocket endpoint for user-scoped events (test generation, personal notifications)

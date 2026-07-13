@@ -52,9 +52,6 @@ class StubApiMode:
         ok = answer == (challenge.payload or {}).get("correct_answer")
         return Outcome(score=1.0 if ok else 0.0, grade="good" if ok else "again", feedback="fb")
 
-    def subject_weight(self, subject_type):
-        return 1.0
-
 
 @pytest.fixture
 def stub_mode():
@@ -176,3 +173,86 @@ async def test_modes_lists_the_registered_modes(client, register_user):
     assert resp.status_code == 200
     keys = {m["key"] for m in resp.json()}
     assert {"quiz", "ramble", "teach", "pretest"}.issubset(keys)
+    # Every mode carries a subject affinity in [0, 1].
+    assert all(0.0 <= m["affinity"] <= 1.0 for m in resp.json())
+
+
+async def test_modes_affinity_shifts_with_subject_family(client, register_user):
+    """The STEM family weights pretest above ramble; LANGUAGE flips it (Learning Science 12)."""
+    user = await register_user()
+    stem = {m["key"]: m["affinity"] for m in
+            (await client.get("/api/retrieval/modes?family=STEM", headers=user["headers"])).json()}
+    lang = {m["key"]: m["affinity"] for m in
+            (await client.get("/api/retrieval/modes?family=LANGUAGE", headers=user["headers"])).json()}
+    assert stem["pretest"] > stem["ramble"]
+    assert lang["ramble"] > lang["pretest"]
+
+
+async def test_topic_profile_defaults_to_general(client, register_user, seeded):
+    user = await register_user()
+    _, concept = await seeded(user["id"])
+    resp = await client.get(
+        f"/api/retrieval/topics/{concept.topic_id}/profile", headers=user["headers"]
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["subject_family"] == "GENERAL"
+    assert body["overridden"] is False
+    assert "quiz" in body["mode_mix"]      # the profile carries the full mode mix
+    assert body["render"] and body["grading"]
+
+
+async def test_topic_profile_override_locks_the_family(client, register_user, seeded):
+    user = await register_user()
+    _, concept = await seeded(user["id"])
+    resp = await client.patch(
+        f"/api/retrieval/topics/{concept.topic_id}/profile",
+        headers=user["headers"],
+        json={"subject_family": "STEM"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["subject_family"] == "STEM"
+    assert body["overridden"] is True
+    assert body["render"] == "math"        # STEM profile now in effect
+
+
+async def test_topic_profile_requires_enrollment(client, register_user, seeded):
+    owner = await register_user()
+    _, concept = await seeded(owner["id"])
+    intruder = await register_user()
+    resp = await client.get(
+        f"/api/retrieval/topics/{concept.topic_id}/profile", headers=intruder["headers"]
+    )
+    assert resp.status_code == 403
+
+
+async def test_next_action_returns_new_for_enrolled_unattempted(client, register_user, seeded):
+    """A fresh, enrolled user with concepts but no attempts → the 'new' action."""
+    user = await register_user()
+    await seeded(user["id"])
+    resp = await client.get("/api/retrieval/next-action", headers=user["headers"])
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body is not None
+    assert body["kind"] == "new"
+    assert body["mode"] == "pretest"
+    assert body["est_minutes"] >= 2
+    assert body["reason"]
+
+
+async def test_next_action_null_when_nothing_to_do(client, register_user):
+    """No courses, no concepts → null (client routes to capture, not an empty study view)."""
+    user = await register_user()
+    resp = await client.get("/api/retrieval/next-action", headers=user["headers"])
+    assert resp.status_code == 200
+    assert resp.json() is None
+
+
+async def test_next_action_enrollment_gate(client, register_user):
+    """Scoping to a course the user isn't in is rejected."""
+    user = await register_user()
+    resp = await client.get(
+        f"/api/retrieval/next-action?course_id={uuid.uuid4()}", headers=user["headers"]
+    )
+    assert resp.status_code == 403

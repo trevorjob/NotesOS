@@ -11,7 +11,7 @@ without a live model — a test overrides those two and exercises the real mappi
 """
 
 import json
-from typing import Any, Optional
+from typing import Any
 
 from app.services.grader import grader
 from app.services.llm import call_llm
@@ -69,11 +69,6 @@ class QuizMode:
                 "key_points_missed": result.get("key_points_missed", []),
             },
         )
-
-    def subject_weight(self, subject_type: Optional[str]) -> float:
-        # Quiz suits every subject; language leans toward output modes (ramble), so
-        # weight it slightly lower there (Learning Science Part 12).
-        return 0.7 if subject_type == "language" else 1.0
 
     # --- LLM boundary (overridden in tests) --------------------------------------
 

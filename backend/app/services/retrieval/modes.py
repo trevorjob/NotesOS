@@ -81,6 +81,5 @@ class RetrievalMode(Protocol):
         """Judge the user's response into a score + grade."""
         ...
 
-    def subject_weight(self, subject_type: Optional[str]) -> float:
-        """How strongly this mode suits a subject (the subject-aware knob). 0..1."""
-        ...
+    # NOTE: a mode no longer knows about subjects. How strongly a mode suits a subject
+    # family lives in ``subject_profiles.PROFILES`` (keyed by mode), not on the mode.

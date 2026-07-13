@@ -4,15 +4,68 @@ NotesOS API - Notifications Endpoints
 
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete, func
 
 from app.database import get_db
-from app.models.notification import Notification
+from app.models.notification import Notification, NotificationPreference
 from app.models.user import User
 from app.api.auth import get_current_user
 
 router = APIRouter()
+
+
+class PreferenceUpdate(BaseModel):
+    digest_enabled: bool | None = None
+    recognition_enabled: bool | None = None
+
+
+def _pref_response(pref: NotificationPreference) -> dict:
+    return {
+        "digest_enabled": pref.digest_enabled,
+        "recognition_enabled": pref.recognition_enabled,
+        "last_digest_at": pref.last_digest_at.isoformat() if pref.last_digest_at else None,
+    }
+
+
+async def _get_or_create_pref(db: AsyncSession, user_id: uuid.UUID) -> NotificationPreference:
+    pref = await db.scalar(
+        select(NotificationPreference).where(NotificationPreference.user_id == user_id)
+    )
+    if pref is None:
+        pref = NotificationPreference(user_id=user_id)
+        db.add(pref)
+        await db.commit()
+        await db.refresh(pref)
+    return pref
+
+
+@router.get("/preferences")
+async def get_preferences(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The current user's notification preferences (both nudge loops are on by default)."""
+    pref = await _get_or_create_pref(db, current_user.id)
+    return _pref_response(pref)
+
+
+@router.patch("/preferences")
+async def update_preferences(
+    body: PreferenceUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Toggle which habit-loop nudges the user receives (§15.4). Partial update."""
+    pref = await _get_or_create_pref(db, current_user.id)
+    if body.digest_enabled is not None:
+        pref.digest_enabled = body.digest_enabled
+    if body.recognition_enabled is not None:
+        pref.recognition_enabled = body.recognition_enabled
+    await db.commit()
+    await db.refresh(pref)
+    return _pref_response(pref)
 
 
 @router.get("/unread-count")

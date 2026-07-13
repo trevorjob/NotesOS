@@ -30,6 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.course import Topic
+from app.models.subject import SubjectFamily
 from app.models.knowledge import KnowledgeStatus, TopicKnowledge
 from app.models.resource import Resource, ResourceChunk
 from app.services.llm import call_llm, call_llm_stream
@@ -47,6 +48,14 @@ Broadcast = Callable[[dict], Awaitable[None]]
 
 def _is_usable_note(note: Optional[str]) -> bool:
     return bool(note) and note.strip() != _EMPTY_NOTE.strip()
+
+
+def _coerce_family(raw: Optional[str]) -> SubjectFamily:
+    """Map an LLM-emitted family string to the enum; anything unrecognised → GENERAL."""
+    try:
+        return SubjectFamily(str(raw).strip().upper())
+    except (ValueError, AttributeError):
+        return SubjectFamily.GENERAL
 
 
 class KnowledgeSynthesizer:
@@ -125,6 +134,10 @@ class KnowledgeSynthesizer:
             knowledge.key_points = meta.get("key_points", [])
             knowledge.concepts = meta.get("concepts", [])
             knowledge.source_count = len(resources)
+
+            # Infer the subject family from the note (drives the retrieval profile).
+            # Never overrides a user's manual choice.
+            await self._apply_subject_family(db, topic_id, meta.get("subject_family"))
             knowledge.status = KnowledgeStatus.COMPLETED
             knowledge.generated_at = datetime.utcnow()
 
@@ -160,6 +173,15 @@ class KnowledgeSynthesizer:
     async def _topic_name(self, db: AsyncSession, topic_id: str) -> str:
         topic = await db.scalar(select(Topic).where(Topic.id == _uuid.UUID(str(topic_id))))
         return topic.title if topic else "this topic"
+
+    async def _apply_subject_family(
+        self, db: AsyncSession, topic_id: str, raw_family: Optional[str]
+    ) -> None:
+        """Set the topic's inferred subject family — unless a user has overridden it."""
+        topic = await db.scalar(select(Topic).where(Topic.id == _uuid.UUID(str(topic_id))))
+        if topic is None or topic.subject_family_overridden:
+            return
+        topic.subject_family = _coerce_family(raw_family)
 
     async def _live_resources(self, db: AsyncSession, topic_id: str) -> List[Resource]:
         """Non-quarantined resources for the topic — never merges a quarantined upload."""
@@ -348,10 +370,17 @@ KEY_POINTS: the facts a student must know cold to pass an exam.
 CONCEPTS: terms that need defining.
 - 4–12 terms; only ones a student might not know; one plain-English sentence each.
 
+SUBJECT_FAMILY: the single best fit for how this material is best practised. One of:
+- "STEM"        — math, science, engineering: worked problems, formulas, derivations.
+- "LANGUAGE"    — learning a language: vocabulary, grammar, producing/speaking output.
+- "HUMANITIES"  — reading/argument-heavy: history, philosophy, literature, essays.
+- "GENERAL"     — none of the above fits cleanly.
+
 Return JSON:
 {{
   "key_points": ["specific exam-ready fact", "..."],
-  "concepts": [{{"term": "Term", "definition": "One clear sentence."}}]
+  "concepts": [{{"term": "Term", "definition": "One clear sentence."}}],
+  "subject_family": "STEM" | "LANGUAGE" | "HUMANITIES" | "GENERAL"
 }}
 
 Return ONLY valid JSON. No preamble, no text outside the JSON."""

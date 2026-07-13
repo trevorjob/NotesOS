@@ -22,6 +22,8 @@ pydantic[email]
 psycopg2-binary==2.9.11
 # Spaced repetition (retrieval engine scheduler)
 fsrs>=6.3,<7
+# Periodic scheduling for the B2 notification digest (the one non-reactive worker)
+apscheduler>=3.10,<4
 
 # AI & ML
 langchain>=0.1.0

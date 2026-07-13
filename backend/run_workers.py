@@ -19,6 +19,7 @@ from app.workers.knowledge_worker import knowledge_worker
 from app.workers.audio_worker import audio_worker
 from app.workers.test_generation_worker import test_generation_worker
 from app.workers.capture_worker import capture_worker
+from app.workers.notification_scheduler import notification_scheduler
 
 WORKERS = {
     "chunking": chunking_worker,
@@ -29,6 +30,8 @@ WORKERS = {
     "audio": audio_worker,
     "test_generation": test_generation_worker,
     "capture": capture_worker,
+    # Periodic (not queue-driven): the B2 habit digest. Needs APScheduler installed.
+    "notifications": notification_scheduler,
 }
 
 

@@ -66,6 +66,7 @@ _TASK_MODEL_MAP: dict[str, tuple[str, str]] = {
     "outline_parse":       ("openai",   "gpt-4o-mini"),   # fast — syllabus → topic list
     "capture_organize":    ("openai",   "gpt-4o-mini"),   # fast — classify/name a dump
     "recap_eval":          ("openai",   "gpt-4o"),         # heavy — grades a monologue over many concepts
+    "voice_chat":          ("openai",   "gpt-4o-mini"),    # fast — the spoken tutor reply (streamed, low-latency)
 }
 
 
