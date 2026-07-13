@@ -15,7 +15,9 @@ from app.database import get_db
 from app.models.course import CourseEnrollment, Topic
 from app.models.knowledge import AudioLesson, KnowledgeStatus, TopicKnowledge
 from app.models.user import User
+from app.models.consume import ConsumeKind
 from app.services.redis_client import redis_client
+from app.services.retrieval.recognition import record_consume
 from app.services.synthesis_debounce import schedule_synthesis
 
 router = APIRouter()
@@ -120,7 +122,12 @@ async def get_topic_knowledge(
             "updated_at": None,
         }
 
-    return _knowledge_response(knowledge)
+    response = _knowledge_response(knowledge)
+    # Passive consume (§11): reading a ready note recognizes its contributors (best-effort).
+    await record_consume(
+        db, actor_id=current_user.id, topic_id=topic.id, kind=ConsumeKind.NOTE_VIEW
+    )
+    return response
 
 
 @router.post("/topics/{topic_id}/knowledge/regenerate", status_code=status.HTTP_202_ACCEPTED)
@@ -182,7 +189,13 @@ async def get_topic_audio(
             "updated_at": None,
         }
 
-    return _audio_response(lesson)
+    response = _audio_response(lesson)
+    # Passive consume (§11): fetching a ready lesson is the server-side listen signal.
+    if lesson.audio_url:
+        await record_consume(
+            db, actor_id=current_user.id, topic_id=topic.id, kind=ConsumeKind.AUDIO_LISTEN
+        )
+    return response
 
 
 @router.post("/topics/{topic_id}/audio/regenerate", status_code=status.HTTP_202_ACCEPTED)

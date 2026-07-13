@@ -37,6 +37,7 @@ from app.models.progress import (
 from app.models.notification import Notification, NotificationType
 from app.models.knowledge import TopicKnowledge, AudioLesson, KnowledgeStatus
 from app.models.retrieval import Concept, ConceptState, RetrievalAttempt
+from app.models.consume import ConsumeEvent, ConsumeKind
 
 
 __all__ = [
@@ -88,4 +89,7 @@ __all__ = [
     "Concept",
     "ConceptState",
     "RetrievalAttempt",
+    # Consume-event substrate (§11 attribution / recognition)
+    "ConsumeEvent",
+    "ConsumeKind",
 ]

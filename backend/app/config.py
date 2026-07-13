@@ -79,10 +79,12 @@ class Settings(BaseSettings):
     ENABLE_PRE_CLASS_RESEARCH: bool = True
     ENABLE_VOICE_GRADING: bool = True
     ENABLE_KNOWLEDGE_SYNTHESIS: bool = True   # auto-synthesize after chunking
-    # Recognition loop (product-map §7): notify a contributor when their material is
-    # studied. Off until attribution (§11) + notification digest/batching (§9) land —
-    # the seam resolves beneficiaries regardless, but only delivers when this is on.
-    ENABLE_RECOGNITION: bool = False
+    # Recognition loop (product-map §7): recognize a contributor when their material is
+    # studied. Live as of B1 — the §11 consume substrate records passive consumes, active
+    # consume derives from the attempt log, and delivery is one batched, warmth-tuned
+    # digest (aggregate passive / warm active) fired by the B2 notifications tick. Gates
+    # delivery only; consume events are always recorded.
+    ENABLE_RECOGNITION: bool = True
 
     # Cache (Redis read-through for GET endpoints)
     CACHE_ENABLED: bool = True
