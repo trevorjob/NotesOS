@@ -55,7 +55,8 @@ of gravity for the whole product.
 | **Ramble / Talk** | You speak freely about a concept; AI asks leading Socratic questions to surface gaps. Free recall + elaborative interrogation — stronger than cued recall | Parts 3, 9 | 🟡 single-shot plugin (open prompt → gaps); multi-turn Socratic later |
 | **Teach / Protégé** | You explain the concept to the AI (or to publish). Teaching forces retrieval + reorganization + gap-finding. A good explanation can become a note **contribution** | Part 15 | 🟡 single-shot plugin (correctness-capped scoring) |
 | **Pretest** | Questions *before* encoding — on add, or mid-study. Primes encoding, breaks the fluency illusion early, feeds calibration | Parts 12, 4, 8 | 🟡 plugin (quiz reuse, grade capped so a pre-study guess can't schedule far out) |
-| **Recap** | At the start of a study block: "blurt everything you remember from last time." Free recall of the *previous session* — spaced retrieval + distributed practice in one warm-up move | Parts 5, 3, 9 | ⬜ (session-scoped, see note) |
+| **Recap** | At the start of a study block: "blurt everything you remember from last time." Free recall of the *previous session* — spaced retrieval + distributed practice in one warm-up move | Parts 5, 3, 9 | ✅ (A3 — orchestration over the session's concept set) |
+| **Brain dump** | "Everything you know about this topic" — **uncued, whole-topic free recall.** The purest retrieval act: no concept cue at all; one monologue graded against the topic's full concept set, missing concepts are genuine lapses | Parts 3, 9 | ⬜ (recap's machine, topic-set selector — see note) |
 | *(Listen)* | Passive reinforcement, not retrieval — the spacing/consolidation touchpoint. Lives in Delivery | Part 10 | ✅ |
 
 > **Recap is session-scoped, not concept-scoped** — the first mode where *one* response
@@ -82,9 +83,33 @@ of gravity for the whole product.
 >
 > **Shared keystone:** the session concept is the foundation recap *and* multi-turn
 > ramble/teach both stand on — build it once, deliberately, here.
+>
+> **Brain dump — LOCKED (2026-07-17).** Brain dump and recap are **two surfaces of one
+> free-recall machine**, distinguished only by the *set selector*:
+>
+> - **Recap** = last **session's** concepts ("blurt everything from last time") — built (A3).
+> - **Brain dump** = the **topic's full** concept set ("everything you know about this
+>   topic") — uncued whole-topic free recall, the purest retrieval act on the platform.
+>   A concept the monologue never surfaces is a genuine lapse, exactly as in recap.
+>
+> No new machinery: `grade_recap` already takes an arbitrary `concept_ids` set and
+> batch-grades one monologue into an attempt per concept — brain dump is a new selector
+> + a distinct mode key (`brain_dump`; **not** "dump", which capture already uses).
+> Owner-validated tactic (dogfooding, 2026-07): *read once → dump → leave → dump again
+> hours/days later → reread → dump*. That **protocol is a schedule, not a feature** —
+> the spacing beat is FSRS/`spaced_due`/decay-nudge, and the dump-before-rereading beat
+> is the next-best-action's job for a freshly-read topic. The entry point teaches the
+> rhythm; the user never has to learn it by name.
 
 Ramble, teach, and voice-quizzes all ride the **same voice substrate** (transcription
 → grading). Optimizing voice is foundational to three modes at once, not quiz-specific.
+
+> **Paper substrate — LOCKED (2026-07-17).** The written twin of the voice substrate: any
+> written answer, in any mode, can be a **photo of handwriting** (B8). One transcription
+> pre-step (server vision → user **confirms/corrects** → the unchanged text `/attempt`),
+> so all modes get it at once — including handwritten brain dumps, the paper-native study
+> pattern the product refuses to fight. Fairness rule: **grade what the user confirms
+> they wrote, never what OCR guessed.**
 
 ## The spine — the loop one student walks
 
@@ -293,6 +318,21 @@ Ramble, teach, and voice-quizzes all ride the **same voice substrate** (transcri
 8. **Discovery & coordination** — discovery + proximity ✅ (Phases 2–3);
    coordination ("someone's building a test, want in?") 🔮. Synchronous-communal stance below.
 
+> **Trust & safety + store compliance — LOCKED (2026-07-17).** Three calls made for the
+> app-store launch (full checklist: `launch-readiness.md`; buildable items: Phase D):
+>
+> - **iOS auth is phone-only** — no Google button on iOS, so Apple's Sign-in-with-Apple
+>   obligation never triggers. Android/web may keep Google.
+> - **Report → quarantine → owner review.** Anything shared is reportable (including AI
+>   output); a report holds the content out of the shared surface via the existing
+>   merge-gate machinery — no moderator roles, no public drama, reporter anonymous.
+>   Blocking is a **personal view filter**, never a takedown. Governance stays ownerless;
+>   the owner-review step is an ops process, not a role in the schema.
+> - **Account deletion is real and findable** — identity purged, contributions survive
+>   de-identified (the already-locked "remain, de-identified" design), the flow honest
+>   about that trade. The **one sanctioned exception** to the append-only log: an
+>   identity-scrub, legal not precedent.
+>
 > **Synchronous communal — LOCKED (2026-07-11).** We've designed the **async** communal layer
 > exhaustively (shared notes, recognition, discovery, join-propagation, invitations); this is
 > the **live** side. Launch = the cheap, warm slice only: **ambient co-presence** ("3 classmates
@@ -439,6 +479,19 @@ Ramble, teach, and voice-quizzes all ride the **same voice substrate** (transcri
 > steps are the content). **Retrieval** diverges hardest: you learn STEM by *solving problems*,
 > not explaining — so the STEM mode family is **applied-problem** + **worked-example-then-vary**.
 >
+> *Build split (2026-07-17): **B9** shipped STEM retrieval (worked-problem + self-grade);
+> **B10** queued for the two front surfaces a STEM student hits first — subject-aware **note**
+> synthesis and **tutor**. Both are launch scope, not deferred: doing them before the native
+> client means the designer builds a note/chat that hold math natively rather than retrofitting a
+> prose-shaped UI (which is why the note + tutor shapes are now written into system-spec §4/§7).
+> **Form follows content, and the family is a *prior* not a gate (owner call 2026-07-17):** one
+> content-driven synthesis prompt renders math/worked-examples where the material has them and
+> prose where it doesn't — on any topic — so a humanities note with a stray calculation renders it,
+> a prose-only STEM topic stays prose, and a misclassified topic degrades gracefully instead of
+> flipping the whole note's shape. The family only leans the default + drives the render hint;
+> every note surface stays math-capable. What genuinely stays deferred is only **automated method
+> grading** (SymPy/symbolic equivalence).*
+>
 > - **The grading wall + the launch dodge.** Rigorous automated STEM grading (method vs. answer,
 >   partial credit, multiple valid methods, symbolic equivalence, units) is research-grade — it
 >   needs tools beyond an LLM (SymPy for equivalence, code-exec for numerics). **Don't block
@@ -446,7 +499,9 @@ Ramble, teach, and voice-quizzes all ride the **same voice substrate** (transcri
 >   solve on paper → *predict confidence* → reveal full worked solution → **self-grade**.
 >   Sidesteps automated grading, still delivers the worked-example effect, and the existing
 >   calibration mechanic fits perfectly. Hybrid method-grading (LLM + SymPy/code-exec) is a
->   deliberate **post-launch upgrade, not a blocker.**
+>   deliberate **post-launch upgrade, not a blocker.** *(Queued as **B9**, 2026-07-17 — this
+>   flow fell between B4's taxonomy scope and the queue; B4 declared `self_calibration`
+>   without implementing it. B8's photo path is how the paper step arrives.)*
 > - **Substrate wrinkle:** STEM "concepts" are often **procedures/skills** ("differentiate a
 >   composite function"), not term↔definition — likely stretches the `Concept` model; accept as
 >   a substrate change when the STEM modes get built.

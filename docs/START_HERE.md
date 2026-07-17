@@ -33,6 +33,8 @@ Git carries the code and these docs. It does **not** carry:
 | [`docs/v2-redesign-plan.md`](./v2-redesign-plan.md) | Execution plan + the **Launch build queue** ("all green ⇒ ship"), phase status, infra runbook. |
 | [`docs/system-spec.md`](./system-spec.md) | **System-behaviour spec for the native-client designer** — how the systems work, states, timing, live vs. cached. |
 | [`docs/build-guide.md`](./build-guide.md) | **Architect's guide for implementing agents** — invariants, codebase map, per-item traps, escalation triggers. Read before building a queue item. |
+| [`docs/ideas.md`](./ideas.md) | **Parking lot** — unscoped future ideas. Explicitly NOT the build queue; builders ignore it. |
+| [`docs/launch-readiness.md`](./launch-readiness.md) | **Ops + store-compliance checklist** — the non-code half of shipping (store forms, legal, owner infra). Code half = Phase D in the plan. |
 | [`CLAUDE.md`](../CLAUDE.md) | Project structure + working conventions (auto-loaded by Claude Code). |
 | **This file** | Machine handoff + Mac setup. |
 

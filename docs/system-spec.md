@@ -61,6 +61,12 @@ course,"** and cohort density emerges from course overlap on its own.
   number may be stale) — the user types their current, main one, so we know it's really theirs. **Email is optional** (recovery + whatever sign-in provides); push (§8) does the
   notifying, so email is no longer load-bearing. Access tokens are short-lived (15 min) and refresh
   silently — the user should essentially never see a session expire.
+  **On iOS, auth is phone-only** (no Google button) — a deliberate platform-rules call, not an
+  oversight; Android/web may keep Google.
+- **Account deletion exists and must be findable** (a store *and* legal requirement, not a
+  courtesy): a user can delete their account from settings without hunting for it. It's
+  OTP-confirmed, it's real (identity is gone; their contributions to shared notes survive but
+  carry no name), and the flow should be honest about exactly that trade before confirming.
 - **No public/private, no roles, no approval, no moderators.** The only access control is the
   **invite link** — a valid link means you're in. There is nothing to "request access" to.
 - **Two doors into a course:**
@@ -128,6 +134,12 @@ when each resource finishes** (see §11), so screens can update without a manual
 flattened to text. Math renders as math. (Design needs to accommodate rendered formulas and
 referenced figures inside notes.)
 
+> **Status (2026-07-17):** *equations/math* land at launch (B10). *Figures/diagrams* are a
+> **tracked deferral (B11)** — the capture pipeline is text-only today, so figures aren't
+> preserved yet. **Design the note to hold inline figures anyway** — same reasoning as math: a
+> layout that can't place a figure is a retrofit later, and backend delivery follows. Don't build
+> figure-*dependent* flows for launch, but leave the slot.
+
 ---
 
 ## 4. The Consolidated Note (the wedge)
@@ -153,6 +165,18 @@ scattered materials.
   affordance that reveals a single line's provenance *on demand* (for the skeptic), and a warm **"your
   cohort built this"** signal (real classmates, not a faceless AI). Corroboration happens silently
   during synthesis.
+- **A note can mix prose and worked examples — the layout must hold both, on any topic.** A note
+  isn't *either* reading-text *or* worked-math; a single topic often has **theory and definitions
+  (prose) next to worked calculations (steps + rendered math)**, and the note carries whichever
+  each section's material calls for. Form follows **content**, not the subject label: a note can be
+  all prose, all worked examples, or — most often in STEM — a mix, section by section, and even a
+  humanities topic renders a stray formula properly. So every note surface is **always
+  math-capable**; the subject is only a hint about how *dense* the math is likely to be, never a
+  switch that turns rendering on or off. What matters for design: **worked examples are
+  step-structured content and math renders as math** (inline and block), as **first-class layout
+  elements** sitting alongside ordinary prose — not a humanities-shaped reading view with equations
+  bolted on later. The system decides each section's form from the material; the user can correct
+  the subject.
 - **States:** a topic's note can be `empty` (no uploads yet — scaffold exists but no content),
   `synthesizing` (streaming into place — it visibly writes itself), `ready`, `updated` (changed
   since last view).
@@ -172,6 +196,28 @@ measures **concepts**; the user consumes **topics**.
 | **Teach** | Explains the concept as if teaching | Scored on correctness first |
 | **Pretest** | Answers *before* studying | Expected to miss — it primes learning + feeds calibration |
 | **Recap** | Free-recalls the *last session* | One response graded across many concepts |
+| **Brain dump** | Free-recalls *everything they know about a topic* — uncued | Recap's sibling: same one-response-many-concepts grading, but the whole topic. The system never lists the concepts (that would hand back the answer); what never surfaces counts as genuinely forgotten. The natural rhythm: read → dump → return later → dump again — the system suggests this rhythm, the user never has to learn it |
+
+**Answers can arrive on paper.** Any written answer, in any mode, can be a **photo of
+handwriting** — many students think on paper (dumps especially), and the product respects that
+instead of fighting it. The system transcribes the photo, then **shows the user the transcription
+to confirm or correct before anything is graded** — the promise is that grading is always about
+what the student actually wrote, never about what the machine guessed they wrote. Transcription
+takes a moment (a real read of the page, not instant); the confirm step is part of the flow, not
+an error state. Handwritten equations survive transcription and render properly.
+
+**STEM asks for work, not typing.** Nobody solves an algebraic derivation on a phone keyboard,
+and the system never asks them to. On a STEM topic, quiz/pretest serve a **worked problem**
+(math rendered as math) with its solution withheld. The student solves it **on paper**, says how
+confident they are, and only then does the system **reveal the full worked solution** — the
+confidence-before-reveal ordering is deliberate and the design must protect it. The student
+compares their page to the solution and **self-grades with four honest buttons** (blank / wrong
+approach · right method, slipped · solved it · solved it cold) — no AI judges their algebra;
+comparing your own work to a worked solution *is* the learning event. Photographing the page is
+**optional** — it attaches their work to the attempt for later review, but is never required
+before self-grading. Numeric answers ("what's the pH?") are the exception: typed and checked
+exactly, instantly. Conceptual STEM questions ("explain *why* entropy increases") behave like any
+prose answer.
 
 **The moment-to-moment loop — the signature interaction (design this carefully):**
 1. **Challenge** — the mode poses something.
@@ -242,7 +288,10 @@ the "make you work" pressure lives in the retrieval modes, not here.
   reachable **from everywhere** (inside a note, after a wrong answer, mid-Listen) and carries the
   context of wherever it was opened. Its tone is **tunable via the personality settings**
   (encouraging / direct / humorous, explanation style, emoji) — this is the surface where the
-  product's personality is expressed.
+  product's personality is expressed. **On a STEM topic the tutor renders math and works the
+  example** rather than describing it in prose — the chat surface must display rendered equations
+  and step-by-step working, not just text. (This is *subject shape*, separate from the personality
+  knobs — a STEM student can still want it concise and emoji-free.)
 
 ---
 
@@ -286,6 +335,22 @@ to specific on inspection.
 > **All of the above ride one substrate** (consume/activity events, aggregated and warmth-tuned).
 > They differ only in how loud and how aggregated. Expect consistent "ambient count → specific on
 > inspection" behaviour across all of them.
+
+**Trust & safety (small, but the stores require it and the community deserves it):**
+
+- **Anything shared can be reported** — a quiet affordance on shared notes, resources, and AI
+  output (bad AI answers are reportable through the same gesture). Reporting is **anonymous to the
+  uploader** and instant in effect: the reported content is held out of the shared surface (the
+  uploader still sees their own copy) pending review. No public drama — no "this was reported"
+  badge for the room, no outcome broadcast to the reporter.
+- **A user can block another user** — a *personal* filter (the blocked person's future content
+  stops appearing *to them*), never a takedown or a punishment. Blocking is quiet on both sides.
+- **Permission asks happen in context, with the why first.** Contacts: an in-app explainer
+  (*what* it's for — finding classmates; *how* — numbers are hashed, never uploaded raw; *that
+  it's optional* — the product works fully without it) **before** the OS prompt, and only at the
+  moment discovery is on screen. Notifications: asked after the first session, when a review
+  reminder means something — never at first launch. A denied permission is a fine state, not an
+  error to nag about.
 
 ---
 

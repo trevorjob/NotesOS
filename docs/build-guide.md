@@ -184,6 +184,105 @@ but this is the intended target:
   set the last session touched) and grades **one** response into an **attempt-per-concept.** This
   *stretches* the Protocol (`generate(concept)` → one attempt) in the many-concepts/one-turn
   direction — the orthogonal stretch to multi-turn. Keep every attempt append-only.
+- **Brain dump (added 2026-07-17, post-B).** Recap's machine, different set selector: **the topic's
+  full concept set** instead of last-session's. `recap.grade_recap` already takes arbitrary
+  `concept_ids` and batch-grades one monologue into an attempt-per-concept in **one LLM call — reuse
+  it** (parameterize the mode key; do NOT write a second grader or loop per-concept `evaluate`).
+  Needs only: a `build_dump`-style opener (all topic concepts, uncued prompt — never list the
+  concepts), its own two-request HTTP flow mirroring `/recap/next → /recap/attempt`, and mode key
+  **`brain_dump`** — *not* `dump`, which capture (C4) already owns. Empty topic (no concepts yet) →
+  409, like `NoRecapAvailable`. Like recap it's an **orchestration, not a registry mode.** The
+  read→dump→wait→dump *protocol* is NOT a feature: spacing is FSRS/decay-nudge, dump-after-reading
+  is a B3 next-action case (freshly-read topic → offer a dump, not a reread).
+- **B8 · Photo answers (added 2026-07-17, post-B).** One seam, not per-mode work:
+  `POST /api/retrieval/transcribe` turns a handwriting photo into text (reuse the **existing vision
+  seam** — `vision_transcribe`/`hybrid_ocr`, `VISION_MODEL` — don't add a new OCR path), the client
+  shows it for confirm/correct, then the **unchanged** `/attempt` flow runs with text. Do NOT add
+  image fields to `AttemptRequest` or touch any mode — modes consume text; that's why all six get
+  this at once. **Grade only user-confirmed text** (fairness: never grade an OCR guess — the
+  confirm beat is the contract, mirror it in the response shape so the client can't skip it
+  silently). Contrast with voice: voice = client-side STT (LOCKED §2a); handwriting = server-side
+  vision (on-device handwriting OCR is weak, equations need the vision model — emit LaTeX for STEM,
+  B4 `render=math` displays it). Enforce upload size/type limits at the endpoint (same limits
+  posture as capture). Mark paper origin in the attempt's `challenge` payload, not a new column.
+- **B9 · STEM worked problems (added 2026-07-17, post-B).** Implements the product-map's
+  **already-locked launch dodge** (self-graded worked-example + calibration) — read that LOCKED
+  note (2026-07-11) first; B9 adds no new design, it builds the dropped half of B4. Traps:
+  - **No new mode, no `if family == STEM` branches.** B4 removed subject knowledge from modes —
+    keep it removed. The engine passes the topic's `SubjectProfile` into `ModeContext`; modes
+    branch on the **directive** (`profile.grading == GRADE_SELF_CALIBRATION`), never on the
+    family enum. A future family that wants self-calibration then gets it for free.
+  - **Ordering is the product.** Predicted confidence must be captured **at reveal, before the
+    solution is visible** — that's the entire calibration guarantee. `POST /reveal` takes
+    `{challenge_id, predicted_confidence}`, stamps it into the cached challenge, returns the
+    worked solution, and is one-shot (second call → 409). `/attempt` then carries only the
+    self-grade. Do not let the client submit a prediction after seeing the solution.
+  - **Self-grade is a closed vocabulary mapping 1:1 onto the four FSRS grades** (again / hard /
+    good / easy semantics: blank-or-wrong-approach / right-method-with-slips / solved /
+    solved-cold). Reject free text; never route it through an LLM. Note the deliberate
+    asymmetry with MCQ: MCQ caps at `good` (guessing inflates), self-grade may award `easy`
+    (comparing your work to a full solution is honest). Gaming worry is misplaced — grades feed
+    only the user's own schedule; there's nothing to win by lying, and the calibration delta
+    exposes it anyway.
+  - **`/attempt` stays LOCKED text-only/synchronous.** Nothing here reopens that. The worked
+    solution lives in the challenge payload (strip it from the client response exactly as quiz
+    strips `correct_answer`); the self-grade travels in `response`; zero LLM calls in the
+    self-calibration evaluate path — which also means these attempts qualify for **B6 offline
+    push** like the rest of quiz/pretest.
+  - **Paper is optional evidence here, not a gate.** The B8 transcribe→confirm beat applies
+    when the student wants their work recorded (or when the question is AI-graded); do NOT
+    force a transcription before reveal/self-grade — the student compares their paper to the
+    solution with their eyes.
+  - **`numeric` = parse float + tolerance, nothing cleverer.** Symbolic equivalence (SymPy),
+    method grading, partial credit are the **post-launch upgrade** the LOCKED note names —
+    adopting SymPy/code-exec is a dependency decision: **escalate, don't slip it in.**
+  - **Procedures-as-concepts: prompt-level first.** Nudge STEM synthesis to emit procedures
+    ("differentiate a composite function") as concept text with a method sketch as definition.
+    If that genuinely can't carry it, the substrate change is an escalation, not a builder call.
+  - **LaTeX delimiters must match what B8's vision prompt already emits** and what
+    `render=math` promises the client — one convention across generated problems, transcribed
+    handwriting, and note prose. Check `vision_transcribe`'s prompt before inventing one.
+- **B10 · STEM front-of-pipeline (added 2026-07-17, post-B9).** Makes the **note** and the
+  **tutor** subject-native — the two surfaces B9 didn't touch. Traps:
+  - **Family is a PRIOR, not a gate — this is the load-bearing decision (owner call 2026-07-17).**
+    Do **not** build "STEM topic → worked-example template, else → prose template." Build **one
+    content-driven synthesis prompt** that, for *every* note regardless of family, renders math and
+    worked examples where the material has them and prose where it doesn't. The family adds only a
+    **one-line lean** in the prompt ("likely STEM, expect many worked steps" / "likely humanities,
+    expect mostly prose") plus the client `render` hint — it never forbids a worked example in a
+    humanities note nor forces one in a prose-only STEM topic. Why: a gate makes classification a
+    single point of failure (misclassify → whole note in the wrong shape, now *visible*) and can't
+    handle the common mixed topic; a prior degrades gracefully to content-driven form when the
+    guess is wrong. So the enabling change is **teaching the synthesis prompt worked-example/math
+    vocabulary it currently lacks** (the existing "prose for explanations" is the real bug), *not*
+    a branch on the enum.
+  - **The failure mode runs both ways.** Prose-flattening a derivation is the obvious bug; the
+    non-obvious one is inflating a two-line definition into fake worked steps. "Content picks form"
+    guards both — definitions/theory/intuition stay prose, problem-solving becomes step-intact
+    worked examples, and a topic freely mixes both (or is all one). Worked examples/derivations are
+    step-structured content — keep steps intact, never compress to a paragraph — and render math as
+    LaTeX (the `$…$`/`$$…$$` convention B8's vision prompt and B9 already emit — one convention
+    across handwriting, generated problems, and the note; check before inventing).
+  - **Classify early — but it's now only a lean, so keep it cheap.** Today family is inferred
+    *from the finished note* (`knowledge_synthesizer.py` ~line 138) — too late to bias synthesis.
+    Move it to a fast-tier pre-classification from the raw chunks (first-N, not the full corpus)
+    **before** `_synthesize_body`, so the lean + render hint are available; keep the **user-override
+    lock** (a manual family set skips classification, wins across re-synthesis). Because it's a
+    prior not a gate, a wrong guess isn't catastrophic — don't over-engineer the classifier.
+  - **The incremental-merge path must protect worked examples too.** A4's append-merge reconciles
+    prose; folding new material into a STEM note must not dedupe or "tighten" an existing worked
+    example out of existence. Test the STEM merge specifically.
+  - **Tutor: subject shape is orthogonal to persona.** `study_agent.py` already branches on
+    tone/emoji/explanation-style — those are *personality*. The family directive is a **separate
+    axis** (render math, work the example, show steps). Add it alongside; don't overload the
+    "visual" style knob to mean "STEM" — a humanities student can be visual, a STEM student can
+    want it concise.
+  - **Branch on the profile, not the enum — same rule as B9.** Route the tutor and synthesis off
+    the topic's `SubjectProfile` (`render`/`grading` directives), never `if family == STEM`, so a
+    later family inherits the behaviour. B4's whole point.
+  - **Do NOT reopen automated STEM grading.** B10 is read-and-talk surfaces. Method grading /
+    symbolic equivalence (SymPy, code-exec) is the locked post-launch upgrade — if the work seems
+    to want it, that's an escalation, not scope creep.
 - **A4 · Incremental synthesis.** Replace the full-rebuild with **append-merge** into the existing
   note. The merge must still **reconcile/dedupe** and **respect the quarantine gate** (never merge a
   quarantined resource). Debounce bursty uploads (one synth per burst, not per file). "What changed"
@@ -206,6 +305,69 @@ but this is the intended target:
   barge-in); the grade is emitted **off-turn by the same streaming call**. Not the batch workers.
 - **B6 · Offline sync** = invalidation endpoints (`last_synced_at` → changed IDs) + append-only
   event push; event-sourced (derive `ConceptState` from the pushed log).
+
+### Phase C — backend seams & traps (noted at Phase B close, 2026-07-13)
+
+Phase C is client/design work; the backend audit lives inline in the plan doc's Phase C list.
+The parts a backend builder must not get wrong:
+
+- **C2 "says who?" X-ray is an attribution-grain escalation.** Recognition/attribution is
+  **topic-level by design** (§5 — synthesis blends chunks; `recognition.py` resolves topic
+  beneficiaries only). The note prose has **no span links** to concepts or contributors
+  (`TopicKnowledge.concepts` is flat JSONB; only `Concept.source_chunk_ids` carries chunk
+  provenance). Claim-level attribution = changing that grain → **escalate (§7)**. If note↔concept
+  span anchoring is ever added, it belongs in the synthesis *output contract* (A4's pipeline), so
+  spans are emitted at generation time — never inferred after the fact by string matching.
+- **C3 needs one pure-read endpoint** (per-topic, per-user concept mastery off `ConceptState`;
+  calibration derived from the attempt log). No schema change — if you find yourself adding a
+  table or column for this, you're storing derivable state (§1).
+- **C1/C5/C6/C7 have no backend work.** `next-action` (B3), `/api/sync/*` (B6), and the voice lane
+  (B5, frame protocol in `services/voice/protocol.py`) are the contracts — build the client against
+  them; don't add parallel endpoints. C6's client owns STT/VAD/playback (transcription stays
+  client-side — §"LOCKED" above).
+- **C8 is a count, not a ranking.** Aggregate "N built this note" off the B1 substrate
+  (`resolve_beneficiaries` / consume events). No leaderboard — a product invariant, not a styling
+  choice.
+- **C4: verify `api/capture.py`'s propose→confirm contract** against the UX before building on it —
+  a dump must return an amendable *proposal*, not auto-commit topic structure.
+
+### Phase D — launch readiness (added 2026-07-17)
+
+Checklist context lives in `launch-readiness.md`; these are the build traps:
+
+- **D1 · Rate limiting.** Redis counters (fixed/sliding window) — we already run Redis; **don't add
+  slowapi or a heavy dep** for what's a ~50-line helper + a FastAPI dependency. OTP endpoints get
+  per-**phone** AND per-**IP** limits (an attacker rotates one or the other) + a resend cooldown +
+  a daily cap. Don't limit `/health` (uptime pingers) or the WebSocket upgrade path. Limits in
+  `config.py` settings, not constants. Return 429 with `Retry-After`.
+- **D2 · Observability.** Sentry init in `main.py` lifespan AND `run_workers.py` (two processes,
+  two inits); explicit `capture_exception` in `base.py::_handle_failure` on the dead-letter branch
+  only (retries are noise). LLM telemetry goes in `services/llm.py` **only** (invariant #5 — the
+  single call site is the whole point). Redaction: a logging filter that masks phone-shaped strings
+  and anything keyed `otp`/`phone` — applied at the root logger, not per-call discipline.
+- **D3 · Account deletion — the one sanctioned exception to append-only.** Invariant #1 says
+  attempts are never mutated. Legal deletion (Apple 5.1.1(v), NDPA/GDPR) is the **single, explicit
+  override**: implement as **identity-scrub, not row deletion** — repoint `user_id` on
+  `RetrievalAttempt` (and any surviving contribution rows) to a per-deletion **tombstone user**
+  (anonymized row, no phone/email), hard-delete the personal projections (`ConceptState`,
+  enrollments, notifications, contact hashes, devices) and the real user row. The communal
+  substrate (shared notes, resources, concepts, the de-identified log) survives — that's the
+  locked "remain, de-identified" design. Anything else that wants to mutate the log is still
+  forbidden — this exception is *legal*, not a precedent. Require fresh OTP before executing.
+- **D4 · Review bypass — treat as an auth backdoor, because it is one.** Flag default **off**;
+  allowlist + fixed code from env (never in code); the fixed code must be rejected for any
+  non-allowlisted phone; allowlisted phones should be numbers you control, not real-looking ones.
+  Log every bypass login. This is a security seam — test it like `authorize_voice` was tested
+  (flag → allowlist → code, each layer independently).
+- **D5 · Report mechanism — reuse the quarantine gate, add no authority surface.** A report flips
+  the same held-out-of-shared-surface state the merge gate uses (uploader still sees their own
+  content) — **do not build a parallel moderation model** or roles/queues (invariant #4:
+  governance stays ownerless; the owner-review step is an ops process, not a role in the schema).
+  Reports are rows (`reporter`, `target`, `reason`, timestamps) — the one new table that's
+  genuinely non-derivable. Blocking is a **per-user view filter** (their future content hidden
+  from *you*), never a global takedown. Reporter anonymity: the uploader never learns who
+  reported. The same endpoint doubles as Play's AI-content report path (`target` can be a note
+  section / AI output, not just a resource).
 
 ---
 
