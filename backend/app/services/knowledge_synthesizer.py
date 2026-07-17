@@ -39,7 +39,47 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 MAX_CONTEXT_CHARS = 80_000
+CLASSIFY_SAMPLE_CHARS = 4_000  # B10: family is only a *prior*, so classify cheaply off a sample
 _EMPTY_NOTE = "_No materials uploaded yet. Add notes or files to generate a consolidated summary._"
+
+# B10 — content picks form. Taught to EVERY synthesis prompt regardless of subject family:
+# the family is only a prior (a one-line lean below), never a gate that swaps templates. The
+# real bug this fixes is the prompt having no worked-example/math vocabulary at all ("prose
+# for explanations" was humanities-tuned). Failure runs both ways — the rules guard both.
+_FORM_RULES = """FORM FOLLOWS CONTENT (important):
+- Let the material decide the shape. Definitions, theory, and intuition are prose.
+  Problem-solving, derivations, and proofs are **worked examples** — keep every step,
+  never compress a derivation into a paragraph. A single topic often mixes both freely.
+- Render ALL mathematics as LaTeX: $…$ inline, $$…$$ for display equations. Never write
+  math as plain text and never prose-flatten a formula or a derivation.
+- Keep worked examples and derivations step-structured (numbered or line-by-line steps).
+- Keep code in fenced ``` blocks and tabular data in Markdown tables — never prose-ify an
+  algorithm or a comparison table.
+- Do NOT invent structure the material lacks: don't inflate a two-line definition into a
+  fake worked example, and don't add math to a topic that genuinely has none."""
+
+# The one-line lean per family — a bias on the default, not a command. Empty for GENERAL
+# (let the content speak entirely). A wrong guess degrades gracefully to content-driven form.
+_FAMILY_LEAN: dict[SubjectFamily, str] = {
+    SubjectFamily.STEM: (
+        "This topic is likely STEM — expect many worked examples, derivations, and formulas. "
+        "Render those with math and keep the steps intact; still use prose for definitions and intuition."
+    ),
+    SubjectFamily.LANGUAGE: (
+        "This topic is likely language-learning — expect vocabulary, example sentences, and grammar. "
+        "Prose and lists lead; use math only if the material genuinely has it."
+    ),
+    SubjectFamily.HUMANITIES: (
+        "This topic is likely reading/argument-heavy — expect mostly prose and structured explanation. "
+        "Use worked examples or math only where the material actually contains them."
+    ),
+    SubjectFamily.GENERAL: "",
+}
+
+
+def _family_lean_block(family: SubjectFamily) -> str:
+    lean = _FAMILY_LEAN.get(family, "")
+    return f"SUBJECT LEAN: {lean}\n\n" if lean else ""
 
 # A note is "usable as a base to merge into" only if it's real prose — not absent
 # and not the empty-state placeholder. Otherwise we do a full build.
@@ -56,6 +96,15 @@ def _coerce_family(raw: Optional[str]) -> SubjectFamily:
         return SubjectFamily(str(raw).strip().upper())
     except (ValueError, AttributeError):
         return SubjectFamily.GENERAL
+
+
+def _extract_family_token(raw: Optional[str]) -> Optional[str]:
+    """Pull the first family keyword out of a classification reply (tolerates chatty models)."""
+    text = (raw or "").upper()
+    for family in SubjectFamily:
+        if family.value in text:
+            return family.value
+    return None
 
 
 class KnowledgeSynthesizer:
@@ -122,10 +171,16 @@ class KnowledgeSynthesizer:
                 # Nothing new to fold in — the note is already current. Skip the LLM.
                 return await self._finish_unchanged(db, knowledge, len(resources))
 
+            # B10: classify the family *before* writing the note, so the prompt lean +
+            # client render hint are available. It's a prior, not a gate — a wrong guess
+            # degrades to content-driven form. User overrides win and skip the LLM.
+            family = await self._classify_family(db, topic_id, sources, mode=mode)
+
             body = await self._generate_body(
                 db, topic_id, topic_name, mode,
                 base_note=knowledge.consolidated_note if mode == "incremental" else None,
                 sources=sources,
+                family=family,
                 broadcast=broadcast,
             )
             meta = await self._extract_metadata(body, topic_name)
@@ -134,10 +189,6 @@ class KnowledgeSynthesizer:
             knowledge.key_points = meta.get("key_points", [])
             knowledge.concepts = meta.get("concepts", [])
             knowledge.source_count = len(resources)
-
-            # Infer the subject family from the note (drives the retrieval profile).
-            # Never overrides a user's manual choice.
-            await self._apply_subject_family(db, topic_id, meta.get("subject_family"))
             knowledge.status = KnowledgeStatus.COMPLETED
             knowledge.generated_at = datetime.utcnow()
 
@@ -174,14 +225,56 @@ class KnowledgeSynthesizer:
         topic = await db.scalar(select(Topic).where(Topic.id == _uuid.UUID(str(topic_id))))
         return topic.title if topic else "this topic"
 
-    async def _apply_subject_family(
-        self, db: AsyncSession, topic_id: str, raw_family: Optional[str]
-    ) -> None:
-        """Set the topic's inferred subject family — unless a user has overridden it."""
+    async def _classify_family(
+        self, db: AsyncSession, topic_id: str, sources: List[Resource], *, mode: str
+    ) -> SubjectFamily:
+        """Pre-classify the topic's subject family from raw chunks, before the note is written.
+
+        A user override wins and skips the LLM. On incremental merges an already-inferred
+        family is kept (don't flip-flop off a partial new chunk); on a full build, or while
+        the family is still the GENERAL default, (re)classify. Because the family is only a
+        prior — a lean on the prompt + a render hint — a wrong guess degrades gracefully, so
+        this stays deliberately cheap (a sample of the chunks, fast tier).
+        """
         topic = await db.scalar(select(Topic).where(Topic.id == _uuid.UUID(str(topic_id))))
-        if topic is None or topic.subject_family_overridden:
-            return
-        topic.subject_family = _coerce_family(raw_family)
+        if topic is None:
+            return SubjectFamily.GENERAL
+        if topic.subject_family_overridden:
+            return topic.subject_family
+        if mode == "incremental" and topic.subject_family != SubjectFamily.GENERAL:
+            return topic.subject_family
+
+        family = await self._infer_family(db, sources)
+        topic.subject_family = family
+        return family
+
+    async def _infer_family(self, db: AsyncSession, sources: List[Resource]) -> SubjectFamily:
+        """One cheap, fast-tier LLM classification off a sample of the material."""
+        sample = (await self._context_for(db, sources))[:CLASSIFY_SAMPLE_CHARS]
+        if not sample.strip():
+            return SubjectFamily.GENERAL
+        try:
+            raw = await call_llm(
+                self._classify_prompt(sample),
+                task="subject_classify", temperature=0.0, max_tokens=16, timeout=30.0,
+            )
+        except Exception:
+            logger.warning("subject pre-classification failed; defaulting to GENERAL", exc_info=True)
+            return SubjectFamily.GENERAL
+        return _coerce_family(_extract_family_token(raw))
+
+    def _classify_prompt(self, sample: str) -> str:
+        return f"""Classify the subject family of this study material. Reply with EXACTLY ONE word.
+
+- STEM        — math, science, engineering: worked problems, formulas, derivations.
+- LANGUAGE    — learning a language: vocabulary, grammar, producing/speaking output.
+- HUMANITIES  — reading/argument-heavy: history, philosophy, literature, essays.
+- GENERAL     — none of the above fits cleanly.
+
+MATERIAL:
+{sample}
+
+One word only:"""
 
     async def _live_resources(self, db: AsyncSession, topic_id: str) -> List[Resource]:
         """Non-quarantined resources for the topic — never merges a quarantined upload."""
@@ -266,14 +359,15 @@ class KnowledgeSynthesizer:
         *,
         base_note: Optional[str],
         sources: List[Resource],
+        family: SubjectFamily,
         broadcast: Optional[Broadcast],
     ) -> str:
         """Stream the note markdown, emitting deltas, and return the full body."""
         context = await self._context_for(db, sources)
         prompt = (
-            self._incremental_prompt(topic_name, base_note or "", context)
+            self._incremental_prompt(topic_name, base_note or "", context, family)
             if mode == "incremental"
-            else self._full_prompt(topic_name, context)
+            else self._full_prompt(topic_name, context, family)
         )
 
         await self._emit(broadcast, {"type": "knowledge_stream_start", "topic_id": str(topic_id), "mode": mode})
@@ -296,7 +390,7 @@ class KnowledgeSynthesizer:
         except Exception:
             logger.warning("knowledge stream broadcast failed", exc_info=True)
 
-    def _full_prompt(self, topic_name: str, context: str) -> str:
+    def _full_prompt(self, topic_name: str, context: str, family: SubjectFamily) -> str:
         source_count = context.count("=== SOURCE ")
         reconcile = (
             "Where sources overlap or contradict, reconcile them — don't repeat each. "
@@ -311,7 +405,7 @@ explanations. A student should be able to study ONLY this document and have ever
 
 TOPIC: {topic_name}
 
-SOURCE MATERIALS:
+{_family_lean_block(family)}SOURCE MATERIALS:
 {context}
 
 {reconcile}
@@ -319,18 +413,19 @@ SOURCE MATERIALS:
 Rules:
 - Open with 1–2 plain-English sentences answering "what is this topic actually about?"
 - Use ## subheadings organised by concept/theme (not by source).
-- Bold the first mention of every important term.
-- Bullets for lists; prose for explanations that need flow. Keep examples the sources give.
+- Bold the first mention of every important term. Bullets for lists.
 - Length matches the material — rich material, rich document. Don't pad, don't compress.
+
+{_FORM_RULES}
 
 Output ONLY the finished markdown document. No preamble, no JSON, no commentary."""
 
-    def _incremental_prompt(self, topic_name: str, base_note: str, context: str) -> str:
+    def _incremental_prompt(self, topic_name: str, base_note: str, context: str, family: SubjectFamily) -> str:
         return f"""You are UPDATING an existing consolidated study note by folding in new material.
 
 TOPIC: {topic_name}
 
-Return the COMPLETE updated note — the existing content PLUS the new material, merged in.
+{_family_lean_block(family)}Return the COMPLETE updated note — the existing content PLUS the new material, merged in.
 This is an incremental update, not a rewrite: preserve the existing note's structure and
 content, and weave the new material into the right sections.
 
@@ -345,8 +440,11 @@ Rules:
 - Where the new material repeats what's already there, DEDUPE — don't add a second copy.
 - Where it contradicts the existing note, reconcile and note the more reliable version.
 - Where it adds something genuinely new, add it under the right ## subheading (or a new one).
-- Preserve the markdown conventions: plain-English opener, ## subheadings, bold first
-  mention of terms, bullets for lists, prose for explanations.
+- Preserve the markdown conventions: plain-English opener, ## subheadings, bold first mention.
+- Preserve existing worked examples and derivations intact — never dedupe, compress, or
+  "tighten" a worked example or its steps out of existence when merging.
+
+{_FORM_RULES}
 
 Output ONLY the finished markdown document — the whole updated note. No preamble, no JSON."""
 
@@ -368,19 +466,15 @@ KEY_POINTS: the facts a student must know cold to pass an exam.
 - 5–10 items (more if warranted); each one specific and self-contained; cover different aspects.
 
 CONCEPTS: terms that need defining.
-- 4–12 terms; only ones a student might not know; one plain-English sentence each.
-
-SUBJECT_FAMILY: the single best fit for how this material is best practised. One of:
-- "STEM"        — math, science, engineering: worked problems, formulas, derivations.
-- "LANGUAGE"    — learning a language: vocabulary, grammar, producing/speaking output.
-- "HUMANITIES"  — reading/argument-heavy: history, philosophy, literature, essays.
-- "GENERAL"     — none of the above fits cleanly.
+- 4–12 terms (more if warranted); only ones a student might not know; one plain-English sentence each.
+- For STEM material, a "concept" can be a **procedure or skill** ("differentiate a composite
+  function", "balance a redox equation"), not just a term↔definition — name the procedure as the
+  term and give a one-line method sketch as the definition. These become worked problems.
 
 Return JSON:
 {{
   "key_points": ["specific exam-ready fact", "..."],
-  "concepts": [{{"term": "Term", "definition": "One clear sentence."}}],
-  "subject_family": "STEM" | "LANGUAGE" | "HUMANITIES" | "GENERAL"
+  "concepts": [{{"term": "Term", "definition": "One clear sentence."}}]
 }}
 
 Return ONLY valid JSON. No preamble, no text outside the JSON."""

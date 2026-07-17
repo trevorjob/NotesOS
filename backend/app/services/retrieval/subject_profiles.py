@@ -32,7 +32,9 @@ GRADE_AI = "ai"                              # open-answer AI grading
 
 # The retrieval modes an affinity is defined over. Kept explicit so a new mode that
 # forgets to register an affinity is caught loudly (see assert_modes_covered).
-KNOWN_MODES = ("quiz", "pretest", "ramble", "teach", "recap")
+# recap + brain_dump are log-level modes (orchestrations, not registry plugins) — two
+# surfaces of one free-recall machine, so brain_dump mirrors recap's affinities.
+KNOWN_MODES = ("quiz", "pretest", "ramble", "teach", "recap", "brain_dump")
 
 
 @dataclass(frozen=True)
@@ -54,25 +56,25 @@ class SubjectProfile:
 PROFILES: dict[SubjectFamily, SubjectProfile] = {
     SubjectFamily.STEM: SubjectProfile(
         family=SubjectFamily.STEM,
-        mode_mix={"quiz": 1.0, "pretest": 1.0, "ramble": 0.5, "teach": 0.6, "recap": 0.8},
+        mode_mix={"quiz": 1.0, "pretest": 1.0, "ramble": 0.5, "teach": 0.6, "recap": 0.8, "brain_dump": 0.8},
         render=RENDER_MATH,
         grading=GRADE_SELF_CALIBRATION,
     ),
     SubjectFamily.LANGUAGE: SubjectProfile(
         family=SubjectFamily.LANGUAGE,
-        mode_mix={"quiz": 0.7, "pretest": 0.6, "ramble": 1.0, "teach": 0.9,  "recap": 0.8},
+        mode_mix={"quiz": 0.7, "pretest": 0.6, "ramble": 1.0, "teach": 0.9,  "recap": 0.8, "brain_dump": 0.8},
         render=RENDER_PROSE,
         grading=GRADE_AI,
     ),
     SubjectFamily.HUMANITIES: SubjectProfile(
         family=SubjectFamily.HUMANITIES,
-        mode_mix={"quiz": 0.8, "pretest": 0.7, "ramble": 0.9, "teach": 1.0, "recap": 1.0},
+        mode_mix={"quiz": 0.8, "pretest": 0.7, "ramble": 0.9, "teach": 1.0, "recap": 1.0, "brain_dump": 1.0},
         render=RENDER_PROSE,
         grading=GRADE_AI,
     ),
     SubjectFamily.GENERAL: SubjectProfile(
         family=SubjectFamily.GENERAL,
-        mode_mix={"quiz": 1.0, "pretest": 0.7, "ramble": 0.8, "teach": 0.85, "recap": 1.0},
+        mode_mix={"quiz": 1.0, "pretest": 0.7, "ramble": 0.8, "teach": 0.85, "recap": 1.0, "brain_dump": 1.0},
         render=RENDER_DEFAULT,
         grading=GRADE_AI,
     ),

@@ -15,7 +15,9 @@ from typing import Any
 
 from app.services.grader import grader
 from app.services.llm import call_llm
+from app.services.retrieval import worked
 from app.services.retrieval.modes import Challenge, ModeContext, Outcome, score_to_grade
+from app.services.retrieval.subject_profiles import GRADE_SELF_CALIBRATION
 
 # ``score_to_grade`` now lives in ``modes.py`` (shared by every mode); re-exported here
 # for backward compatibility with existing imports.
@@ -28,6 +30,12 @@ class QuizMode:
     key = "quiz"
 
     async def generate(self, concept, ctx: ModeContext) -> Challenge:
+        # STEM self-calibration (B9): the topic's profile directive — never the family
+        # enum — decides whether to pose a worked problem instead of a normal question.
+        # A future family that adopts self_calibration gets this for free.
+        if ctx.extra.get("grading") == GRADE_SELF_CALIBRATION:
+            return await self._generate_worked(concept, ctx)
+
         raw = await self._generate_question(concept, ctx)
         return Challenge(
             concept_id=str(concept.id),
@@ -40,11 +48,57 @@ class QuizMode:
             },
         )
 
+    async def _generate_worked(self, concept, ctx: ModeContext) -> Challenge:
+        """Pose a STEM problem: a worked (self-graded), numeric, or conceptual question.
+
+        The full worked solution / expected value ride in the payload for the server to
+        hold back — they're stripped from ``/next`` (``_SENSITIVE_PAYLOAD_KEYS``) exactly
+        like ``correct_answer`` and only surface at ``/reveal``.
+        """
+        raw = await self._generate_worked_problem(concept, ctx)
+        ptype = raw.get("problem_type")
+        if ptype not in (worked.WORKED_TYPE, worked.NUMERIC_TYPE):
+            # Conceptual STEM stays AI-graded — fall through to the normal short-answer path.
+            return Challenge(
+                concept_id=str(concept.id),
+                prompt=raw["question_text"],
+                payload={
+                    "question_type": "short_answer",
+                    "correct_answer": raw.get("correct_answer"),
+                    "explanation": raw.get("explanation"),
+                },
+            )
+        return Challenge(
+            concept_id=str(concept.id),
+            prompt=raw["question_text"],
+            payload={
+                "question_type": ptype,
+                "worked_solution": raw.get("worked_solution"),
+                "expected_value": raw.get("expected_value"),
+                "tolerance": raw.get("tolerance"),
+            },
+        )
+
     async def evaluate(
         self, concept, challenge: Challenge, response: Any, ctx: ModeContext
     ) -> Outcome:
-        answer = response if isinstance(response, str) else (response or {}).get("answer", "")
         qtype = (challenge.payload or {}).get("question_type", "mcq")
+
+        # STEM self-calibration (B9): both branches are LLM-free.
+        # ``worked`` — the student self-grades against the revealed solution.
+        # ``numeric`` — one right number, compared server-side within tolerance.
+        if qtype == worked.WORKED_TYPE:
+            return worked.grade_self_report(response)
+        if qtype == worked.NUMERIC_TYPE:
+            payload = challenge.payload or {}
+            return worked.grade_numeric(
+                response,
+                expected_value=float(payload.get("expected_value") or 0.0),
+                tolerance=float(payload.get("tolerance") or 0.0),
+                solution=payload.get("worked_solution"),
+            )
+
+        answer = response if isinstance(response, str) else (response or {}).get("answer", "")
 
         # MCQ is binary — but a right answer is "good", not "easy": guessing inflates
         # easy, and we don't want a lucky guess to push the concept far into the future.
@@ -82,6 +136,16 @@ class QuizMode:
         )
         return self._parse(raw)
 
+    async def _generate_worked_problem(self, concept, ctx: ModeContext) -> dict:
+        raw = await call_llm(
+            self._build_worked_prompt(concept),
+            task="worked_problem_gen",
+            temperature=0.5,
+            max_tokens=1200,
+            timeout=90.0,
+        )
+        return self._parse(raw)
+
     async def _grade(self, concept, challenge: Challenge, answer: str, ctx: ModeContext) -> dict:
         return await grader.grade_answer(
             question=challenge.prompt,
@@ -114,6 +178,35 @@ Return ONLY a JSON object:
   "answer_options": ["A","B","C","D"] | null,
   "correct_answer": "...",
   "explanation": "1-2 sentences on why."
+}}"""
+
+    def _build_worked_prompt(self, concept) -> str:
+        definition = f"\nMETHOD/DEFINITION: {concept.definition}" if concept.definition else ""
+        return f"""Write ONE STEM practice problem for this concept, for a student who
+learns by *solving*, not by explaining. Choose the shape that fits the concept:
+
+- "worked"  — a multi-step problem (a derivation, proof, or procedure). The student
+              solves it on paper and self-grades against a full solution. Give the
+              complete step-by-step worked_solution.
+- "numeric" — a problem with ONE correct number. Give expected_value (a plain number)
+              and a tolerance for rounding, plus the worked_solution that reaches it.
+- "conceptual" — only if the concept genuinely isn't solve-able (a definition, a
+              qualitative "why"). It'll be graded as a short answer.
+
+CONCEPT: {concept.text}{definition}
+
+Use LaTeX for all math with $...$ inline / $$...$$ display delimiters (the client and
+the handwriting transcriber both use this convention — stay consistent).
+
+Return ONLY a JSON object:
+{{
+  "question_text": "the problem, in LaTeX where math appears",
+  "problem_type": "worked" | "numeric" | "conceptual",
+  "worked_solution": "full step-by-step solution (worked/numeric)" | null,
+  "expected_value": 42.0 | null,   // numeric only, a bare number
+  "tolerance": 0.01 | null,        // numeric only
+  "correct_answer": "Key points: ..." | null,   // conceptual only
+  "explanation": "1-2 sentences" | null          // conceptual only
 }}"""
 
     def _parse(self, raw: str) -> dict:

@@ -10,9 +10,12 @@ The home is a doorway, not a dashboard (system-spec §14.1): its whole job is to
 1. **review** — concepts past their FSRS ``due`` (fading). The core loop.
 2. **calibration** — concepts the user was *confident* on but recently *missed* (the fluency
    illusion, made visible). Worth a recheck.
-3. **new** — concepts in an enrolled course the user has never attempted. A pretest primes
+3. **dump** — a topic the user **just read** (a fresh ``NOTE_VIEW`` with no retrieval since)
+   with unattempted concepts: offer a **brain dump**, not a reread — and not a pretest, whose
+   answer-before-studying framing is wrong once they've read the note (B7).
+4. **new** — concepts in an enrolled course the user has never attempted. A pretest primes
    them (answer-before-studying).
-4. **get_ahead** — nothing's due or new, but there's a schedule: firm up the soonest-due.
+5. **get_ahead** — nothing's due or new, but there's a schedule: firm up the soonest-due.
 
 **Never empty-handed** (§14.1): if the user has *any* concept the selector returns an
 action; it returns ``None`` only when there's genuinely nothing yet (→ the caller sends
@@ -25,9 +28,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.consume import ConsumeEvent, ConsumeKind
 from app.models.course import CourseEnrollment, Topic
 from app.models.retrieval import Concept, ConceptState, RetrievalAttempt
 from app.models.subject import SubjectFamily
@@ -48,21 +52,29 @@ _MAX_CONCEPTS_PER_ACTION = 20  # a session bite, not the whole backlog
 # pedagogical default, which wins on an affinity tie.
 #   new         → pretest only: answering-before-studying primes new material (invariant).
 #   calibration → quiz only: it's the mode carrying the predicted-vs-actual mechanic.
+#   dump        → brain_dump only: freshly-read material wants uncued whole-topic recall
+#                 (the read→dump beat, B7) — pretest's "a miss is expected" framing no
+#                 longer applies once the note has been read.
 #   review/get_ahead → ordinary effortful retrieval, where the family gets to lean
 #                      (STEM→quiz worked-example, LANGUAGE→ramble, HUMANITIES→teach).
 _CANDIDATE_MODES = {
     "review": ("quiz", "teach", "ramble"),
     "calibration": ("quiz",),
+    "dump": ("brain_dump",),
     "new": ("pretest",),
     "get_ahead": ("quiz", "teach", "ramble"),
 }
+
+# How long after a note read the "dump it while it's warm" offer stays live. Past this
+# the material is ordinary `new` again (and spacing is FSRS's job, not this selector's).
+FRESH_READ_WINDOW = timedelta(hours=24)
 
 
 @dataclass(frozen=True)
 class NextAction:
     """The single highest-value thing to do now — topic-scoped."""
 
-    kind: str                       # review | calibration | new | get_ahead
+    kind: str                       # review | calibration | dump | new | get_ahead
     course_id: uuid.UUID
     topic_id: uuid.UUID
     topic_title: str
@@ -214,6 +226,52 @@ async def _get_ahead_bucket(db, user_id, *, course_id, topic_id) -> dict:
     return _group(rows, urgency_index=5)
 
 
+async def _fresh_read_topic_ids(db: AsyncSession, user_id, topic_ids, *, now) -> set:
+    """Topics whose note this user read recently and hasn't retrieved against since.
+
+    Derived, never stored (invariant #2): "freshly read" = a ``NOTE_VIEW`` consume event
+    (B1 substrate) inside ``FRESH_READ_WINDOW`` that is newer than the user's last attempt
+    in the topic — once they've dumped (or quizzed), the offer has done its job.
+    """
+    if not topic_ids:
+        return set()
+
+    last_view = (
+        select(
+            ConsumeEvent.topic_id.label("topic_id"),
+            func.max(ConsumeEvent.created_at).label("viewed_at"),
+        )
+        .where(ConsumeEvent.actor_id == user_id)
+        .where(ConsumeEvent.kind == ConsumeKind.NOTE_VIEW)
+        .where(ConsumeEvent.topic_id.in_(topic_ids))
+        .where(ConsumeEvent.created_at >= now - FRESH_READ_WINDOW)
+        .group_by(ConsumeEvent.topic_id)
+    ).subquery()
+
+    last_attempt = (
+        select(
+            Concept.topic_id.label("topic_id"),
+            func.max(RetrievalAttempt.created_at).label("attempted_at"),
+        )
+        .join(RetrievalAttempt, RetrievalAttempt.concept_id == Concept.id)
+        .where(RetrievalAttempt.user_id == user_id)
+        .where(Concept.topic_id.in_(topic_ids))
+        .group_by(Concept.topic_id)
+    ).subquery()
+
+    stmt = (
+        select(last_view.c.topic_id)
+        .outerjoin(last_attempt, last_attempt.c.topic_id == last_view.c.topic_id)
+        .where(
+            or_(
+                last_attempt.c.attempted_at.is_(None),
+                last_view.c.viewed_at > last_attempt.c.attempted_at,
+            )
+        )
+    )
+    return set((await db.execute(stmt)).scalars().all())
+
+
 def _group(rows, *, urgency_index, exclude: Optional[set] = None) -> dict:
     """Fold (concept_id, topic_id, course_id, title, family, [urgency]) rows into buckets."""
     buckets: dict = {}
@@ -278,6 +336,18 @@ async def select_next_action(
         return action
 
     new = await _new_buckets(db, user_id, course_id=course_id, topic_id=topic_id)
+
+    # The read→dump beat (B7): a topic they *just read* gets a brain-dump offer, not a
+    # pretest — they've seen the material, so uncued whole-topic recall is the move now.
+    fresh = await _fresh_read_topic_ids(db, user_id, list(new.keys()), now=now)
+    action = _pick_top(
+        {tid: bucket for tid, bucket in new.items() if tid in fresh},
+        kind="dump",
+        reason_fn=lambda t, n: f"You just read {t} — brain-dump it while it's warm. Recalling beats rereading.",
+    )
+    if action:
+        return action
+
     action = _pick_top(
         new,
         kind="new",

@@ -59,6 +59,7 @@ _TASK_MODEL_MAP: dict[str, tuple[str, str]] = {
     "study_chat":          ("openai",   "gpt-4o-mini"),   # fast — interactive tutor
     "knowledge_synthesis": ("openai",   "gpt-4o"),        # heavy — the consolidated note (streamed body)
     "knowledge_metadata":  ("openai",   "gpt-4o-mini"),   # fast — extract key_points/concepts from the finished note
+    "subject_classify":    ("openai",   "gpt-4o-mini"),   # fast — one-word family lean off a chunk sample (B10, a prior)
     "fact_check":          ("openai",   "gpt-4o-mini"),   # standard
     "research":            ("openai",   "gpt-4o-mini"),   # standard
     "audio_script":        ("openai",   "gpt-4o-mini"),   # fast
@@ -67,6 +68,7 @@ _TASK_MODEL_MAP: dict[str, tuple[str, str]] = {
     "capture_organize":    ("openai",   "gpt-4o-mini"),   # fast — classify/name a dump
     "recap_eval":          ("openai",   "gpt-4o"),         # heavy — grades a monologue over many concepts
     "voice_chat":          ("openai",   "gpt-4o-mini"),    # fast — the spoken tutor reply (streamed, low-latency)
+    "worked_problem_gen":  ("openai",   "gpt-4o"),          # heavy — a STEM problem + a *correct* worked solution
 }
 
 

@@ -87,16 +87,24 @@ async def grade_recap(
     prompt: Optional[str] = None,
     predicted_confidence: Optional[float] = None,
     now: Optional[datetime] = None,
+    mode_key: str = RECAP_MODE,
+    origin: Optional[str] = None,
 ) -> list[RecapConceptResult]:
     """Grade one free-recall response against every concept → an attempt per concept.
 
     A concept the monologue never surfaces is a genuine miss (a lapse), not skipped —
     that's exactly the forgetting the recap is meant to expose. Each attempt is recorded
     append-only and the recognition seam fires per concept, mirroring ``/attempt``.
+
+    ``mode_key`` names the log-level mode the attempts land under. Recap and brain dump
+    are two surfaces of one free-recall machine (product-map, LOCKED 2026-07-17) — the
+    grader is shared; only the set selector and the recorded mode differ.
     """
     concepts = await _load_concepts(db, concept_ids)
     said = _extract_text(response)
-    challenge = {"recap": True, "prompt": prompt, "session_size": len(concepts)}
+    challenge = {mode_key: True, "prompt": prompt, "session_size": len(concepts)}
+    if origin:  # paper substrate (B8): the monologue was confirmed off a handwriting photo
+        challenge["origin"] = origin
 
     per_concept = {} if not said.strip() else _index_analysis(await _analyze_recall(concepts, said))
 
@@ -107,7 +115,7 @@ async def grade_recap(
             db,
             user_id=user_id,
             concept_id=concept.id,
-            mode=RECAP_MODE,
+            mode=mode_key,
             outcome=outcome,
             predicted_confidence=predicted_confidence,
             challenge=challenge,

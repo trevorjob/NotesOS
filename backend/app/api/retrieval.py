@@ -18,9 +18,9 @@ under an opaque ``challenge_id``, never sent to the client, and dropped on attem
 
 import json
 import uuid
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,16 +31,19 @@ from app.models.course import Topic
 from app.models.retrieval import Concept
 from app.models.subject import SubjectFamily
 from app.models.user import User
+from app.services import paper
 from app.services.redis_client import redis_client
-from app.services.retrieval import engine, next_action, recap, recognition, registry, session
-from app.services.retrieval import subject_profiles
+from app.services.retrieval import dump, engine, next_action, recap, recognition, registry, session
+from app.services.retrieval import subject_profiles, worked
 from app.services.retrieval.modes import Challenge, ModeContext
 
 router = APIRouter(prefix="/api/retrieval", tags=["retrieval"])
 
 # Payload keys a challenge holds for grading but the client must not see (it'd be the
-# answer key). Stripped from what /next returns; kept in the server-side copy.
-_SENSITIVE_PAYLOAD_KEYS = ("correct_answer", "explanation")
+# answer key). Stripped from what /next returns; kept in the server-side copy. The
+# worked solution + expected value (B9) are the STEM answer key — surfaced only at
+# /reveal, after the confidence prediction is captured.
+_SENSITIVE_PAYLOAD_KEYS = ("correct_answer", "explanation", "worked_solution", "expected_value", "tolerance")
 _CHALLENGE_TTL_SEC = 1800  # 30 min to answer before the challenge expires
 
 
@@ -66,6 +69,10 @@ class AttemptRequest(BaseModel):
     challenge_id: str
     response: Any = None
     predicted_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    # Paper substrate (B8): "paper" marks a response the user transcribed-and-confirmed
+    # from a handwriting photo. A marker only — never an image field; /attempt stays
+    # text-only (LOCKED). Folded into the recorded challenge payload for the log.
+    answer_origin: Optional[Literal["paper"]] = None
 
 
 class Calibration(BaseModel):
@@ -81,6 +88,23 @@ class AttemptResponse(BaseModel):
     outcome: dict
     state: dict
     calibration: Calibration
+
+
+class RevealRequest(BaseModel):
+    challenge_id: str
+    # Captured *here*, before the solution is visible — the entire calibration guarantee.
+    predicted_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+
+
+class RevealResponse(BaseModel):
+    """The withheld worked solution for a STEM self-calibration problem (B9).
+
+    Returned only once and only after the confidence prediction is stamped in — the
+    student solves on paper, predicts, reveals, then self-grades through /attempt.
+    """
+
+    question_type: str
+    worked_solution: Optional[str]
 
 
 class ModeInfo(BaseModel):
@@ -125,6 +149,25 @@ class RecapAttemptRequest(BaseModel):
     challenge_id: str
     response: Any = None
     predicted_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    # Paper substrate (B8) — see AttemptRequest.answer_origin. Handwritten dumps are
+    # the paper-native study pattern this exists for.
+    answer_origin: Optional[Literal["paper"]] = None
+
+
+class TranscribeResponse(BaseModel):
+    """A handwriting transcription, pending the user's confirmation (B8).
+
+    ``requires_confirmation`` is always true — the confirm/correct beat is the contract
+    (grade what the user confirms they wrote, never what OCR guessed), mirrored in the
+    shape so a client can't silently skip it. The flags point the user at exactly the
+    spots the model wasn't sure about.
+    """
+
+    transcription: str
+    requires_confirmation: Literal[True] = True
+    page_count: int
+    has_uncertain: bool
+    has_illegible: bool
 
 
 class RecapConceptOutcome(BaseModel):
@@ -183,18 +226,25 @@ async def _load_challenge(challenge_id: str) -> Optional[dict]:
     return json.loads(raw) if raw else None
 
 
+async def _update_challenge(challenge_id: str, record: dict) -> None:
+    """Re-store a challenge record under the same id (B9 /reveal stamps confidence into it)."""
+    client = await redis_client.get_client()
+    await client.set(_challenge_key(challenge_id), json.dumps(record), ex=_CHALLENGE_TTL_SEC)
+
+
 async def _drop_challenge(challenge_id: str) -> None:
     client = await redis_client.get_client()
     await client.delete(_challenge_key(challenge_id))
 
 
-# Recap holds a *set* of concepts (not one), so it gets its own record shape under a
-# distinct key namespace — same opaque-handoff pattern as the single-concept store.
-def _recap_key(challenge_id: str) -> str:
-    return f"retrieval:recap:{challenge_id}"
+# A free-recall turn (recap / brain dump) holds a *set* of concepts (not one), so it
+# gets its own record shape under a per-kind key namespace — same opaque-handoff pattern
+# as the single-concept store. ``kind`` keeps a recap challenge unplayable as a dump.
+def _free_recall_key(kind: str, challenge_id: str) -> str:
+    return f"retrieval:{kind}:{challenge_id}"
 
 
-async def _store_recap(user_id, topic_id, challenge: recap.RecapChallenge) -> str:
+async def _store_free_recall(kind: str, user_id, topic_id, challenge: recap.RecapChallenge) -> str:
     challenge_id = uuid.uuid4().hex
     record = {
         "user_id": str(user_id),
@@ -203,19 +253,19 @@ async def _store_recap(user_id, topic_id, challenge: recap.RecapChallenge) -> st
         "concept_ids": challenge.concept_ids,
     }
     client = await redis_client.get_client()
-    await client.set(_recap_key(challenge_id), json.dumps(record), ex=_CHALLENGE_TTL_SEC)
+    await client.set(_free_recall_key(kind, challenge_id), json.dumps(record), ex=_CHALLENGE_TTL_SEC)
     return challenge_id
 
 
-async def _load_recap(challenge_id: str) -> Optional[dict]:
+async def _load_free_recall(kind: str, challenge_id: str) -> Optional[dict]:
     client = await redis_client.get_client()
-    raw = await client.get(_recap_key(challenge_id))
+    raw = await client.get(_free_recall_key(kind, challenge_id))
     return json.loads(raw) if raw else None
 
 
-async def _drop_recap(challenge_id: str) -> None:
+async def _drop_free_recall(kind: str, challenge_id: str) -> None:
     client = await redis_client.get_client()
-    await client.delete(_recap_key(challenge_id))
+    await client.delete(_free_recall_key(kind, challenge_id))
 
 
 def _sanitize(payload: Optional[dict]) -> dict:
@@ -264,10 +314,15 @@ async def next_challenge(
 
     await verify_course_enrollment(db, user.id, concept.course_id)
 
-    # The concept inherits its topic's subject family; hand it to the mode as context
-    # (forward hook for family-shaped generation — e.g. STEM worked-examples).
+    # The concept inherits its topic's subject family; hand the mode both the family and
+    # its profile's grading *directive* (B9). Modes branch on the directive, never the
+    # family enum — so STEM's self_calibration serves a worked problem here.
     family = await _topic_family(db, concept.topic_id)
-    ctx = ModeContext(db=db, user_id=user.id, extra={"subject_family": family.value})
+    profile = subject_profiles.profile_for(family)
+    ctx = ModeContext(
+        db=db, user_id=user.id,
+        extra={"subject_family": family.value, "grading": profile.grading},
+    )
     challenge = await mode.generate(concept, ctx)
     challenge_id = await _store_challenge(user.id, concept, mode.key, challenge)
 
@@ -299,20 +354,35 @@ async def submit_attempt(
     await verify_course_enrollment(db, user.id, concept.course_id)
 
     mode = _get_mode_or_400(record["mode"])
+    payload = record["payload"] or {}
     challenge = Challenge(
-        concept_id=record["concept_id"], prompt=record["prompt"], payload=record["payload"] or {}
+        concept_id=record["concept_id"], prompt=record["prompt"], payload=payload
     )
     ctx = ModeContext(db=db, user_id=user.id)
 
-    outcome = await mode.evaluate(concept, challenge, body.response, ctx)
+    # A worked problem (B9) is self-graded: the solution must have been revealed first
+    # (ordering is the calibration guarantee), and the confidence was captured *at* reveal
+    # — not now, when the student already knows how they did.
+    is_self_graded = payload.get("question_type") == worked.WORKED_TYPE
+    if is_self_graded and not record.get("revealed"):
+        raise HTTPException(status.HTTP_409_CONFLICT, "reveal the solution before self-grading")
+    predicted_confidence = record.get("predicted_confidence") if is_self_graded else body.predicted_confidence
+
+    try:
+        outcome = await mode.evaluate(concept, challenge, body.response, ctx)
+    except worked.InvalidSelfGrade as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+    recorded_challenge = {"prompt": challenge.prompt, **payload}
+    if body.answer_origin:  # paper substrate (B8): note the confirmed-handwriting origin
+        recorded_challenge["origin"] = body.answer_origin
     result = await engine.record_attempt(
         db,
         user_id=user.id,
         concept_id=concept.id,
         mode=mode.key,
         outcome=outcome,
-        predicted_confidence=body.predicted_confidence,
-        challenge={"prompt": challenge.prompt, **(challenge.payload or {})},
+        predicted_confidence=predicted_confidence,
+        challenge=recorded_challenge,
         response=body.response if isinstance(body.response, (dict, list)) else {"raw": body.response},
     )
     await recognition.on_attempt(db, attempt=result.attempt, concept=concept, learner_id=user.id)
@@ -336,7 +406,41 @@ async def submit_attempt(
             "difficulty": state.difficulty,
             "last_grade": state.last_grade,
         },
-        calibration=_calibration(body.predicted_confidence, outcome.score),
+        calibration=_calibration(predicted_confidence, outcome.score),
+    )
+
+
+@router.post("/reveal", response_model=RevealResponse)
+async def reveal_solution(
+    body: RevealRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Capture the confidence prediction, then reveal a worked problem's solution (B9).
+
+    One-shot and strictly ordered: the prediction is stamped into the cached challenge
+    *before* the solution is returned, and a second reveal is a 409. Only worked
+    (self-graded) problems reveal this way — numeric/conceptual are judged at /attempt.
+    """
+    record = await _load_challenge(body.challenge_id)
+    if record is None:
+        raise HTTPException(status.HTTP_410_GONE, "challenge expired or not found")
+    if record["user_id"] != str(user.id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "not your challenge")
+
+    payload = record["payload"] or {}
+    if payload.get("question_type") != worked.WORKED_TYPE:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "this challenge has no worked solution to reveal")
+    if record.get("revealed"):
+        raise HTTPException(status.HTTP_409_CONFLICT, "solution already revealed")
+
+    record["revealed"] = True
+    record["predicted_confidence"] = body.predicted_confidence
+    await _update_challenge(body.challenge_id, record)
+
+    return RevealResponse(
+        question_type=worked.WORKED_TYPE,
+        worked_solution=payload.get("worked_solution"),
     )
 
 
@@ -463,45 +567,29 @@ async def get_next_action(
     )
 
 
-@router.post("/recap/next", response_model=RecapNextResponse)
-async def recap_next(
-    body: RecapNextRequest,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Open a recap of the last session in a topic: one uncued free-recall prompt."""
-    topic = await db.get(Topic, body.topic_id)
-    if topic is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "topic not found")
-    await verify_course_enrollment(db, user.id, topic.course_id)
+# Recap and brain dump are two surfaces of one free-recall machine (product-map, LOCKED
+# 2026-07-17): same handoff, same grader — only the opener and the logged mode differ.
 
-    try:
-        challenge = await recap.build_recap(db, user.id, topic_id=body.topic_id)
-    except recap.NoRecapAvailable as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc))
-
-    challenge_id = await _store_recap(user.id, body.topic_id, challenge)
+async def _open_free_recall(user, topic_id, *, kind: str, challenge: recap.RecapChallenge) -> RecapNextResponse:
+    challenge_id = await _store_free_recall(kind, user.id, topic_id, challenge)
     return RecapNextResponse(
         challenge_id=challenge_id,
-        topic_id=str(body.topic_id),
+        topic_id=str(topic_id),
         topic_title=challenge.topic_title,
         prompt=challenge.prompt,
         concept_count=len(challenge.concept_ids),
     )
 
 
-@router.post("/recap/attempt", response_model=RecapAttemptResponse)
-async def recap_attempt(
-    body: RecapAttemptRequest,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Grade one free-recall response into an append-only attempt per concept."""
-    record = await _load_recap(body.challenge_id)
+async def _grade_free_recall(
+    db, user, body: RecapAttemptRequest, *, kind: str, mode_key: str
+) -> RecapAttemptResponse:
+    """Shared second beat: load the handoff, grade the monologue, one attempt per concept."""
+    record = await _load_free_recall(kind, body.challenge_id)
     if record is None:
-        raise HTTPException(status.HTTP_410_GONE, "recap expired or not found")
+        raise HTTPException(status.HTTP_410_GONE, f"{kind} expired or not found")
     if record["user_id"] != str(user.id):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "not your recap")
+        raise HTTPException(status.HTTP_403_FORBIDDEN, f"not your {kind}")
 
     topic_id = uuid.UUID(record["topic_id"])
     topic = await db.get(Topic, topic_id)
@@ -516,8 +604,10 @@ async def recap_attempt(
         response=body.response,
         prompt=record.get("prompt"),
         predicted_confidence=body.predicted_confidence,
+        mode_key=mode_key,
+        origin=body.answer_origin,
     )
-    await _drop_recap(body.challenge_id)
+    await _drop_free_recall(kind, body.challenge_id)
 
     outcomes = [
         RecapConceptOutcome(
@@ -536,11 +626,99 @@ async def recap_attempt(
         sum(o.score for o in outcomes) / len(outcomes) if outcomes else 0.0
     )
     return RecapAttemptResponse(
-        mode=recap.RECAP_MODE,
+        mode=mode_key,
         topic_id=str(topic_id),
         concept_count=len(outcomes),
         mean_score=mean_score,
         outcomes=outcomes,
+    )
+
+
+async def _topic_or_404(db, user, topic_id) -> Topic:
+    topic = await db.get(Topic, topic_id)
+    if topic is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "topic not found")
+    await verify_course_enrollment(db, user.id, topic.course_id)
+    return topic
+
+
+@router.post("/recap/next", response_model=RecapNextResponse)
+async def recap_next(
+    body: RecapNextRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Open a recap of the last session in a topic: one uncued free-recall prompt."""
+    await _topic_or_404(db, user, body.topic_id)
+    try:
+        challenge = await recap.build_recap(db, user.id, topic_id=body.topic_id)
+    except recap.NoRecapAvailable as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc))
+    return await _open_free_recall(user, body.topic_id, kind="recap", challenge=challenge)
+
+
+@router.post("/recap/attempt", response_model=RecapAttemptResponse)
+async def recap_attempt(
+    body: RecapAttemptRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Grade one free-recall response into an append-only attempt per concept."""
+    return await _grade_free_recall(db, user, body, kind="recap", mode_key=recap.RECAP_MODE)
+
+
+@router.post("/dump/next", response_model=RecapNextResponse)
+async def dump_next(
+    body: RecapNextRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Open a brain dump: everything you know about the topic, one uncued prompt.
+
+    409 when the topic has no concepts yet — there's nothing to dump against until
+    synthesis has extracted a concept set.
+    """
+    await _topic_or_404(db, user, body.topic_id)
+    try:
+        challenge = await dump.build_dump(db, topic_id=body.topic_id)
+    except dump.NoDumpAvailable as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
+    return await _open_free_recall(user, body.topic_id, kind="dump", challenge=challenge)
+
+
+@router.post("/dump/attempt", response_model=RecapAttemptResponse)
+async def dump_attempt(
+    body: RecapAttemptRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Grade the dump monologue against the topic's full concept set — attempt per concept."""
+    return await _grade_free_recall(db, user, body, kind="dump", mode_key=dump.DUMP_MODE)
+
+
+@router.post("/transcribe", response_model=TranscribeResponse)
+async def transcribe_paper_answer(
+    files: list[UploadFile] = File(...),
+    _user: User = Depends(get_current_user),  # auth gate only — transcription is user-scoped, not course-scoped
+):
+    """Turn a photographed handwritten answer into text for the user to confirm (B8).
+
+    The paper substrate's single seam: photo(s) in page order → transcription out. The
+    client shows the transcription for the user to **confirm or correct**, then submits
+    the confirmed text through the normal ``/attempt`` / ``/recap/attempt`` /
+    ``/dump/attempt`` flow with ``answer_origin="paper"``. Photos are ephemeral — never
+    stored; only what the user confirms is ever graded.
+    """
+    images = [(f.filename or "", await f.read()) for f in files]
+    try:
+        result = await paper.transcribe_answer(images)
+    except paper.PaperValidationError as exc:
+        raise HTTPException(exc.status, str(exc))
+    return TranscribeResponse(
+        transcription=result.text,
+        page_count=result.page_count,
+        has_uncertain=result.has_uncertain,
+        has_illegible=result.has_illegible,
     )
 
 

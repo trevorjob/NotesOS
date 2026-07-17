@@ -9,9 +9,13 @@ from sqlalchemy import select
 
 from typing import AsyncIterator
 
+import uuid
+
 from app.services.rag import rag_service
 from app.services.llm import call_llm, call_llm_stream
+from app.models.course import Topic
 from app.models.progress import AIConversation, AIMessage, MessageRole
+from app.services.retrieval import subject_profiles
 
 
 class StudyAgent:
@@ -67,8 +71,12 @@ class StudyAgent:
         # 3. Get conversation history
         history = await self._get_conversation_history(db, conversation.id)
 
-        # 4. Generate answer with DeepSeek
-        answer = await self._generate_answer(question, context, history, personality=personality)
+        # 4. Generate answer — subject shape (STEM ⇒ work the math) is a lean orthogonal
+        # to persona; only on a topic, course-wide chat stays neutral.
+        subject_directive = await self._subject_directive(db, topic_id)
+        answer = await self._generate_answer(
+            question, context, history, personality=personality, subject_directive=subject_directive
+        )
 
         # 5. Save messages to conversation
         await self._save_messages(db, conversation.id, question, answer)
@@ -122,7 +130,10 @@ class StudyAgent:
         yield {"type": "meta", "conversation_id": str(conversation.id), "sources": sources}
 
         # 4. Stream the answer, accumulating for persistence
-        messages = self._build_answer_messages(question, context, history, personality)
+        subject_directive = await self._subject_directive(db, topic_id)
+        messages = self._build_answer_messages(
+            question, context, history, personality, subject_directive=subject_directive
+        )
         chunks: list[str] = []
         async for delta in call_llm_stream(
             "", task="study_chat", messages=messages, temperature=0.5, max_tokens=3000, timeout=45.0
@@ -208,7 +219,32 @@ class StudyAgent:
 
         return history
 
-    def _build_answer_messages(self, question: str, context: str, history: list, personality: Optional[dict] = None) -> list:
+    async def _subject_directive(self, db: AsyncSession, topic_id: Optional[str]) -> Optional[str]:
+        """The subject-shape lean for the tutor — a math directive on quantitative topics.
+
+        Branches on the topic profile's ``render`` directive (never ``if family == STEM``),
+        so a later family that renders math inherits it. Returns None for course-wide chat
+        (no topic) and for prose families, which need no special shaping — content leads.
+        """
+        if not topic_id:
+            return None
+        topic = await db.scalar(select(Topic).where(Topic.id == uuid.UUID(topic_id)))
+        if topic is None:
+            return None
+        profile = subject_profiles.profile_for(topic.subject_family)
+        if profile.render != subject_profiles.RENDER_MATH:
+            return None
+        return (
+            "This is a quantitative topic. Render all mathematics as LaTeX ($…$ inline, "
+            "$$…$$ display). When the student asks about a problem or procedure, WORK THE "
+            "EXAMPLE step by step — show the actual steps and keep derivations intact, "
+            "rather than describing the method in prose."
+        )
+
+    def _build_answer_messages(
+        self, question: str, context: str, history: list,
+        personality: Optional[dict] = None, subject_directive: Optional[str] = None,
+    ) -> list:
         """Assemble the chat messages (system + history + user) for an answer.
 
         Shared by the blocking and streaming paths so prompt construction lives in
@@ -292,8 +328,13 @@ class StudyAgent:
         the way a study partner would.
         - Match your response length to the question. A factual question 
         gets a short answer. A conceptual question gets a fuller explanation.
-        - If the student seems to have a misconception in their question, 
+        - If the student seems to have a misconception in their question,
         gently correct it before answering."""
+
+        if subject_directive:
+            # Subject shape is a separate axis from persona above — a visual humanities
+            # student and a concise STEM student are both possible.
+            system_prompt += f"\n\n        SUBJECT SHAPE (independent of the style above):\n        {subject_directive}"
 
         user_prompt = f"""Here are the notes for this topic:
 
@@ -307,9 +348,14 @@ class StudyAgent:
         messages.append({"role": "user", "content": user_prompt})
         return messages
 
-    async def _generate_answer(self, question: str, context: str, history: list, personality: Optional[dict] = None) -> str:
+    async def _generate_answer(
+        self, question: str, context: str, history: list,
+        personality: Optional[dict] = None, subject_directive: Optional[str] = None,
+    ) -> str:
         """Generate a full answer (non-streaming) with RAG context + personality."""
-        messages = self._build_answer_messages(question, context, history, personality)
+        messages = self._build_answer_messages(
+            question, context, history, personality, subject_directive=subject_directive
+        )
         return await call_llm("", task="study_chat", messages=messages, temperature=0.5, max_tokens=3000, timeout=45.0)
 
     async def _save_messages(
