@@ -37,14 +37,13 @@ class AudioGenerator:
         Format follows the memory-loop pattern:
           concept → explanation → example → question → pause → answer
         """
-        prompt = f"""You are writing a spoken audio script that a student will listen to 
-while walking, commuting, or doing something else with their hands. 
-This is the only thing they're doing with their ears right now.
+        prompt = f"""You are writing a spoken audio lesson a student listens to while walking or
+commuting — ears only, nothing on screen. Your job is to make THIS material actually stick in
+their memory by the time the audio ends. Not "cover" it — make it land.
 
-Your voice is a sharp, unhurried person who knows this topic cold and 
-genuinely finds it interesting. Not a lecturer. Not a tutor. 
-The kind of person who, if you asked them to explain something at a 
-coffee shop, would make you feel like you finally got it.
+Your voice is one sharp, unhurried person who knows this topic cold and genuinely finds it
+interesting — the person who explains a thing at a coffee shop and you finally get it.
+Not a lecturer, not a podcast duo, not the notes read aloud.
 
 TOPIC: {topic_name}
 
@@ -57,103 +56,48 @@ KEY POINTS:
 CONCEPTS:
 {json.dumps(knowledge.concepts or [], indent=2)}
 
-═══════════════════════════════════════
-STRUCTURE — follow this arc:
-═══════════════════════════════════════
+HOW TO MAKE IT STICK (judgment, not a formula):
+- Let THIS material decide the shape. There is no fixed arc to fill in and no per-concept loop
+  to repeat — a rhythm the listener can predict is a rhythm they stop hearing. Work through the
+  ideas the way they actually connect, spending time in proportion to difficulty: compress the
+  obvious, slow down and re-approach the hard thing, contrast ideas that are easy to confuse
+  rather than explaining each in isolation.
+- Memory is built by retrieval, not exposure. Land an idea, then genuinely make the listener
+  reach for it — a real question they have to answer in their head, [PAUSE], then the answer.
+  Do this where recall actually matters, never on a schedule.
+- Connect ideas by meaning, never by structural filler. "This is why X matters — without it Y
+  can't happen" carries the listener; "moving on to", "next up", "now let's look at", "to
+  summarise", "in conclusion" are dead air. Never announce the topic or say "in this lesson".
 
-HOOK (30–45 seconds)
-Don't announce the topic. Don't say "in this lesson we'll cover."
-Open with something that makes the listener lean in — a surprising fact, 
-a question they can't immediately answer, a contradiction, a real-world 
-consequence of this topic. Make them want to know the answer before 
-you've explained anything.
+OPEN FROM THIS MATERIAL, NOT FROM A TEMPLATE:
+- This is one of many lessons the student will hear. If every lesson opens the same way — a
+  generic surprising fact, a rhetorical question — they all blur into one. Find the entry point
+  that only THIS topic has: the specific tension, consequence, or surprise inside this material.
+  Don't reach for a stock opening move, and don't open two different topics the same way.
+- Close on the single most important idea from what you covered, then one last real recall
+  moment tying a couple of ideas together. [PAUSE], answer it, and leave the topic feeling alive
+  outside the classroom — without ever saying "to summarise".
 
-CORE CONTENT
-Work through the material using the memory-loop format — but vary the 
-execution so it doesn't feel like a template repeating itself:
+SPOKEN-WORD RULES (real constraints, not style):
+- Write exactly as spoken: pure prose, no markdown, no headings, no bullet symbols. If a line
+  trips the tongue read aloud, rewrite it. Vary sentence length deliberately — short lines hit,
+  long lines carry. Never use a word you wouldn't say out loud.
+- [PAUSE] is the ONLY control token. Put it after a recall question (real thinking time) and
+  before a genuinely hard idea (let the last one settle). It's a breath, not a buzzer. Do not
+  write any other bracketed markers.
+- Length follows the material: 900–1300 words (~6–8 min). Stop at 900 if it's genuinely simple;
+  go to 1300 if it's rich. Never pad to a count, never compress an important idea to hit one.
 
-  The loop per concept:
-  1. State what the concept is — plainly, no jargon first
-  2. Explain it like you're thinking through it out loud
-  3. Ground it in something concrete: an analogy, an example, 
-     a real-world application, a comparison to something familiar
-  4. Ask a recall question — make it feel conversational, 
-     not like a quiz
-  5. [PAUSE]
-  6. Give the answer, then add one more thing they didn't know to ask
+Before you finish, check your own script: does the opening come from THIS topic specifically, or
+could it head any lesson? Is any stretch running on autopilot — a predictable loop, a filler
+transition, a recall question asked out of habit? If so, rewrite that part.
 
-  Vary the loop:
-  - Simple concepts: compress it — don't over-explain the obvious
-  - Hard concepts: slow down, use two examples, come back to it later
-  - Closely related concepts: contrast them against each other 
-    instead of explaining them separately
-  - The most important concept in the material: explain it twice — 
-    once near the start, once near the end, with different framing
-
-TRANSITIONS
-Never use structural transitions like "moving on to" or "next up" or 
-"now let's look at." Instead, connect concepts to each other:
-  - "This is why X matters — because without it, Y can't happen."
-  - "Here's where it gets interesting."
-  - "That was the setup. Here's the payoff."
-  - "Hold that thought — we'll come back to it."
-  - "If you got that, the next part will make a lot of sense."
-
-CLOSING (30–45 seconds)
-Don't say "to summarise" or "in conclusion."
-Land on the one thing — the single most important idea from everything 
-you just covered. Then give a final recall moment: ask a question that 
-ties together 2–3 concepts at once. [PAUSE]. Answer it. 
-End with something that makes the topic feel alive outside the classroom.
-
-═══════════════════════════════════════
-WRITING RULES:
-═══════════════════════════════════════
-
-Voice and rhythm:
-- Write exactly as it will be spoken — no markdown, no bullet symbols, 
-  no headers. Pure prose.
-- Vary sentence length deliberately. Short sentences hit hard. 
-  Longer sentences carry you through an explanation. Mix them.
-- Read every line aloud in your head before writing the next one. 
-  If it trips you up, rewrite it.
-- Never use a word you wouldn't say naturally in conversation.
-
-Pauses:
-- [PAUSE] after every recall question — give the listener time to 
-  actually think, not just hear the question.
-- [PAUSE] before introducing a genuinely complex idea — 
-  let the previous one settle.
-- [PAUSE] is a breath, not a quiz buzzer. Use it like one.
-
-Emphasis:
-- Use [EMPHASIS] before a word or phrase that must land: 
-  "The key word here is [EMPHASIS] gradient."
-- Use it sparingly — 2–4 times maximum. If everything is emphasised, 
-  nothing is.
-
-Length:
-- Target 900–1300 words. That's roughly 6–8 minutes at a natural 
-  speaking pace — long enough to cover material properly, 
-  short enough to finish on a commute.
-- If the material is genuinely simple, stop at 900. 
-  Do not pad to hit a word count.
-- If the material is complex and rich, go to 1300. 
-  Do not compress important ideas to hit a word count.
-
-What this script is NOT:
-- Not a podcast with two hosts
-- Not a lecture with slides
-- Not a summary of the notes read aloud
-- Not a quiz with answers
-- A single, clear voice working through material in a way that 
-  makes it stick
-
-Return ONLY the script. Start immediately with the hook. 
-No title, no label, no "here is the script." Just the words."""
+Return ONLY the script — start straight in with the first line, no title, no label."""
 
         try:
-            return await call_llm(prompt, task="audio_script", temperature=0.5, max_tokens=4000, timeout=60.0)
+            # Higher temperature than the default: spoken lessons need variety between topics,
+            # and a low temperature is part of why every script used to open the same way.
+            return await call_llm(prompt, task="audio_script", temperature=0.8, max_tokens=4000, timeout=60.0)
         except Exception:
             logger.error("Audio script generation failed", exc_info=True)
             raise

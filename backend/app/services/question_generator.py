@@ -313,6 +313,13 @@ COVERAGE:
 - Ensure no two questions test the same idea
 - Prioritise concepts that appear repeatedly in the material or seem central to the topic
 
+VARY THE FRAMING (don't fill one mould):
+- Don't cast every question the same way. If one asks "which of the following", the next shouldn't.
+  Mix how you probe — a scenario, a "why does X happen", a "what breaks if Y changes", a
+  compare-two-ideas. Questions that all read alike are as forgettable as a wall of prose.
+- Before returning, check your own set: do these read as {batch_count} distinct probes, or {batch_count}
+  fills of one template? If they rhyme, recast them.
+
 CRITICAL: Return a JSON array of EXACTLY {batch_count} question(s). Not more, not fewer. If {batch_count} is 1, return an array with 1 element. If {batch_count} is 2, return exactly 2 elements.
 [
   {{

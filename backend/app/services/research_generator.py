@@ -113,7 +113,8 @@ class ResearchGenerator:
             ]
         )
 
-        prompt = f"""Generate comprehensive pre-class research for this topic.
+        prompt = f"""You are preparing a student to walk into class already oriented on this topic —
+knowing what matters, what's contested, and what they'll be expected to engage with.
 
 Topic: {topic_title}
 {f"Description: {topic_description}" if topic_description else ""}
@@ -121,18 +122,20 @@ Topic: {topic_title}
 Web Sources:
 {sources_text}
 
-Create a structured research overview that helps students prepare for class. Include:
-1. **Core Concepts** - Key ideas and definitions
-2. **Historical Context** - Important background (if relevant)
-3. **Key Points** - Main learning objectives
-4. **Common Misconceptions** - What students often get wrong
-5. **Connections** - How this relates to other topics
+Write a research overview that does exactly that. Let the MATERIAL decide which sections exist and
+how many — there is no fixed skeleton to fill in. Include background only where the topic genuinely
+has relevant history; name a common misconception only where a real one exists; draw connections only
+where they're real. Lead with what a student most needs to know first, and cut anything that would
+only be filler — a short, sharp overview of a simple topic beats a padded one with empty headings.
+
+Before finishing, check your own output: is every section carrying real weight, or is one there just
+because overviews "usually" have it? If the latter, drop it.
 
 Also extract 5-7 key concepts as a simple list.
 
 Return JSON:
 {{
-  "research_content": "markdown-formatted research text with sections",
+  "research_content": "markdown-formatted research text, sections chosen to fit the material",
   "key_concepts": ["concept1", "concept2", "concept3", ...]
 }}
 

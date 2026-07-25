@@ -329,7 +329,10 @@ class StudyAgent:
         - Match your response length to the question. A factual question 
         gets a short answer. A conceptual question gets a fuller explanation.
         - If the student seems to have a misconception in their question,
-        gently correct it before answering."""
+        gently correct it before answering.
+        - Answer THIS question, not a template. Don't open every reply the same way or
+        reach for a stock structure — respond to what they actually asked. Two different
+        questions should not come back shaped identically."""
 
         if subject_directive:
             # Subject shape is a separate axis from persona above — a visual humanities

@@ -356,6 +356,9 @@ class Grader:
     - If they have a misconception, treat it as something to fix, 
     not something to feel bad about
     - 2–4 sentences maximum. This is a moment, not a lecture.
+    - Vary it. A student works through many questions in a row — don't hand them the same
+    sentence shape every time ("Great job on X, but remember Y"). Make this one read as if
+    written for this answer, not stamped from a mould.
     - {"Use 1 emoji maximum, only if it fits naturally." if (personality or {}).get("emoji_usage") != "none" else "No emojis."}
 
     Return only the message text. No JSON. No label."""

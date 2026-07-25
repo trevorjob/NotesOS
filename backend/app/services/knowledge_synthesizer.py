@@ -56,7 +56,25 @@ _FORM_RULES = """FORM FOLLOWS CONTENT (important):
 - Keep code in fenced ``` blocks and tabular data in Markdown tables — never prose-ify an
   algorithm or a comparison table.
 - Do NOT invent structure the material lacks: don't inflate a two-line definition into a
-  fake worked example, and don't add math to a topic that genuinely has none."""
+  fake worked example, and don't add math to a topic that genuinely has none.
+
+STRUCTURE BEFORE PROSE (this is how the note stays studiable, not a wall of text):
+- Objective for every section: a student must be able to lift its core ideas AT A GLANCE,
+  with no connective filler to read past. Prose is your fallback prior — and that fallback
+  is exactly the failure to avoid. Do not default to paragraphs; derive each section's shape
+  from what its material is actually *doing*. There is no default to fall back on.
+- When a section covers several things of the same kind (sites, cases, categories, events,
+  species, causes…), give each its own labelled entry that leads with its recallable core —
+  itemised entries (e.g. *name · key attributes · why it matters*), a grouped or ordered
+  list, or a genuine multi-axis comparison table. Lead every section with the idea a student
+  must recall, never a warm-up sentence.
+- Prose is still correct where an idea genuinely needs FLOW — an argument, a causal account,
+  a narrative or a derivation that only makes sense read start-to-end. Do NOT shred those into
+  disconnected bullets, and do NOT force a table onto ideas that aren't tabular. Over-
+  structuring is the same bug as under-structuring, pointed the other way. (Tables read dense
+  and high-level — reach for one only on real multi-axis comparison, so rarely.)
+- Self-check before you finish: for each section, can its cores be pulled at a glance? Is any
+  sentence pure connective tissue with nothing to recall? If so, restructure it."""
 
 # The one-line lean per family — a bias on the default, not a command. Empty for GENERAL
 # (let the content speak entirely). A wrong guess degrades gracefully to content-driven form.
@@ -397,11 +415,13 @@ One word only:"""
             "Where they complement, merge them into a single complete picture."
             if source_count > 1 else ""
         )
-        return f"""You are consolidating all class materials for a topic into one definitive document.
+        return f"""You are consolidating all class materials for a topic into one studiable note.
 
-This is NOT a summary. It takes everything across all sources and produces a single
-document that covers the topic completely, resolving overlaps and merging complementary
-explanations. A student should be able to study ONLY this document and have everything.
+This is NOT a summary and NOT an exhaustive transcript. The raw uploads are kept verbatim as
+the *source layer* — the complete archive a student can always re-read — so this note does not
+have to hoard every sentence. Its job is the *studiable structure* on top: the shape a student
+would actually study and practise from, with each idea pulled into a form they can recall at a
+glance. Reconcile overlaps and merge complementary explanations across sources.
 
 TOPIC: {topic_name}
 
@@ -413,8 +433,10 @@ TOPIC: {topic_name}
 Rules:
 - Open with 1–2 plain-English sentences answering "what is this topic actually about?"
 - Use ## subheadings organised by concept/theme (not by source).
-- Bold the first mention of every important term. Bullets for lists.
-- Length matches the material — rich material, rich document. Don't pad, don't compress.
+- Bold the first mention of every important term.
+- Lead each section with its recallable core; cut connective filler.
+- Length matches the material's *ideas*, not its word count — rich material, rich structure.
+  Don't pad, and don't flatten distinct ideas into a paragraph to save space.
 
 {_FORM_RULES}
 
