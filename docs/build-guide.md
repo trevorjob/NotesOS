@@ -51,6 +51,15 @@ it, **stop and escalate** (§7).
     stays live.
 11. **No hand-written migrations.** Models are truth → `alembic revision --autogenerate`. Extensions
     go in `init_db()`; seed/reference data in `scripts/`. (The owner runs migrations.)
+12. **Generative prompts guide by principle, never prescribe a template.** For any prompt whose
+    output a *human reads or hears* (note, audio script, tutor, questions, feedback, recap,
+    fact-check, research), encode the **objective + judgment + a self-check** and let the content
+    drive the shape — do **not** hand it a fixed template or `content-type → form` mapping. A rigid
+    scaffold is what produces mechanical output: wrong-shape notes *and* repetitive audio are the
+    same root. Kill the default (prose for notes, the boilerplate intro for audio) rather than name
+    the alternative. **This does NOT apply to structured/control prompts** — classification
+    (`_classify_family`), JSON extraction (`_extract_metadata`), closed-vocab grading, OCR/transcription
+    cleanup — where determinism *is* the feature; loosening those breaks the parser. See B13.
 
 ---
 
@@ -283,6 +292,42 @@ but this is the intended target:
   - **Do NOT reopen automated STEM grading.** B10 is read-and-talk surfaces. Method grading /
     symbolic equivalence (SymPy, code-exec) is the locked post-launch upgrade — if the work seems
     to want it, that's an escalation, not scope creep.
+- **B12 · Structure-first synthesis (added 2026-07-21, post-B10).** The *humanities half* of
+  "form follows content" — B10 handled math; this handles the prose-that-should-be-structure
+  case. Traps:
+  - **This is a PROMPT change, not a template or a schema change — same shape as B10.** Extend
+    `_FORM_RULES` and retune `_full_prompt`; do **not** add a "humanities structure engine" or a
+    new model field. No migration.
+  - **The reframe is "comprehensive ≠ studiable" — and it's load-bearing.** `_full_prompt`
+    currently says the note "covers the topic completely; study ONLY this document and have
+    everything." That instruction is what produces the prose wall. **The two-layer model resolves
+    it:** the raw transcriptions / chunks are the comprehensive *source layer* (the archive, and
+    already the tutor's RAG fuel via `rag.py`), so the note doesn't have to hoard — it's the
+    *studiable structure* on top. Retune the framing to that; don't leave "have everything" in.
+  - **Get the best form by principle, not a lookup table — this is the crux (owner steer 2026-07-21).**
+    Do **not** encode `comparison→table, taxonomy→list`; a fixed mapping is just a different bias
+    and misfits material we didn't foresee. Encode three things, none a form: **the objective**
+    (a student lifts every core at a glance, zero filler), **removal of the prose default** (prose
+    is the model's fallback and *that fallback is the bug* — no default to fall back on), and **a
+    self-check** the model runs on its own output ("cores pullable at a glance? any pure-connective
+    sentences?"). The forms — itemised labelled entries, grouped / ordered lists, rare tables,
+    prose-for-flow — are *outcomes, not rules*; a table is rarely the best fit (dense / high-level),
+    so it's not a reflex either. **The behaviour is pinned by TESTS, not prompt wording:** Green-when
+    needs the archaeology-style topic gaining structure **and** a narrative topic staying prose —
+    write those first, treat the prompt as a tunable principle. If it still narrates, strengthen the
+    anti-default line — never add a mapping table.
+  - **The note is the ROOT — its shape propagates.** Concepts are extracted *from* the finished
+    note (`_extract_metadata`), and retrieval / quiz / brain-dump run on those concepts. A blurry
+    prose note → blurry concepts → weak retrieval. This is why it's worth fixing at synthesis and
+    not papering over downstream: one lever moves reading *and* the whole retrieval engine.
+  - **Over-structuring is the both-ways failure — test it.** A genuinely narrative source (an
+    argument, a causal historical account) must stay prose; forcing a table onto non-tabular ideas
+    or shredding a flowing explanation into bullets is the same class of bug as B10's "don't invent
+    structure the material lacks," pointed the other way. Green-when must include a narrative topic
+    staying prose, not just the archaeology-style topic gaining a table.
+  - **Client seam (not this backend item, but flag it):** the source layer has to be *readable* —
+    "show me the original." The data exists (chunks); the client owes a source-read view (widen
+    C2's "says who?" X-ray). Note it so C2 picks it up; don't build UI here.
 - **A4 · Incremental synthesis.** Replace the full-rebuild with **append-merge** into the existing
   note. The merge must still **reconcile/dedupe** and **respect the quarantine gate** (never merge a
   quarantined resource). Debounce bursty uploads (one synth per burst, not per file). "What changed"

@@ -181,10 +181,13 @@ Ramble, teach, and voice-quizzes all ride the **same voice substrate** (transcri
 >   visible on the note).
 > - **Active surface — wire the note to the Concept substrate.** We already elevate
 >   `concepts` into first-class `Concept` rows with per-user mastery state; the *note text*
->   isn't linked to them. Link it, and the note becomes a live map: terms light up by
->   what you know vs. what's decaying, tap a paragraph to be retrieved on it *right there*,
->   reading flows into retrieval with no screen change. This is the anti-fluency-illusion
->   mechanic built *into* the reading surface — it catches you the moment you mistake
+>   isn't linked to them. Link it so you can **tap a paragraph to be retrieved on it *right
+>   there*** — reading flows into retrieval with no screen change. **(Amended 2026-07-21 —
+>   owner call: the linking drives the *launch-into-retrieval* affordance, but the reading
+>   view stays clean — NO ambient "terms light up by mastery" colouring. Keep the UI simple;
+>   mastery lives on a separate quiet progress surface, not tinted across the note.)** This is
+>   the anti-fluency-illusion mechanic built *into* the reading surface — it catches you the
+>   moment you mistake
 >   reading for knowing. **This is the thread to lean into.**
 > - **Trust = invisible plumbing + on-demand X-ray, never a debate.** The note is *always
 >   one authoritative voice.* **No inline conflict display** ("Source A vs B — they
@@ -226,11 +229,13 @@ Ramble, teach, and voice-quizzes all ride the **same voice substrate** (transcri
 > - **Framing balances gain *and* loss.** Losing is the stronger pull, so we don't deny it —
 >   but **lead with growth, whisper the fading** (not anxiety-farmed). "4 got more durable
 >   today" foregrounded; "3 are slipping" present but gentle.
-> - **Progress is spatial, not a scoreboard.** The **active-surface note lit by mastery IS
->   the progress map** (reuses the note↔concept linking) — solid terms glow, fading ones dim;
->   you see your knowledge *across your own notebook*, not as a vanity number. A dedicated
->   stats view is optional *depth*, never the headline. (Delivers §5's "glimpse, not a
->   dashboard.")
+> - **Progress is a quiet standalone surface, not a scoreboard.** *(Amended 2026-07-21 — owner
+>   call: simplicity.)* Progress is its **own simple, un-busy surface** — a gentle "what's
+>   fading / what's solid" read — **not** the note "lit by mastery." The earlier design fused
+>   progress into the note via per-term colouring; that's dropped (see the Active-surface
+>   amendment above — no ambient colouring). Same intent — see your knowledge vs. what's
+>   decaying, not a vanity number — delivered on a dedicated glimpse surface. (Still §5's
+>   "glimpse, not a dashboard.")
 > - **Calibration is the signature-but-quiet metric** — *"getting better at knowing what you
 >   actually know"* (predicted-vs-actual, already computed). The purest expression of "doesn't
 >   lie to you," the meta-skill no competitor shows — but surfaced **when needed, not in your

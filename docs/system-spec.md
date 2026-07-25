@@ -150,13 +150,24 @@ points** (exam-ready facts) and **concepts** (term ↔ definition, or for STEM, 
 meant to be *provably better than any single source* — the thing a student reads instead of their
 scattered materials.
 
+It is a **studiable structure, not a comprehensive dump.** *Comprehensive ≠ studiable* — a wall of
+prose that "contains everything" affords nothing and doesn't stick. There are **two layers**: the
+raw uploads / transcriptions are the complete verbatim **source layer** (the archive, readable on
+demand — see "read the original" below), and the note is the *shaped study surface* on top. Because
+the source layer holds the full record, the note is free to be lean and structured rather than
+exhaustive.
+
 **Behaviour the design must reflect:**
 - **It's a launch point, not a destination.** Reading it feels productive but *reading isn't
   studying* — so the note is wired to push the user into retrieval. It is the front end of the
   retrieval engine, not a read-only page.
-- **Active surface.** The note is **linked to the concept substrate**: terms carry the user's
-  personal **mastery state** (solid / fading / shaky), and the user can trigger a retrieval **on a
-  concept or paragraph right there**, without leaving. Reading flows into testing.
+- **Active surface — the note pushes into retrieval, *quietly*.** The user can trigger a retrieval
+  **on a concept or paragraph right there**, without leaving; reading flows into testing. The note
+  *is* linked to the concept substrate under the hood (mastery state exists and drives scheduling),
+  but **the reading view stays clean — no ambient per-term colouring / mastery heat-map** (owner
+  call 2026-07-21: keep the UI simple; colouring reads as clutter and is off-brand). Mastery is
+  surfaced *on its own quiet progress surface*, not painted across the note. The launch-into-
+  retrieval affordance is the point; the colour was not.
 - **It grows incrementally.** New uploads **merge into** the existing note (not a from-scratch
   rewrite). So the note has history: **"what changed since you last read"** and **"Ada added this
   section"** are real, surfaceable states.
@@ -177,6 +188,22 @@ scattered materials.
   elements** sitting alongside ordinary prose — not a humanities-shaped reading view with equations
   bolted on later. The system decides each section's form from the material; the user can correct
   the subject.
+- **Structure before prose — but the *right* form is whatever the material needs, never a fixed
+  menu.** This is *not* only a STEM concern, and it is emphatically *not* "make a table" or even
+  "make a list." The rule is an **objective**: a student can **lift every core idea at a glance,
+  with no filler to read past**, and each section's form follows what that section is *doing*.
+  Sometimes that's itemised labelled entries (each archaeological site as its own block —
+  *date · finds · why it matters*), sometimes grouped or ordered lists, occasionally a table (only
+  real multi-axis comparison — it reads dense, so rarely), and prose where an idea genuinely needs
+  *flow*. What's constant is the discipline, not the shape: **no default-to-prose**, each section
+  **leads with its recallable core**, and nothing is forced into a form it doesn't fit. Failure
+  runs both ways — a prose-flattened comparison and a forced grid on flowing ideas are the same
+  bug. (For the designer: the layout must be able to *hold* any of these, and make the studiable
+  shape the primary read — the system chooses which per section.)
+- **Read the original.** The verbatim **source layer** is reachable on demand — "show me the
+  original / read it as it was." This is the sibling of "says who?": provenance answers *who said
+  this line*, source-read answers *show me the full untouched material*. It's what lets the note go
+  lean without a student ever losing access to the complete text they uploaded.
 - **States:** a topic's note can be `empty` (no uploads yet — scaffold exists but no content),
   `synthesizing` (streaming into place — it visibly writes itself), `ready`, `updated` (changed
   since last view).
@@ -262,9 +289,14 @@ can interleave modes and adjust — design for a responsive flow, not a rigid qu
   (with study, and with the passage of time). Unlike a streak, it's **continuous and forgiving** —
   things fade *gradually*, any retrieval revives them, nothing ever "breaks." Frame it as *tending*,
   not *protecting a fragile chain*.
-- **Progress is spatial, not a scoreboard.** The primary way a user sees progress is **their notes
-  lit by mastery** (solid terms glow, fading dim or something like that)**(honestly you can do what you want here - the system just provides a way to make you see the things you know and what you dont)** — you see your knowledge *across your own
-  notes*. A dedicated stats view is optional depth, never the headline.
+- **Progress is a quiet standalone surface, not a scoreboard — and not the note.** *(amended
+  2026-07-21 — owner call.)* Progress is its **own simple surface** — a gentle "what's fading /
+  what's solid" read of your knowledge state — **decoupled from the note reading view.** The
+  earlier design made "the note lit by mastery" *be* the progress map; that's dropped for
+  simplicity (see §4 — no ambient note colouring). The system still just gives you a way to *see
+  what you know vs. what's decaying*; it now does that on a dedicated, deliberately un-busy surface
+  rather than by tinting every term in your notes. Keep it honest and personal — a glimpse, never a
+  dashboard.
 - **Framing balances gain and loss** — lead with growth ("4 got more durable today"), whisper the
   fading ("3 slipping") — gentle, never anxiety-inducing.
 - **Calibration is the signature-but-quiet metric** — "you're getting better at knowing what you

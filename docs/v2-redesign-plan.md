@@ -478,6 +478,162 @@ The product's center of gravity. **Pass 1 & 2 done, tested (114 green).**
   and prose. **Excluded (stays post-launch):** SymPy/symbolic method grading — B10 is what STEM
   students *read and talk to*, not automated derivation-checking.
 
+- [x] **B12 · Structure-first synthesis — the note becomes a study surface, not a comprehensive doc.** *(added 2026-07-21; done 2026-07-21, 338 tests, +8)*
+  **Built:** prompt-level, no migration — same shape as B10. (1) Extended the shared `_FORM_RULES`
+  with a **STRUCTURE BEFORE PROSE** block encoding the owner steer as *principle, not a mapping
+  table*: the **objective** (lift every core AT A GLANCE, no connective filler), the **kill-the-
+  default** line (prose is the fallback prior and *that fallback is the bug* — no default to fall
+  back on; derive each section's shape from what its material is doing), and a **self-check** the
+  model runs on its own output ("cores pullable at a glance? any pure-connective sentence?").
+  Forms (itemised labelled entries, grouped/ordered lists, the rare table, prose-for-flow) are
+  framed as *outcomes, illustrative not prescriptive* — no `content-type → form` arrows. Both-ways
+  guard kept: prose where an idea needs FLOW, never force a table onto non-tabular ideas ("same bug
+  as under-structuring"). Because `_FORM_RULES` is shared, the discipline rides the incremental
+  merge too. (2) Retuned `_full_prompt`'s framing from "study ONLY this document and have
+  everything" → the **two-layer model**: raw uploads are the verbatim *source layer* (the archive),
+  the note is the *studiable structure* on top, freed to go lean; rules now "lead each section with
+  its recallable core; cut connective filler," length matches *ideas* not word count. B10's
+  math/worked-example `_FORM_RULES` and family lean untouched (regression-pinned).
+  **Tests (`tests/test_structure_synthesis.py`, +8, reuses the B10 `_LLM` harness):** old
+  comprehensive-dump framing gone · two-layer source framing present · structure principle
+  (objective + kill-default + self-check) present · leads-with-recallable-core · *not* a
+  content-type mapping (forbidden arrows absent, principle present) · over-structuring guard
+  (needs-FLOW + no-forced-table) · **B10 math/LaTeX/lean unchanged** · structure rules ride the
+  incremental prompt.
+  **Owner note — behavioural green-when is a live-LLM eval, not in this suite.** All LLM boundaries
+  are monkeypatched, so these tests pin the *prompt contract* (mirroring B10's approach). The true
+  "archaeology source → comparison table, narrative → prose, concepts come out sharper" check needs
+  a real model; treat the prompt as the tunable and, if a live run still narrates, strengthen the
+  anti-default line — never add a mapping table. **Client seam still owed (C2):** a readable
+  "show me the original" source-read view — data exists (chunks), UI is not this item.
+  **Not migrated** — prompt-only.
+  <details><summary>Original build spec (for reference)</summary>
+
+  B10 taught the synthesis prompt the *math* half of "form follows content" (LaTeX, worked
+  examples, code, and tables it finds *already tabular*). This is the **humanities half** — the
+  gap found by dogfooding v1 on an all-prose topic (Archaeological Evidence in Nigeria: five
+  sites each with date / materials / significance, four equipment categories — a comparison
+  table and two taxonomies, narrated as a wall of prose). **The failure is family-agnostic:**
+  a prose-shaped note doesn't stick and can't be practised — you reconstruct the *paragraph*
+  instead of the *idea*. And it isn't only a reading problem: **concepts are extracted *from*
+  the note** (`_extract_metadata`), so a blurry prose note yields blurry concepts, and
+  retrieval / quiz / brain-dump run on those concepts. **The note is the root of the tree — its
+  shape propagates to the whole engine.** One lever fixes reading *and* retrieval.
+  **The reframe (owner call 2026-07-21): comprehensive ≠ studiable.** The current `_full_prompt`
+  tells the model "this covers the topic completely; a student should study ONLY this document
+  and have everything" — that instruction *is* the bug; it pushes toward exhaustive prose.
+  Resolved by the **two-layer model**: the **source layer** (raw transcriptions / chunks —
+  already stored) is the comprehensive verbatim archive *and* the tutor's RAG fuel; the **note**
+  is the *studiable structure* on top. The note need not hoard everything — the chunks are the
+  archive — so it's freed to go structure-first.
+  Scope:
+  1. **Let form follow what each section's material is *doing* — by principle, not a lookup table.**
+     Do **not** hand the synthesizer a fixed `content-type → form` mapping (comparison→table,
+     taxonomy→list…); that just swaps the prose bias for a *menu* bias and can't fit material we
+     didn't foresee. Encode three things instead, none of them a form: **(a) the objective** — a
+     student must be able to lift every core idea *at a glance*, with no connective filler to read
+     past; **(b) kill the default** — prose is the model's fallback prior and *that fallback is the
+     bug*; tell it to derive each section's shape from what the material is doing, with no default
+     to fall back on; **(c) a self-check** it runs on its own output — "can the cores be pulled from
+     this section at a glance? is any sentence pure connective tissue?" The concrete forms —
+     itemised labelled entries, grouped / ordered lists, the occasional table, prose where an idea
+     genuinely needs *flow* — are **outcomes the model arrives at, illustrative not prescriptive**,
+     never a rulebook applied mechanically (a table is rarely the best fit — dense, high-level — so
+     it isn't a reflex either; owner steer 2026-07-21). Each section **leads with its recallable
+     core.** **The real contract is the tests, not the prompt wording** (Green-when below): the
+     archaeology-style topic must gain structure *and* a narrative topic must stay prose — those two
+     pin the behaviour; the prompt only has to be a sound principle.
+  2. **Retune `_full_prompt`'s "comprehensive doc" framing to "studiable structure."** Drop
+     "study ONLY this document and have everything" (the source layer holds the complete
+     record); the note's job is the shape you'd actually study from, prose only where an idea
+     needs flow. **Keep B10's `_FORM_RULES` intact — this extends it, doesn't replace it.**
+  3. **Failure runs both ways — don't over-structure.** A genuinely narrative source (an
+     argument, a historical account with causal flow) stays prose; don't force a table onto
+     ideas that aren't tabular, don't shred a flowing explanation into disconnected bullets.
+     Same discipline as B10's "don't invent structure the material lacks," pointed the other way.
+  **Client note:** the **source layer must be reachable as a readable view** — "show me the
+  original / read it as it was" (widen C2's "says who?" X-ray into a source-read affordance).
+  That's the guarantee that lets the note go lean without anyone losing the verbatim.
+  **Green when:** an entity-attribute prose source (the archaeology case) renders as a comparison
+  table + grouped lists, not a prose wall; each section leads with its recallable core; a
+  genuinely narrative topic stays prose (no forced tables); B10's math / worked-example behaviour
+  is unchanged; extracted concepts come out sharper off the restructured note. **No migration** —
+  prompt-level, same as B10.
+  </details>
+
+- [x] **B13 · Generative-prompt quality sweep — principle over prescription, system-wide.** *(added 2026-07-21; done 2026-07-22, 349 tests, +11 across both phases)*
+  B12's insight generalises: it's not a note-synthesis fix, it's a **prompt-design principle** the
+  whole system should follow (now invariant #12). The live evidence is the **audio** — users
+  reported it's *repetitive* — which is the same root as the prose-wall (an over-prescriptive prompt
+  → mechanical output), just a different symptom (monotony instead of wrong-shape). Sweep every
+  **generative** prompt — one a human reads or hears — and refit it to *objective + judgment +
+  self-check*, killing the templated default instead of naming the alternative.
+  **In scope (generative):** `audio_generator.py` (**do first — the known live complaint**),
+  `study_agent.py` (tutor), `question_generator.py` / `retrieval/quiz_mode.py`, `retrieval/ramble_mode.py`
+  / `teach_mode.py`, `retrieval/recap.py`, `grader.py` (feedback rationale), `fact_checker.py`,
+  `research_generator.py`, `knowledge_synthesizer.py` (note = B12 + key-points phrasing).
+  **Explicitly OUT of scope (structured/control — leave rigid, determinism is the feature):**
+  `_classify_family`, `_extract_metadata` (JSON), closed-vocab self-grade, `ocr_cleaner.py`,
+  `vision_transcribe.py`, `voice/lane.py` protocol frames. Loosening these breaks the parser — the
+  guard-rail test must prove they're untouched.
+  **Audio has a second failure notes don't:** *inter*-lesson sameness — each script is generated
+  from an identical scaffold with no awareness of the others, so they all open the same way. The
+  anti-template principle fixes the *intra*-script formula; add a distinct "vary the opening / don't
+  reach for the same frame" nudge for the *inter*-script repetition.
+  **Green when:** two independently-generated audio scripts don't share an opening or section
+  skeleton; a tutor reply and a piece of feedback don't read as filled-in templates; the note (B12)
+  and questions still pass their own Green-whens; **and the structured/control prompts above produce
+  byte-identical output to before (the guard).** Prompt-level, **no migration**. Can phase — audio
+  first (ship the fix for the actual complaint), the rest as polish. Not a hard launch blocker
+  except audio, which is a live quality regression.
+  - [x] **Phase 1 · audio** *(done 2026-07-21, 344 tests, +6)* — the live regression, shipped.
+    `audio_generator.generate_script`: replaced the fixed HOOK→per-concept-loop→transition-menu→
+    CLOSING scaffold (the thing that made every lesson sound alike) with *objective + judgment +
+    self-check* — "make THIS material stick", "no fixed arc to fill in", "memory is built by
+    retrieval not exposure", and a closing self-check ("does the opening come from THIS topic, or
+    could it head any lesson? any stretch on autopilot?"). Added the **inter-script** nudge notes
+    don't need ("one of many lessons… don't open two different topics the same way"). Raised
+    `audio_script` temperature 0.5 → 0.8 (low temp was itself part of the sameness). **Incidental
+    bug fixed:** dropped the `[EMPHASIS]` token — `generate_audio` only strips `[PAUSE]`, so
+    `[EMPHASIS]` was reaching TTS and being spoken aloud literally; `[PAUSE]` (machine-parsed) kept.
+    **Tests (`tests/test_audio_script.py`, +6):** killed-scaffold absent · principle+self-check
+    present · inter-script variety nudge · `[PAUSE]` kept / `[EMPHASIS]` gone · temp ≥ 0.7 · **guard:
+    the control prompt `_classify_prompt` stays rigid (one-word contract intact, no generative
+    markers bled in).** Behavioural green-when (two real scripts share no opening/skeleton) is a
+    live-LLM eval, not in the deterministic suite. No migration.
+  - [x] **Phase 2 · the rest (polish)** *(done 2026-07-22, +5 tests → 349)* — swept the remaining
+    generative surfaces, and — the judgment call — **left the structured-judgment prompts rigid on
+    purpose** (loosening them was the wrong move, not out-of-time). What changed:
+    - **`research_generator` — the real template offender.** It forced every pre-class doc through a
+      mandatory 5-section skeleton (Core Concepts / Historical Context / Key Points / Misconceptions
+      / Connections) regardless of material — a padded-headings machine. Replaced with the objective
+      ("walk into class oriented"), *material decides which sections exist — no fixed skeleton*, and a
+      self-check ("is every section carrying weight, or there because overviews *usually* have it?").
+      JSON envelope (`research_content` / `key_concepts`) untouched.
+    - **`question_generator` — anti-sameness + self-check, JSON schema untouched.** Already
+      principle-driven ("good/bad questions"); added "VARY THE FRAMING — don't cast every question
+      the same mould" and a "N distinct probes, or N fills of one template?" self-check. This is the
+      *questions still pass their Green-when* clause.
+    - **`study_agent` tutor — anti-template line.** Already largely principled; added "answer THIS
+      question, not a template — two different questions shouldn't come back shaped identically",
+      orthogonal to the persona axis (persona test still green).
+    - **`grader` encouragement — inter-instance variety (the audio lesson, applied to feedback).**
+      A per-question surface a student sees many times in a row, so it had audio's sameness risk:
+      added "vary it — don't hand them the same sentence shape every time ('Great job on X, but
+      remember Y')".
+    - **Left rigid, by design (structured judgment — consistency IS the feature):** the grading
+      rubric + essay grading, `recap` / `teach` / `ramble` evaluation, `fact_checker` verification.
+      Their human-read feedback fields are *already* anti-generic ("not just 'good job'"); loosening
+      a scoring rubric would destabilise grade consistency. The **guard test proves it** — the
+      grading prompt still carries its SCORING GUIDE + JSON contract and none of the generative
+      markers bled in. (`knowledge_synthesizer` note = B12; its key-points come from the structured
+      `_extract_metadata`, which stays rigid — OUT of scope.)
+    - **Tests (`tests/test_generative_prompts.py`, +5):** research skeleton gone / material-driven /
+      self-check / JSON intact · question variety + self-check + JSON contract · tutor anti-template +
+      persona intact · encouragement variety · **grading-rubric guard (rigid, unbled).** Behavioural
+      green-whens (two real research docs differ in shape; ten encouragements don't rhyme) are
+      live-LLM evals. No migration.
+
 ### Phase C — needs the native client (Phase 5 designs)
 
 > **Backend-status audit (2026-07-13, end of Phase B)** — each item annotated with what the
@@ -487,17 +643,25 @@ The product's center of gravity. **Pass 1 & 2 done, tested (114 green).**
 - [ ] **C1 · Home / one-card entry** (doorway-not-dashboard; review-default hero).
   *Backend done:* `GET /api/retrieval/next-action` (B3) already returns the one card
   (kind/mode/scope/reason/estimate). Home is client assembly over it — don't add a second selector.
-- [ ] **C2 · Active-surface note canvas** (note↔concept linking, rendered math, "says who?" X-ray).
+- [ ] **C2 · Active-surface note canvas** (note↔concept linking = *launch into retrieval*, rendered
+  math, "says who?" X-ray). **Simplicity call (2026-07-21):** the linking exists to let a user
+  *retrieve on a paragraph right there* — **not** to colour/tint terms by mastery. **No ambient
+  mastery heat-map on the note; keep the reading view clean.**
   *Backend GAP + escalation:* the note prose is **not span-linked** to concepts or contributors —
   `TopicKnowledge.concepts` is a flat JSONB list; concepts carry `source_chunk_ids` (chunk
   provenance) but attribution is **topic-level by design** (build-guide §5). Claim-level "says
   who?" changes the attribution grain → **§7 escalation, not a solo build.** Note↔concept span
   anchoring belongs in the synthesis output contract (A4's pipeline) — decide there, not ad hoc.
-- [ ] **C3 · Spatial progress** (notes lit by mastery; calibration surfaced when needed).
+- [ ] **C3 · Progress — a quiet standalone surface** (what's fading / what's solid; calibration
+  surfaced when needed). **Amended 2026-07-21 (owner call):** progress is its *own simple surface*,
+  **decoupled from the note** — the earlier "note lit by mastery IS the progress map" is dropped for
+  simplicity (no ambient colouring; see C2 + system-spec §11). Same data, plainer surface.
   *Backend GAP, cleanly buildable ahead:* no endpoint exposes per-concept mastery topic-scoped
   (`progress.py` only has coarse `UserProgress` averages). All data exists — `ConceptState`
   (stability/due/reps/lapses/last_grade) + concepts-by-topic; calibration is derivable from the
   attempt log (`predicted_confidence` vs `outcome_score`). Pure read endpoint, **no schema change**.
+  *(The backend read endpoint is unchanged by the simplification — this is purely how the client
+  surfaces it.)*
 - [ ] **C4 · Capture dump UX** (drag/snap/record → confirm the proposed topic structure).
   *Verify before assuming:* `api/capture.py` (A2) exists — confirm its propose→confirm contract
   actually matches the UX (a dump must return a *proposal* the user can amend, not auto-commit).
@@ -578,6 +742,25 @@ subject profile · timing/sleep-aware delivery · speech-emotion calibration · 
   retrofit later (same reasoning as B10). Below this: chemical structures/SMILES, music notation,
   circuit schematics as first-class — genuine defer-and-maybe-never; user-photo capture covers
   them well enough.
+
+- **Quiz generation — in-flight request coalescing *(deferred, owner call 2026-07-21)*.** The
+  shipped "already exists" sync catches a *finished* matching quiz; this is its runtime sibling —
+  when a user hits generate and a matching generation is **already in progress**, subscribe them to
+  that job instead of spawning a duplicate (both wait on one result). Fits the model cleanly: a
+  Redis **in-flight registry keyed on the params signature** (reuse the sync's signature), second
+  requester attaches (pub/sub or polls the job id), one worker run serves all. **The gating
+  question a builder must answer first:** are generated quizzes *shared* or *per-user personalised*
+  (mastery-weighted / concept-selected)? If personalised, two requests rarely match the same
+  signature, so coalescing almost never fires and isn't worth the machinery — it only pays off if
+  identical preselected params yield an identical quiz. Decide that before building.
+- **Model tiering / specialised providers *(deferred, owner call 2026-07-21)*.** Route each
+  workflow to the best-fit model instead of one provider everywhere — specialised engines for audio
+  transcription, voice streams, embeddings, plus cost-tiering cheap vs. reasoning-heavy tasks.
+  **Low-risk defer: the seam already exists** — invariant #5 (one LLM call site, `services/llm.py`,
+  task→provider map) + A1's fast/small tier mean this is **routing/config expansion, not a
+  structural change**; specialised providers get added to the map without touching any service or
+  worker. Nothing else has to move for it to land later. (Audio transcription is Whisper today;
+  voice streams are B5 — those are the first specialised swaps when this is picked up.)
 
 ## Current v2 schema (new/changed)
 
