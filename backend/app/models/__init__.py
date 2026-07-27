@@ -18,15 +18,6 @@ from app.models.resource import (
     SourceType,
     VerificationStatus,
 )
-from app.models.test import (
-    Test,
-    TestQuestion,
-    TestAttempt,
-    TestAnswer,
-    TestType,
-    QuestionType,
-    AnswerStatus,
-)
 from app.models.progress import (
     StudySession,
     UserProgress,
@@ -39,6 +30,7 @@ from app.models.notification import Notification, NotificationType, Notification
 from app.models.knowledge import TopicKnowledge, AudioLesson, KnowledgeStatus
 from app.models.retrieval import Concept, ConceptState, RetrievalAttempt
 from app.models.consume import ConsumeEvent, ConsumeKind
+from app.models.practice_test import PracticeTest, PracticeTestQuestion
 
 
 __all__ = [
@@ -65,14 +57,6 @@ __all__ = [
     "ResourceKind",
     "SourceType",
     "VerificationStatus",
-    # Test
-    "Test",
-    "TestQuestion",
-    "TestAttempt",
-    "TestAnswer",
-    "TestType",
-    "QuestionType",
-    "AnswerStatus",
     # Progress
     "StudySession",
     "UserProgress",
@@ -95,4 +79,7 @@ __all__ = [
     # Consume-event substrate (§11 attribution / recognition)
     "ConsumeEvent",
     "ConsumeKind",
+    # Authored practice test (B14)
+    "PracticeTest",
+    "PracticeTestQuestion",
 ]

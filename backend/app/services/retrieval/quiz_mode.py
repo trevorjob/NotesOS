@@ -128,7 +128,7 @@ class QuizMode:
 
     async def _generate_question(self, concept, ctx: ModeContext) -> dict:
         raw = await call_llm(
-            self._build_prompt(concept),
+            self._build_prompt(concept, ctx.extra.get("question_type")),
             task="question_gen",
             temperature=0.6,
             max_tokens=600,
@@ -158,23 +158,47 @@ class QuizMode:
 
     # --- helpers -----------------------------------------------------------------
 
-    def _build_prompt(self, concept) -> str:
+    def _build_prompt(self, concept, requested_type=None) -> str:
         definition = f"\nDEFINITION: {concept.definition}" if concept.definition else ""
+        # Default (review-loop) behaviour: the model picks the fitting shape. B14's
+        # authored test lets the *author* fix the shape — passed via ctx.extra so the
+        # whole set is one type. Absent ⇒ byte-identical to the original prompt.
+        directives = {
+            "mcq": (
+                'Use "mcq": 4 plausible options, the wrong ones being real misconceptions.\n'
+                "correct_answer must be the EXACT text of one option."
+            ),
+            "short_answer": (
+                'Use "short_answer": a question answered in a sentence or two.\n'
+                'correct_answer is "Key points: [p1] / [p2] / [p3]".'
+            ),
+            "essay": (
+                'Use "essay": an open question that demands a paragraph-length, argued '
+                "answer — reasoning, not recall.\n"
+                'correct_answer is "Key points: [p1] / [p2] / [p3]" (what a strong answer covers).'
+            ),
+        }
+        shape = directives.get(requested_type) or (
+            'Prefer "mcq" (4 plausible options, wrong ones being real misconceptions) unless the\n'
+            'concept is better tested by a short written answer, in which case use "short_answer".\n'
+            "For mcq, correct_answer must be the EXACT text of one option.\n"
+            'For short_answer, correct_answer is "Key points: [p1] / [p2] / [p3]".'
+        )
+        type_enum = (
+            f'"{requested_type}"' if requested_type else '"mcq" | "short_answer"'
+        )
         return f"""Write ONE quiz question that tests genuine understanding of this concept.
 Not a definition-recall question — a question that shows whether the student
 actually understands it and could apply it.
 
 CONCEPT: {concept.text}{definition}
 
-Prefer "mcq" (4 plausible options, wrong ones being real misconceptions) unless the
-concept is better tested by a short written answer, in which case use "short_answer".
-For mcq, correct_answer must be the EXACT text of one option.
-For short_answer, correct_answer is "Key points: [p1] / [p2] / [p3]".
+{shape}
 
 Return ONLY a JSON object:
 {{
   "question_text": "...",
-  "question_type": "mcq" | "short_answer",
+  "question_type": {type_enum},
   "answer_options": ["A","B","C","D"] | null,
   "correct_answer": "...",
   "explanation": "1-2 sentences on why."

@@ -18,7 +18,6 @@ logger = logging.getLogger(__name__)
 
 from app.config import settings
 from app.models.resource import Resource
-from app.models.test import Test, TestQuestion, TestType, TestGenerationStatus, QuestionType
 
 
 class QuestionGenState(TypedDict):

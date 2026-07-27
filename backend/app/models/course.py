@@ -67,7 +67,6 @@ class Course(Base):
     enrollments = relationship(
         "CourseEnrollment", back_populates="course", cascade="all, delete-orphan"
     )
-    tests = relationship("Test", back_populates="course", cascade="all, delete-orphan")
     user_progress = relationship(
         "UserProgress", back_populates="course", cascade="all, delete-orphan"
     )

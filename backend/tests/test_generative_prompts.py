@@ -8,9 +8,11 @@ structured/control prompts, where determinism is the feature.
 Refit here:
   - `research_generator`  — killed the mandatory 5-section skeleton (the real template offender)
                             for a material-driven overview + self-check.
-  - `question_generator`  — added a "vary the framing" nudge + self-check (JSON schema untouched).
   - `study_agent` tutor   — added an anti-template line (answer THIS question, not a mould).
   - `grader` encouragement — added inter-instance variety (a per-question surface, like audio).
+
+(The `question_generator` sweep-target was retired with the v1 test system on 2026-07-26 —
+v2 generates questions on demand via `QuizMode`; its case is dropped here.)
 
 Left rigid on purpose (structured judgment — consistency IS the feature): the grading rubric and
 essay grading. The guard tests below prove they still carry their deterministic scoring contract
@@ -25,17 +27,7 @@ import pytest
 
 from app.services import research_generator as rg
 from app.services.grader import grader as grader
-from app.services.question_generator import question_generator
 from app.services.study_agent import StudyAgent
-
-
-def _qgen_state():
-    return {
-        "topic_name": "Photosynthesis",
-        "resource_content": "Light reactions, Calvin cycle, chlorophyll.",
-        "difficulty": "medium",
-        "question_types": ["mcq", "short_answer"],
-    }
 
 
 # ── research: the fixed section skeleton is gone ─────────────────────────────────
@@ -58,17 +50,6 @@ async def test_research_prompt_drops_fixed_section_skeleton(monkeypatch):
     assert "check your own output" in prompt               # self-check
     # the JSON envelope the parser depends on is intact
     assert '"research_content"' in prompt and '"key_concepts"' in prompt
-
-
-# ── question generation: vary the framing + self-check, JSON intact ──────────────
-
-def test_question_prompt_adds_variety_and_self_check():
-    prompt = question_generator._build_prompt(_qgen_state(), batch_count=3, batch_index=0, total_batches=1)
-    assert "VARY THE FRAMING" in prompt
-    assert "distinct probes" in prompt                     # the self-check
-    # the structured contract the JSON parser needs is untouched
-    assert "Return a JSON array of EXACTLY 3 question" in prompt
-    assert '"question_type": "mcq"' in prompt
 
 
 # ── tutor: answer THIS question, not a template ──────────────────────────────────

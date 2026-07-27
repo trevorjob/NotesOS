@@ -14,22 +14,20 @@ import sys
 from app.workers.chunking_worker import chunking_worker
 from app.workers.transcription_worker import transcription_worker
 from app.workers.fact_check_worker import start_fact_check_worker
-from app.workers.grading_worker import start_grading_worker
 from app.workers.knowledge_worker import knowledge_worker
 from app.workers.audio_worker import audio_worker
-from app.workers.test_generation_worker import test_generation_worker
 from app.workers.capture_worker import capture_worker
+from app.workers.practice_test_worker import practice_test_worker
 from app.workers.notification_scheduler import notification_scheduler
 
 WORKERS = {
     "chunking": chunking_worker,
     "transcription": transcription_worker,
     "fact_check": start_fact_check_worker,
-    "grading": start_grading_worker,
     "knowledge": knowledge_worker,
     "audio": audio_worker,
-    "test_generation": test_generation_worker,
     "capture": capture_worker,
+    "practice_test": practice_test_worker,
     # Periodic (not queue-driven): the B2 habit digest. Needs APScheduler installed.
     "notifications": notification_scheduler,
 }

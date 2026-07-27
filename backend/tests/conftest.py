@@ -114,30 +114,13 @@ async def _clean_tables(engine):
 
 @pytest.fixture(autouse=True)
 def _no_outbound_email(monkeypatch):
-    """The verify-otp route fires a welcome email as a background task; stub it."""
+    """Register fires a welcome email as a background task; stub it."""
     async def _noop(*args, **kwargs):
         return None
 
     monkeypatch.setattr(
         "app.services.email.send_welcome_email", _noop, raising=False
     )
-
-
-@pytest.fixture(autouse=True)
-def otp_codes(monkeypatch):
-    """Capture OTP codes instead of delivering them.
-
-    Patches the single provider seam (``services.otp.send_otp``) and records the
-    last code issued per phone, so tests can complete the verify step. Keyed by the
-    normalized phone the server stores.
-    """
-    store: dict[str, str] = {}
-
-    async def _capture(phone: str, code: str) -> None:
-        store[phone] = code
-
-    monkeypatch.setattr("app.services.otp.send_otp", _capture, raising=True)
-    return store
 
 
 @pytest_asyncio.fixture
@@ -180,13 +163,13 @@ def unique_phone() -> str:
 
 
 @pytest_asyncio.fixture
-async def register_user(client, otp_codes):
-    """Factory: register + OTP-verify a fresh phone-primary user.
+async def register_user(client):
+    """Factory: register a fresh phone-primary user with a password.
 
-    Runs the full two-step flow (register → verify-otp) and returns the same
-    ``{id, headers, tokens}`` shape the rest of the suite relies on, plus ``phone``.
-    Extra keyword args (school_name, program, entry_year, email) pass through to
-    the register payload.
+    Registration issues tokens immediately (no OTP step). Returns the same
+    ``{id, headers, tokens}`` shape the rest of the suite relies on, plus
+    ``phone``. Extra keyword args (school_name, program, entry_year, email)
+    pass through to the register payload.
     """
 
     async def _make(
@@ -204,13 +187,7 @@ async def register_user(client, otp_codes):
 
         resp = await client.post("/api/auth/register", json=payload)
         assert resp.status_code == 201, resp.text
-
-        code = otp_codes[phone]
-        verify = await client.post(
-            "/api/auth/verify-otp", json={"phone": phone, "code": code}
-        )
-        assert verify.status_code == 200, verify.text
-        data = verify.json()
+        data = resp.json()
         return {
             "id": data["user"]["id"],
             "phone": phone,

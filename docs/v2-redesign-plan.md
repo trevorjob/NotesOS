@@ -634,6 +634,93 @@ The product's center of gravity. **Pass 1 & 2 done, tested (114 green).**
       green-whens (two real research docs differ in shape; ten encouragements don't rhyme) are
       live-LLM evals. No migration.
 
+- [x] **B14 · Authored practice test — a shareable, graded question set on the retrieval atom.** *(added 2026-07-25; done 2026-07-25, 363 tests, +14)*
+  **Built exactly as locked — a composition over the retrieval atom, not a mode, not the v1 test
+  system rewired.** New non-derivable table pair (`practice_tests` + `practice_test_questions`,
+  [`models/practice_test.py`](../backend/app/models/practice_test.py)) — frozen concept-anchored
+  questions **with answer keys**, plain-string status (no enum migration). No attempt/session/score
+  table: taking a test is a run of ordinary atoms, the "result" is derived from the log.
+  **The engine seam:** `engine.select_concepts` gained a `topic_ids` **set** (the one real change —
+  a selection-scope widening of `topic` scope, no mode special-casing). **QuizMode** honours a
+  requested `question_type` (mcq/short/essay) from `ctx.extra` — additive, byte-identical when absent
+  (existing prompt tests untouched); authored gen deliberately omits the `grading` directive so it
+  never takes the STEM worked-problem reveal path. **Generation** = `workers/practice_test_worker.py`
+  (queue `practice_test`, in `run_workers.py`): bounded, concept-anchored, one `mode.generate` per
+  concept, persist-as-you-go, `practice_test_progress`/`_complete`/`_failed` over the capture WS
+  pattern; fresh-rebuild on retry (**not** the retired batch worker). **API**
+  [`api/practice_test.py`](../backend/app/api/practice_test.py) `/api/practice-tests`: builder (202,
+  quiz/pretest only → 400 for ramble/teach/brain_dump, type enum, enrollment + topics-in-course
+  guards) · list-by-course (communal — everyone enrolled sees it) · get (answer key **stripped**,
+  reusing `_SENSITIVE_PAYLOAD_KEYS`) · **answer-one-question** → `mode.evaluate` +
+  `engine.record_attempt` + `recognition.on_attempt` (the exact review-loop path — FSRS advances,
+  calibration derives, **no new grade path**; each taker owns their attempts, tagged
+  `challenge.practice_test_id`) · **derived result** (firmed/fading/mean over the log — no stored
+  score). **Tests** (`tests/test_practice_test.py`, +14): multi-topic selection · builder validation
+  (modes/type/enrollment/cross-course topics) · worker freezes questions + progress events · empty
+  scope → failed · answer-key stripped · answer feeds the atom · shared test / per-taker attempts ·
+  derived summary · list · pretest allowed. **Migration owed (owner):** two additive tables only —
+  bring the dev DB current then autogenerate: `alembic upgrade head` → `alembic revision
+  --autogenerate -m "practice_test b14"` → `alembic upgrade head`. **Phase B complete.**
+  <details><summary>Original build spec (for reference)</summary>
+
+  Brings back the "generate a test" surface v1 had (retired in the v2 rebuild — build-guide §2a) and
+  rebuilds it **as a composition over the retrieval engine**, so a test *feeds* spaced repetition
+  instead of running beside it (owner call 2026-07-25: **a practice test is studying, not just
+  measuring** — taking it records per-concept attempts). It is the **second of two distinct "quiz"
+  intents**: the review loop (B3 doorway) is *the app picks what's due, per concept, on demand*; the
+  authored test is *the user picks scope + count + type*, it's a **durable, course-shared object**,
+  and it's graded. Ramble / teach / brain-dump stay single-dump — **only quiz + pretest** get the
+  authored-set treatment (the posed-question modes; the free-recall dumps don't set-ify).
+  Scope:
+  1. **Multi-topic / course selection (the one new engine seam).** `engine.select_concepts` (or a
+     sibling) must accept a **set of topics** (or a whole course), not just one topic — the user's
+     chosen scope is the concept pool the test draws from. Single-topic and course scope already
+     exist; the **arbitrary multi-topic subset** is the new primitive. Don't special-case it into a
+     mode — it's a selection concern.
+  2. **The test is a persisted, shareable object — the one genuinely non-derivable new table** (like
+     D5's reports; invariant #2 is satisfied because an *authored artifact* — a specific set of
+     questions a person created — cannot be derived): `{id, created_by, course_id, scope(topic_ids),
+     title, mode(quiz|pretest), question_count, questions[], generation_status, created_at}`. Course-
+     scoped visibility ⇒ **everyone enrolled can take it** (communal, like the note — "Ada made a
+     20-q mock on Unit 3"). Each question is **concept-anchored** (carries its `concept_id` + the
+     frozen `Challenge` payload incl. the answer key) and generated **once**, then frozen — so the
+     test is stable and shareable and **nobody regenerates it** (this also moots the 🔮 in-flight-
+     coalescing item: you reuse the saved test, you don't re-generate a match).
+  3. **Modes quiz + pretest only; question types mcq / short-answer / essay.** Build the set by
+     calling **`QuizMode.generate` / `PretestMode.generate` per concept** — no new question
+     generator, no new grade path. Essay = the genuine one-off, AI-graded through the existing
+     `grader`. (Pretest-as-a-set = a shared pre-study diagnostic over the scope.)
+  4. **Generation is async with progress** (N questions = N `generate` calls) — a small worker (or a
+     bounded extension) builds the set and broadcasts progress, reusing A2's capture WebSocket
+     pattern (`*_progress` / `*_complete`); persist as it goes, `generation_status=ready` when done.
+     **This is bounded, concept-anchored pre-generation — NOT the retired v1 `test_generation`
+     worker** (which bypassed the engine and graded through the dead path). Apply the answer-key
+     sanitization discipline (`_SENSITIVE_PAYLOAD_KEYS`) when serving a question to a taker.
+  5. **Taking a test feeds the atom (the owner call).** Each answered question → `mode.evaluate` →
+     `engine.record_attempt` — the **exact review-loop path**: per-concept `RetrievalAttempt` + FSRS
+     + calibration + recognition, no new grading. So cramming a mock silently re-lights the mastery
+     map and reschedules; after the exam the review loop correctly goes quiet. A test-taking run is
+     still just a run of atoms (session stays **derived**, no session table). Each taker gets their
+     own attempts over the shared questions.
+  6. **Result = a derived session summary** ("8/10 — here's what firmed up / what's still fading"),
+     aggregated from the per-concept outcomes and tying into the C3 mastery map — **no test-level
+     score is stored**; it's derivable from the attempt log.
+  Per-item traps (rewire-vs-atom, the FSRS-feed, multi-topic selection, sanitizing persisted answer
+  keys, worker-not-the-retired-one) → build-guide §4.
+  **Green when:** a user picks a course (or a topic subset) + count + type → a test is generated
+  (async, with progress) and **persisted**, and a classmate in the same course can open and take the
+  *same* test; taking it writes a per-concept `RetrievalAttempt` per question (FSRS advances,
+  calibration derives, the mastery map moves — proven: due-dates shift after a test) with **no new
+  grade path** (reuses `mode.evaluate` + `record_attempt`); quiz + pretest only, ramble/teach/brain-
+  dump reject authored-set generation; multi-topic selection returns concepts across the chosen
+  topics; answer keys are stripped from what a taker sees; real-Postgres tests green; **migration
+  autogenerated** for the one new table (owner runs it).
+  **Excluded / deferred:** flashcards (post-launch — a review *rhythm*, likely reusing this concept-
+  anchored question store as a different draw); coordination-mode "someone's building this test, want
+  in?" (Phase 6 proximity mode 2); a topic-wide **auto**-generated bank for the *review* loop (this
+  item persists per-authored-test; an auto-bank for spaced review can reuse the same store later).
+  </details>
+
 ### Phase C — needs the native client (Phase 5 designs)
 
 > **Backend-status audit (2026-07-13, end of Phase B)** — each item annotated with what the
@@ -643,25 +730,18 @@ The product's center of gravity. **Pass 1 & 2 done, tested (114 green).**
 - [ ] **C1 · Home / one-card entry** (doorway-not-dashboard; review-default hero).
   *Backend done:* `GET /api/retrieval/next-action` (B3) already returns the one card
   (kind/mode/scope/reason/estimate). Home is client assembly over it — don't add a second selector.
-- [ ] **C2 · Active-surface note canvas** (note↔concept linking = *launch into retrieval*, rendered
-  math, "says who?" X-ray). **Simplicity call (2026-07-21):** the linking exists to let a user
-  *retrieve on a paragraph right there* — **not** to colour/tint terms by mastery. **No ambient
-  mastery heat-map on the note; keep the reading view clean.**
+- [ ] **C2 · Active-surface note canvas** (note↔concept linking, rendered math, "says who?" X-ray;
+  terms **lit by mastery** — the note-as-live-map / anti-fluency mechanic).
   *Backend GAP + escalation:* the note prose is **not span-linked** to concepts or contributors —
   `TopicKnowledge.concepts` is a flat JSONB list; concepts carry `source_chunk_ids` (chunk
   provenance) but attribution is **topic-level by design** (build-guide §5). Claim-level "says
   who?" changes the attribution grain → **§7 escalation, not a solo build.** Note↔concept span
   anchoring belongs in the synthesis output contract (A4's pipeline) — decide there, not ad hoc.
-- [ ] **C3 · Progress — a quiet standalone surface** (what's fading / what's solid; calibration
-  surfaced when needed). **Amended 2026-07-21 (owner call):** progress is its *own simple surface*,
-  **decoupled from the note** — the earlier "note lit by mastery IS the progress map" is dropped for
-  simplicity (no ambient colouring; see C2 + system-spec §11). Same data, plainer surface.
+- [ ] **C3 · Spatial progress** (notes lit by mastery; calibration surfaced when needed).
   *Backend GAP, cleanly buildable ahead:* no endpoint exposes per-concept mastery topic-scoped
   (`progress.py` only has coarse `UserProgress` averages). All data exists — `ConceptState`
   (stability/due/reps/lapses/last_grade) + concepts-by-topic; calibration is derivable from the
   attempt log (`predicted_confidence` vs `outcome_score`). Pure read endpoint, **no schema change**.
-  *(The backend read endpoint is unchanged by the simplification — this is purely how the client
-  surfaces it.)*
 - [ ] **C4 · Capture dump UX** (drag/snap/record → confirm the proposed topic structure).
   *Verify before assuming:* `api/capture.py` (A2) exists — confirm its propose→confirm contract
   actually matches the UX (a dump must return a *proposal* the user can amend, not auto-commit).
@@ -679,6 +759,15 @@ The product's center of gravity. **Pass 1 & 2 done, tested (114 green).**
   *Small backend seam:* the B1 substrate already holds the data (consume events + attempt log;
   `recognition.resolve_beneficiaries`). Needs only a small read endpoint for the count — keep it
   aggregate ("N built this"), never ranked (no-leaderboard is a product invariant).
+- [ ] **C9 · Test builder + take-a-test** (the authored practice-test surface — *added 2026-07-25*).
+  *Backend:* B14. **Two client surfaces, one new:** the **builder** (pick a course *or* multi-select
+  topics → choose count → choose type (mcq/short/essay) → generate → watch progress → saved &
+  shared) is genuinely new; the **runner** (take the shared test → per question → derived summary)
+  **reuses the "Retrieval session run" surface** (page-map §2) — don't build a second run screen.
+  *Must respect:* this is the **deliberate-config front door** (distinct from C1's zero-config
+  doorway — see page-map *Navigation model* / two-front-doors); a shared test appears for the whole
+  course; taking it feeds the mastery map (results are a summary over per-concept attempts, never a
+  stored score).
 
 ### Phase D — Launch readiness: ops + compliance (added 2026-07-17; parallel to Phase C)
 
@@ -753,6 +842,10 @@ subject profile · timing/sleep-aware delivery · speech-emotion calibration · 
   (mastery-weighted / concept-selected)? If personalised, two requests rarely match the same
   signature, so coalescing almost never fires and isn't worth the machinery — it only pays off if
   identical preselected params yield an identical quiz. Decide that before building.
+  **Largely mooted by B14** (2026-07-25): an authored test is generated **once and persisted as a
+  shared object** — takers reuse the saved test rather than re-generating a match, so there's no
+  in-flight duplicate to coalesce. Coalescing only resurfaces if we later add *auto*-generated
+  per-user quizzes that don't persist.
 - **Model tiering / specialised providers *(deferred, owner call 2026-07-21)*.** Route each
   workflow to the best-fit model instead of one provider everywhere — specialised engines for audio
   transcription, voice streams, embeddings, plus cost-tiering cheap vs. reasoning-heavy tasks.
@@ -775,6 +868,14 @@ subject profile · timing/sleep-aware delivery · speech-emotion calibration · 
 - `courses` += school_id; − semester, − semester_id, − is_public
 - `course_enrollments` += term_id; unique(user_id, course_id)
 - **Dropped tables:** semesters, semester_members, classes, classmates
+- **Dropped tables (2026-07-26, v1 test system retired post-B14):** tests, test_questions,
+  test_attempts, test_answers — the whole v1 "generate a test" surface (models, workers,
+  `question_generator`, `/tests/*` + `/topics/{id}/quiz` endpoints) is deleted; superseded by
+  the retrieval engine (review loop) + B14 authored practice tests. **Owner migration:** the
+  same `alembic revision --autogenerate` that creates B14's `practice_tests` /
+  `practice_test_questions` will also emit the DROPs for these four (net diff; run
+  `alembic upgrade head` first so the dev DB is current).
+- **New tables (B14):** practice_tests, practice_test_questions.
 - **Note:** the classmate graph is *emergent* — computed from `course_enrollments`
   overlap (Phase 3 discovery), never a stored table.
 

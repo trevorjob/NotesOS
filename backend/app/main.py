@@ -114,6 +114,7 @@ from app.api.terms import router as terms_router
 from app.api.discovery import router as discovery_router
 from app.api.retrieval import router as retrieval_router
 from app.api.capture import router as capture_router
+from app.api.practice_test import router as practice_test_router
 from app.api.sync import router as sync_router
 from app.api.voice import router as voice_router
 from app.services.websocket import connection_manager
@@ -133,11 +134,12 @@ app.include_router(terms_router, prefix="/api/terms", tags=["terms"])
 app.include_router(discovery_router, prefix="/api/discovery", tags=["discovery"])
 app.include_router(retrieval_router, tags=["retrieval"])  # self-prefixed /api/retrieval
 app.include_router(capture_router, prefix="/api", tags=["capture"])
+app.include_router(practice_test_router, tags=["practice-tests"])  # self-prefixed /api/practice-tests
 app.include_router(sync_router, tags=["sync"])  # self-prefixed /api/sync
 app.include_router(voice_router, tags=["voice"])  # WS /ws/voice/{course_id} (premium lane)
 
 
-# WebSocket endpoint for user-scoped events (test generation, personal notifications)
+# WebSocket endpoint for user-scoped events (personal notifications)
 # IMPORTANT: must be defined BEFORE /ws/{course_id} to avoid route shadowing.
 
 @app.websocket("/ws/user/{user_id}")
@@ -145,7 +147,7 @@ async def websocket_user_endpoint(
     websocket: WebSocket, user_id: str, token: str = Query(...)
 ):
     """
-    User-scoped WebSocket for personal events (test generation progress, etc.).
+    User-scoped WebSocket for personal events (personal notifications, etc.).
     Unlike /ws/{course_id}, this is not broadcast to a room — events are sent
     only to the authenticated user.
     """
@@ -241,11 +243,3 @@ async def websocket_endpoint(
             await connection_manager.broadcast_to_course(
                 course_id, {"type": "user_left", "user_id": user_id}
             )
-
-
-# Future routers (Phase 3):
-# from app.api import study, tests, ai, progress
-# app.include_router(study.router, prefix="/api/study", tags=["study"])
-# app.include_router(tests.router, prefix="/api/tests", tags=["tests"])
-# app.include_router(ai.router, prefix="/api/ai", tags=["ai"])
-# app.include_router(progress.router, prefix="/api/progress", tags=["progress"])

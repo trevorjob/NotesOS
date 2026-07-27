@@ -82,7 +82,7 @@ npm run lint
 | Backend | FastAPI (Python), async SQLAlchemy 2.0 |
 | Database | PostgreSQL 16 + pgvector (1536-dim embeddings) |
 | Cache / Real-time | Redis 7 (pub/sub for WebSocket broadcast) |
-| Workers | 6 async Redis-queue workers |
+| Workers | 7 async Redis-queue workers + a periodic digest scheduler |
 | AI | Deepseek, rrAnthropic Claude, OpenAI GPT-4o/Whisper, Voyage AI |
 | File Storage | Cloudinary (S3-compatible R2) |
 | Auth | JWT (15 min access / 7 day refresh) + Google OAuth |
@@ -126,19 +126,26 @@ npm run lint
 - `/api/notifications` — Alert management
 - `/api/semesters` — Course grouping
 
-**Services (`services/`):** Each service is a focused module — `rag.py`, `grader.py`, `question_generator.py`, `knowledge_synthesizer.py`, `vector_store.py`, `file_processor.py`, `hybrid_ocr.py`, `study_agent.py`, `cache.py`, `websocket.py`, `storage.py`, etc.
+**Services (`services/`):** Each service is a focused module — `rag.py`, `grader.py`, `knowledge_synthesizer.py`, `vector_store.py`, `file_processor.py`, `hybrid_ocr.py`, `study_agent.py`, `cache.py`, `websocket.py`, `storage.py`, `retrieval/` (the engine + modes), etc.
 
-**Background workers (`workers/`):** Started via `run_workers.py` with `asyncio.gather()`. Workers read from Redis queues and do heavy async work outside the request path:
+**Background workers (`workers/`):** Started via `run_workers.py` with `asyncio.gather()`. Workers drain Redis queues via the shared `run_worker_loop` (retry/backoff/dead-letter) and do heavy async work outside the request path:
 - `chunking_worker` — Split resources into chunks + generate embeddings
-- `knowledge_worker` — Synthesize knowledge summaries via LangChain + Claude
-- `fact_check_worker` — Verify claims in notes
-- `grading_worker` — AI-grade voice/text quiz answers (LangGraph)
-- `transcription_worker` — Whisper audio-to-text
+- `knowledge_worker` — Merge-gate + synthesize the consolidated note (incremental)
+- `fact_check_worker` — Verify claims in notes (flag-gated)
+- `transcription_worker` — Whisper audio-to-text (ingestion front door)
 - `audio_worker` — TTS audio generation
+- `capture_worker` — Dump → auto-organize a bulk upload into topics
+- `practice_test_worker` — Generate an authored practice-test question set (B14)
+- `notification_scheduler` — Periodic (APScheduler) habit digest, not queue-driven
+
+> Retired with the v1 test system (2026-07-26): `grading_worker` (v2 grades
+> synchronously in `POST /retrieval/attempt`) and `test_generation_worker` (v2
+> generates on demand; B14's `practice_test_worker` is the bounded, atom-feeding
+> replacement, not a resurrection).
 
 **Database (`database.py`):** Async SQLAlchemy engine with `pool_size=2, max_overflow=3` (each process manages its own pool). `init_db()` creates tables on startup. Use `get_db()` as a FastAPI dependency; use `worker_session()` context manager in workers.
 
-**Models (`models/`):** `user`, `course`, `resource`, `test`, `progress`, `knowledge`, `semester`, `notification`, `classmate`.
+**Models (`models/`):** `user`, `course` (+ `Topic`, `CourseEnrollment`, `CourseOutline`), `resource`, `subject`, `retrieval` (`Concept`/`ConceptState`/`RetrievalAttempt`), `consume`, `practice_test` (B14), `progress`, `knowledge`, `term`, `school`, `notification`, `report`. (The v1 `test`/`semester`/`classmate` container models were removed in the v2 rebuild.)
 
 ---
 

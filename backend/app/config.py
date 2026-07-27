@@ -103,14 +103,13 @@ class Settings(BaseSettings):
     EMAIL_FROM: str = "NotesOS <onboarding@resend.dev>"
     PASSWORD_RESET_URL: str = "http://localhost:3000/reset-password"
 
-    # Phone OTP verification (phone is the primary identity).
-    # OTP_PROVIDER is swappable — "console" logs the code (dev/test); the owner
-    # wires WhatsApp/SMS in services/otp.py without touching call sites.
-    OTP_PROVIDER: str = "console"
-    OTP_EXPIRE_MINUTES: int = 10
     # Short-lived token that carries a verified Google identity between the OAuth
     # callback and the phone-collection step (OAuth never infers a phone).
     OAUTH_REGISTER_TOKEN_EXPIRE_MINUTES: int = 15
+
+    # Region used to interpret national-format phone numbers ("0803…") when
+    # canonicalising for contact matching. International ("+234…") ignores it.
+    DEFAULT_PHONE_REGION: str = "NG"
 
     # Google OAuth
     GOOGLE_CLIENT_ID: str = ""

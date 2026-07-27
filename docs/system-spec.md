@@ -161,13 +161,13 @@ exhaustive.
 - **It's a launch point, not a destination.** Reading it feels productive but *reading isn't
   studying* — so the note is wired to push the user into retrieval. It is the front end of the
   retrieval engine, not a read-only page.
-- **Active surface — the note pushes into retrieval, *quietly*.** The user can trigger a retrieval
-  **on a concept or paragraph right there**, without leaving; reading flows into testing. The note
-  *is* linked to the concept substrate under the hood (mastery state exists and drives scheduling),
-  but **the reading view stays clean — no ambient per-term colouring / mastery heat-map** (owner
-  call 2026-07-21: keep the UI simple; colouring reads as clutter and is off-brand). Mastery is
-  surfaced *on its own quiet progress surface*, not painted across the note. The launch-into-
-  retrieval affordance is the point; the colour was not.
+- **Active surface.** The note is **linked to the concept substrate**: terms carry the user's
+  personal **mastery state** (solid / fading / shaky) and are **lit by it** — solid terms glow,
+  fading dim — so the note reads as a live map of what you know vs. what's decaying; and the user
+  can trigger a retrieval **on a concept or paragraph right there**, without leaving. Reading flows
+  into testing. This is the **anti-fluency-illusion mechanic built into the reading surface** — it
+  catches you the moment you mistake reading for knowing. *(The exact visual treatment of "lit by
+  mastery" is design's call; the system just provides the per-concept state to render.)*
 - **It grows incrementally.** New uploads **merge into** the existing note (not a from-scratch
   rewrite). So the note has history: **"what changed since you last read"** and **"Ada added this
   section"** are real, surfaceable states.
@@ -289,14 +289,12 @@ can interleave modes and adjust — design for a responsive flow, not a rigid qu
   (with study, and with the passage of time). Unlike a streak, it's **continuous and forgiving** —
   things fade *gradually*, any retrieval revives them, nothing ever "breaks." Frame it as *tending*,
   not *protecting a fragile chain*.
-- **Progress is a quiet standalone surface, not a scoreboard — and not the note.** *(amended
-  2026-07-21 — owner call.)* Progress is its **own simple surface** — a gentle "what's fading /
-  what's solid" read of your knowledge state — **decoupled from the note reading view.** The
-  earlier design made "the note lit by mastery" *be* the progress map; that's dropped for
-  simplicity (see §4 — no ambient note colouring). The system still just gives you a way to *see
-  what you know vs. what's decaying*; it now does that on a dedicated, deliberately un-busy surface
-  rather than by tinting every term in your notes. Keep it honest and personal — a glimpse, never a
-  dashboard.
+- **Progress is spatial, not a scoreboard.** *(2026-07-25: restored — a brief 07-21 move to a
+  standalone-only surface was reversed; the note lit by mastery is the design.)* The primary way a
+  user sees progress is **their notes lit by mastery** — solid terms glow, fading dim — so you read
+  your knowledge *across your own notes*, not as a vanity number. The note-lit-by-mastery **is** the
+  progress map (it reuses the note↔concept linking). A dedicated stats view is **optional depth,
+  never the headline.** Exact visual treatment is design's call — the system just surfaces the state.
 - **Framing balances gain and loss** — lead with growth ("4 got more durable today"), whisper the
   fading ("3 slipping") — gentle, never anxiety-inducing.
 - **Calibration is the signature-but-quiet metric** — "you're getting better at knowing what you

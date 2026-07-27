@@ -10,7 +10,6 @@ from sqlalchemy import select, func
 import uuid
 
 from app.models.progress import StudySession, UserProgress, SessionType
-from app.models.test import TestAttempt, Test
 
 
 class ProgressService:
@@ -84,12 +83,16 @@ class ProgressService:
         self, db: AsyncSession, user_id: str, topic_id: str
     ) -> float:
         """
-        Calculate mastery level for a topic.
+        Calculate mastery level for a topic (legacy study-session surface).
 
-        Formula: (quiz_score × 0.4) + (study_time × 0.3) + (consistency × 0.3)
-        - quiz_score: avg test score for topic (0-1)
+        Formula: (study_time × 0.5) + (consistency × 0.5)
         - study_time: normalized hours (0-1, capped at 10 hours)
         - consistency: sessions in last 7 days / 7 (0-1)
+
+        The old v1 quiz-score component (40%) was retired with the v1 test system —
+        genuine, concept-level mastery now lives in the retrieval engine
+        (``ConceptState`` / calibration), which C3's mastery surface reads directly.
+        This coarse per-topic figure remains only for the v1 study-session view.
 
         Returns:
             Mastery level (0.00 - 1.00)
@@ -97,20 +100,16 @@ class ProgressService:
         user_uuid = uuid.UUID(user_id)
         topic_uuid = uuid.UUID(topic_id)
 
-        # 1. Quiz score (40%)
-        quiz_score = await self._get_avg_quiz_score(db, user_uuid, topic_uuid)
-
-        # 2. Study time (30%)
+        # 1. Study time (50%)
         study_time_score = await self._get_study_time_score(db, user_uuid, topic_uuid)
 
-        # 3. Consistency (30%)
+        # 2. Consistency (50%)
         consistency_score = await self._get_consistency_score(db, user_uuid, topic_uuid)
 
         # Weighted formula
         mastery = (
-            (float(quiz_score) * 0.4)
-            + (float(study_time_score) * 0.3)
-            + (float(consistency_score) * 0.3)
+            (float(study_time_score) * 0.5)
+            + (float(consistency_score) * 0.5)
         )
         return round(mastery, 2)
 
@@ -264,30 +263,6 @@ class ProgressService:
         progress.mastery_level = await self.calculate_mastery(db, user_id, topic_id)
 
         await db.commit()
-
-    async def _get_avg_quiz_score(
-        self, db: AsyncSession, user_id: uuid.UUID, topic_id: uuid.UUID
-    ) -> float:
-        """Get average quiz score for a topic (0-1 scale)."""
-        # Get all test attempts for this topic
-        query = (
-            select(TestAttempt)
-            .join(Test)
-            .where(
-                TestAttempt.user_id == user_id,
-                Test.topics.contains([str(topic_id)]),  # Topic in topics array
-                TestAttempt.completed_at.isnot(None),
-            )
-        )
-        result = await db.execute(query)
-        attempts = result.scalars().all()
-
-        if not attempts:
-            return 0.0
-
-        # Calculate average score (normalize to 0-1)
-        avg_score = sum(a.total_score / a.max_score for a in attempts) / len(attempts)
-        return min(1.0, avg_score)
 
     async def _get_study_time_score(
         self, db: AsyncSession, user_id: uuid.UUID, topic_id: uuid.UUID

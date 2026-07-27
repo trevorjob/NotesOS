@@ -25,30 +25,7 @@ from app.config import settings
 from app.database import Base
 
 # Import all models so Alembic can detect them
-from app.models import (
-    User,
-    Course,
-    CourseEnrollment,
-    Topic,
-    CourseOutline,
-    Resource,
-    ResourceFile,
-    ResourceChunk,
-    FactCheck,
-    PreClassResearch,
-    Test,
-    TestQuestion,
-    TestAttempt,
-    TestAnswer,
-    StudySession,
-    UserProgress,
-    AIConversation,
-    AIMessage,
-    Notification,
-    Concept,
-    ConceptState,
-    RetrievalAttempt,
-)
+from app.models import *
 
 # this is the Alembic Config object
 config = context.config

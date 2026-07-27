@@ -37,13 +37,12 @@ async def test_register_without_school_is_allowed(client, register_user):
 
 
 async def test_duplicate_phone_rejected(client, register_user):
-    """A fully-registered (verified) phone can't be re-registered."""
     user = await register_user()
-    second = await client.post(
+    resp = await client.post(
         "/api/auth/register",
         json={"phone": user["phone"], "password": "password123", "full_name": "Phone Two"},
     )
-    assert second.status_code == 400
+    assert resp.status_code == 400
 
 
 async def test_duplicate_email_rejected(client, register_user):

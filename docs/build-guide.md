@@ -120,12 +120,17 @@ but this is the intended target:
 | `audio` | Listen's engine. Emits **N rotating variants** per topic, not one (locked design). |
 | `transcription` | **A2 promotes it** to a first-class *ingestion* front door (feeds chunking), not a grading feeder. |
 
-**Retire — superseded by the retrieval engine (they have no v2 caller):**
+**Retired — ✅ removed 2026-07-26 (whole v1 test system deleted, post-B14):**
 
-| Worker | Why it dies |
+| Worker | Why it died |
 |---|---|
-| `test_generation` | v2 generates challenges **on demand** in `POST /retrieval/next` via `mode.generate()`. The batch pre-gen model is gone. |
+| `test_generation` | v2 generates challenges **on demand** in `POST /retrieval/next` via `mode.generate()`. The batch pre-gen model is gone. **B14's `practice_test_worker`** is a *bounded, concept-anchored* pre-gen for authored shareable tests that feeds the retrieval atom (`record_attempt`), not the dead grade path — a replacement, NOT this worker resurrected. See §4 B14. |
 | `grading` | v2 evaluates **synchronously** in `POST /retrieval/attempt` via `mode.evaluate()`. See the voice decision below. |
+
+> **Done (2026-07-26):** both workers + `services/question_generator.py`, `models/test.py`
+> (`Test`/`TestQuestion`/`TestAttempt`/`TestAnswer`), the v1 `/tests/*` endpoints in
+> `ai_features.py` + `/topics/{id}/quiz` in `topics.py`, and the `TestAttempt` mastery input
+> in `services/progress.py` are all deleted. Drop-tables migration is owner-pending (below).
 
 **Parked — deferred, leave dormant:** `fact_check` (flag-gated, not a live worker).
 
@@ -328,6 +333,46 @@ but this is the intended target:
   - **Client seam (not this backend item, but flag it):** the source layer has to be *readable* —
     "show me the original." The data exists (chunks); the client owes a source-read view (widen
     C2's "says who?" X-ray). Note it so C2 picks it up; don't build UI here.
+- **B14 · Authored practice test (added 2026-07-25).** The v1 "generate a test" feature, rebuilt
+  **on the retrieval atom** so a test *feeds* spaced repetition. It is a **composition/orchestration
+  like recap & brain-dump — NOT a new mode** (invariant #7 untouched) and **NOT the v1 test system
+  rewired.** Traps:
+  - **Build it on the atom, or you've built a parallel quiz engine (the whole point).** The one
+    thing that makes this worth doing over just switching v1's router back on: *taking a test must
+    record per-concept attempts through `engine.record_attempt`* (owner call — a practice test is
+    studying, not measuring). Reuse `QuizMode`/`PretestMode` `generate` to build the set and
+    `mode.evaluate` + `record_attempt` to grade each answer — **no new grade path, no new question
+    generator.** If you find yourself calling the old `grading_worker` / `question_generator`, stop:
+    that's the v1 rewire trap, and it bypasses FSRS / calibration / recognition — the exact split
+    the v2 rebuild consolidated.
+  - **The v1 `Test` model is legacy reference, not the base — lean toward a new, lean model.** v1's
+    `models/test.py` (its router is already off — `main.py:249`) has the right *shape* (course_id,
+    created_by, topics[], question_types, question_count, generation_status) but its questions are
+    **not concept-anchored** and grade through the dead path. Adapting it fights the atom; a fresh
+    concept-anchored table is less work than reconciling its baggage. Salvage the shape/naming, not
+    the machinery. (Cleaning up the dead v1 test imports — `api/topics.py`, `ai_features.py`,
+    `progress.py`, `grading_worker`, `test_generation_worker`, `question_generator` — is fair game
+    but a separate hygiene pass; don't let it balloon this item.)
+  - **The persisted test is legitimately the one new non-derivable table** (invariant #2 holds — an
+    *authored artifact* isn't derivable, same justification as D5's reports). It stores the frozen,
+    concept-anchored questions **with answer keys**; **sanitize** exactly like `/next` does
+    (`_SENSITIVE_PAYLOAD_KEYS`) when serving a question to a taker — a shared test must never leak
+    its key. **The session is still derived** — do NOT add a test-attempt or session table; taking a
+    test is a run of ordinary atoms, and the "score" is derived from the attempt log, never stored.
+  - **Multi-topic selection is the one real engine change — and it's a decide-and-build, not an
+    escalation.** `engine.select_concepts` takes a single `topic_id`/`course_id` today; extend it
+    (or add a sibling) to accept a **topic-id set**. It's a selection-scope change, not a Protocol /
+    attribution / schema-philosophy change, so §7 doesn't apply — just don't special-case it inside
+    a mode.
+  - **quiz + pretest only.** Ramble / teach / brain-dump are single-dump free recall — they do not
+    set-ify; reject authored-test generation for them. Question types are mcq / short-answer /
+    **essay** (the genuine one-off, AI-graded via the existing `grader`). Pretest-as-a-set is a
+    shared pre-study diagnostic — same generation, `pretest` scheduling caps still apply.
+  - **Generation is async-with-progress, bounded and concept-anchored — reuse A2's capture WS
+    pattern** (`*_progress`/`*_complete`), persist as questions land. This is the "bounded pre-gen"
+    §2a's retire-note now points at; it is not the retired batch worker (which bypassed the engine).
+    Cost==speed (§5) actively *favours* pre-generating a shared, reused test — that's the double-pay
+    win, not a violation of on-demand.
 - **A4 · Incremental synthesis.** Replace the full-rebuild with **append-merge** into the existing
   note. The merge must still **reconcile/dedupe** and **respect the quarantine gate** (never merge a
   quarantined resource). Debounce bursty uploads (one synth per burst, not per file). "What changed"

@@ -46,6 +46,7 @@ async def select_concepts(
     user_id,
     scope: str,
     topic_id=None,
+    topic_ids=None,
     course_id=None,
     limit: int = 10,
     now: Optional[datetime] = None,
@@ -57,6 +58,12 @@ async def select_concepts(
     - ``spaced_due`` — only concepts this user has a schedule for that are due now,
       soonest-due first. New (never-seen) concepts are not "due"; introduce those via
       ``topic``/``course`` scope.
+
+    ``topic_ids`` (an arbitrary topic-id *set*) is the B14 multi-topic seam: an
+    authored test draws its concept pool from a subset of a course's topics. It's a
+    selection-scope widening of ``topic`` scope — not a new scope, not a mode concern.
+    Single ``topic_id`` and whole-``course_id`` scope already existed; the set is the
+    new primitive. When both are given, ``topic_ids`` wins.
     """
     if scope not in SCOPES:
         raise ValueError(f"unknown scope {scope!r}; expected one of {SCOPES}")
@@ -76,15 +83,20 @@ async def select_concepts(
         )
         if course_id is not None:
             stmt = stmt.where(Concept.course_id == course_id)
-        if topic_id is not None:
+        if topic_ids:
+            stmt = stmt.where(Concept.topic_id.in_(list(topic_ids)))
+        elif topic_id is not None:
             stmt = stmt.where(Concept.topic_id == topic_id)
         return list((await db.execute(stmt)).scalars().all())
 
     stmt = select(Concept)
     if scope == SCOPE_TOPIC:
-        if topic_id is None:
-            raise ValueError("topic scope requires topic_id")
-        stmt = stmt.where(Concept.topic_id == topic_id).order_by(Concept.order_index)
+        if topic_ids:
+            stmt = stmt.where(Concept.topic_id.in_(list(topic_ids))).order_by(Concept.order_index)
+        elif topic_id is not None:
+            stmt = stmt.where(Concept.topic_id == topic_id).order_by(Concept.order_index)
+        else:
+            raise ValueError("topic scope requires topic_id or topic_ids")
     else:  # course or interleaved — both span the course
         if course_id is None:
             raise ValueError(f"{scope} scope requires course_id")
