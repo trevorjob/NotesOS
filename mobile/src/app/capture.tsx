@@ -16,11 +16,17 @@ import {
   startCapture,
 } from '@/lib/capture';
 import { CourseSocket } from '@/lib/courseSocket';
+import { OutlineScaffold } from '@/components/capture/OutlineScaffold';
 
 // Capture is instant-and-dumb: pick files → upload to Cloudinary → POST the URLs → the
 // server returns 202 and a worker transcribes, sorts into topics, and auto-files, telling
 // us how it went over the course WebSocket. There is no "confirm structure" step — the
 // worker files without asking — so the final screen is a result, not an approval gate.
+//
+// Capture has two intents that share this modal: the dump (below) and the syllabus
+// scaffold (OutlineScaffold). `mode=outline` opens straight into the scaffold; otherwise
+// the dump leads and offers a link across. Both are course-level surfaces of api/capture.py.
+type Intent = 'dump' | 'outline';
 type Phase = 'source' | 'uploading' | 'working' | 'done' | 'failed';
 type WorkStage = 'transcribing' | 'organizing';
 
@@ -45,8 +51,9 @@ function readError(err: unknown): string {
 
 export default function CaptureDump() {
   const { c, font, size, space } = useTheme();
-  const { courseId } = useLocalSearchParams<{ courseId?: string }>();
+  const { courseId, mode } = useLocalSearchParams<{ courseId?: string; mode?: string }>();
 
+  const [intent, setIntent] = useState<Intent>(mode === 'outline' ? 'outline' : 'dump');
   const [phase, setPhase] = useState<Phase>('source');
   const [stage, setStage] = useState<WorkStage>('transcribing');
   const [topics, setTopics] = useState<CaptureTopicResult[]>([]);
@@ -144,11 +151,24 @@ export default function CaptureDump() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: c.paper }}>
       <View style={{ paddingHorizontal: space.gutterPage, paddingTop: 18, paddingBottom: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Text style={titleStyle}>Add material</Text>
+        <Text style={titleStyle}>{intent === 'outline' ? 'Set up topics' : 'Add material'}</Text>
         <IconButton icon={<Text style={{ fontSize: 20, color: c.inkSecondary }}>✕</Text>} label="Close" onPress={() => router.back()} />
       </View>
 
       <ScrollView contentContainerStyle={{ paddingHorizontal: space.gutterPage, paddingBottom: 20 }}>
+        {intent === 'outline' ? (
+          !courseId ? (
+            <Text style={{ color: c.stateShaky, fontSize: size.bodySm, marginTop: 14 }}>No course selected.</Text>
+          ) : (
+            <View style={{ gap: 16 }}>
+              <OutlineScaffold courseId={courseId} onDone={() => router.back()} />
+              <Pressable onPress={() => setIntent('dump')} style={{ minHeight: 44, justifyContent: 'center', alignItems: 'center' }}>
+                <Text style={{ color: c.inkTertiary, fontSize: size.bodySm }}>Add material instead</Text>
+              </Pressable>
+            </View>
+          )
+        ) : (
+        <>
         {phase === 'source' && (
           <View>
             <Text style={mutedBody}>Dump everything at once — no need to sort first.</Text>
@@ -158,6 +178,11 @@ export default function CaptureDump() {
                 <Text style={{ fontSize: size.caption, color: c.inkTertiary }}>{source.hint}</Text>
               </Pressable>
             ))}
+            <Pressable onPress={() => setIntent('outline')} style={{ paddingTop: 16, minHeight: 44, justifyContent: 'center' }}>
+              <Text style={{ color: c.confirm, textDecorationLine: 'underline', fontSize: size.bodySm }}>
+                Set up topics from a syllabus instead
+              </Text>
+            </Pressable>
             {error && <Text style={{ color: c.stateShaky, fontSize: size.bodySm, marginTop: 14 }}>{error}</Text>}
           </View>
         )}
@@ -211,6 +236,8 @@ export default function CaptureDump() {
             <Button label="Try again" onPress={reset} style={{ marginTop: 10 }} />
             <Button label="Close" variant="secondary" onPress={() => router.back()} />
           </View>
+        )}
+        </>
         )}
       </ScrollView>
     </SafeAreaView>

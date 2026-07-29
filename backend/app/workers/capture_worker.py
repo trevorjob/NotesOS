@@ -76,6 +76,7 @@ async def _transcribe_one(item: dict) -> dict:
                 file_url=item["url"], file_format=ext, is_handwritten=False
             )
             out["transcript"] = result["text"]
+            out["confidence"] = result.get("confidence")
     except Exception as exc:  # per-file isolation — the batch survives
         out["error"] = str(exc)
     return out
@@ -229,11 +230,17 @@ async def process_capture_job(job_data: dict) -> None:
                     file_name=item.get("filename"),
                     source_type=source_type,
                     is_processed=False,
-                    ocr_provider="gpt-vision" if kind == "image" else None,
+                    ocr_provider=(
+                        "gpt-vision"
+                        if kind == "image"
+                        else "pymupdf"
+                        if item.get("confidence") is not None
+                        else None
+                    ),
                     ocr_confidence=(
                         capture_service.estimate_confidence(item["transcript"])
                         if kind == "image"
-                        else None
+                        else item.get("confidence")
                     ),
                 )
                 db.add(resource)

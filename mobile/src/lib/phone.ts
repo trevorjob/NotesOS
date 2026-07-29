@@ -1,6 +1,6 @@
 import * as Crypto from 'expo-crypto';
 import { getLocales } from 'expo-localization';
-import { CountryCode, parsePhoneNumberFromString } from 'libphonenumber-js';
+import { CountryCode, getCountryCallingCode, parsePhoneNumberFromString } from 'libphonenumber-js';
 
 // Phone canonicalisation — the client half of contact-match. Must produce the
 // EXACT same E.164 string (and therefore the same SHA-256 hash) as the backend's
@@ -43,6 +43,27 @@ export function canonicalPhone(raw: string, region?: CountryCode): string {
   const digits = s.replace(/\D/g, '');
   if (!digits) return '';
   return (plus ? '+' : '') + digits;
+}
+
+/** Compose a canonical E.164 from an **explicitly chosen** country plus the
+ *  national number the user typed. Unlike `canonicalPhone` (which guesses the
+ *  region from the device and so mis-parses a foreign national number — e.g. a
+ *  Nigerian `0813…` read as UK `+44…` on a GB phone), the country here is
+ *  user-selected, so there is no wrong-region ambiguity. This is what the phone
+ *  input uses for the user's OWN number. Returns '' for empty input. */
+export function composeE164(country: CountryCode, nationalNumber: string): string {
+  const s = (nationalNumber ?? '').trim();
+  if (!s) return '';
+  // A user who types a full +international number overrides the picker.
+  if (s.startsWith('+')) return canonicalPhone(s);
+
+  const parsed = parsePhoneNumberFromString(s, country);
+  if (parsed) return parsed.number;
+
+  // Fallback: strip a single national trunk 0, then prefix the dial code.
+  const digits = s.replace(/\D/g, '').replace(/^0+/, '');
+  if (!digits) return '';
+  return '+' + getCountryCallingCode(country) + digits;
 }
 
 /** SHA-256 hex of the canonical phone — the value the server stored for a

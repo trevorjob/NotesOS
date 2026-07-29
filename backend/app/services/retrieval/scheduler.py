@@ -16,7 +16,15 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
-from fsrs import Card, Rating, Scheduler
+from fsrs import Card, Rating, Scheduler, State
+
+# The note's heat-map labels (system-spec §4/§5): solid glows, fading dims, shaky just
+# slipped, new is untouched. The three-way lit/dim/decayed rendering is design's call —
+# this only derives the per-concept state the note renders (see engine → ConceptState).
+MASTERY_NEW = "new"
+MASTERY_SOLID = "solid"
+MASTERY_FADING = "fading"
+MASTERY_SHAKY = "shaky"
 
 # The four grades every mode maps its outcome to (mirrors FSRS ratings).
 GRADES = ("again", "hard", "good", "easy")
@@ -89,3 +97,26 @@ def apply_review(
         state=int(fsrs_card.state.value),
         last_review=_naive_utc(fsrs_card.last_review),
     )
+
+
+def derive_mastery(
+    *,
+    reps: int,
+    last_grade: Optional[str],
+    fsrs_state: Optional[int],
+    due: Optional[datetime],
+    now: Optional[datetime] = None,
+) -> str:
+    """Collapse a user's ``ConceptState`` into the note's heat-map label.
+
+    ``due``/``now`` are naive UTC (matching the DB columns). FSRS ``due`` is the
+    predicted 90%-retrievability moment, so past-due reads as decaying (fading).
+    """
+    if reps <= 0:
+        return MASTERY_NEW
+    if last_grade == "again" or fsrs_state == State.Relearning.value:
+        return MASTERY_SHAKY
+    now = now or datetime.utcnow()
+    if due is not None and due <= now:
+        return MASTERY_FADING
+    return MASTERY_SOLID

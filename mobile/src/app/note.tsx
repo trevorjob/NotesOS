@@ -1,85 +1,80 @@
-import React, { useState } from 'react';
-import { Pressable, ScrollView, Text, TextStyle, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useTheme } from '@/theme/ThemeProvider';
-import { Palette } from '@/theme/tokens';
 import { Button } from '@/components/ui/Button';
 import { Sheet } from '@/components/ui/Sheet';
 import { useQuickSwitcher } from '@/components/nav/QuickSwitcherContext';
 import { AITutorChat } from '@/components/note/AITutorChat';
+import { buildConceptIndex, LitText, NoteMarkdown } from '@/components/note/NoteMarkdown';
+import { stateColor, stateLabel } from '@/components/note/mastery';
 import { ReportSheet } from '@/components/report/ReportSheet';
-
-type TermState = 'solid' | 'fading' | 'shaky';
-type TopicStatus = 'ready' | 'synthesizing' | 'empty';
-
-interface Topic {
-  name: string;
-  status: TopicStatus;
-}
+import { CourseTopic, fetchCourseTopics } from '@/lib/topics';
+import {
+  ConceptMastery,
+  ConceptStates,
+  fetchConceptStates,
+  fetchTopicContributions,
+  fetchTopicHeader,
+  fetchTopicKnowledge,
+  MasteryState,
+  regenerateKnowledge,
+  TopicContributions,
+  TopicHeader,
+  TopicKnowledge,
+} from '@/lib/note';
 
 interface SheetSelection {
   concept: string;
-  state: TermState;
+  conceptId: string;
+  state: MasteryState;
+  definition: string | null;
 }
 
-interface StageEntry {
-  name: string;
-  state: TermState;
-  where: string;
-  why: string;
-}
-
-const TOPICS: Topic[] = [
-  { name: 'Cellular Respiration', status: 'ready' },
-  { name: 'Photosynthesis', status: 'synthesizing' },
-  { name: 'Enzyme Kinetics', status: 'empty' },
-];
-
-const STAGE_ENTRIES: StageEntry[] = [
-  { name: 'Glycolysis', state: 'solid', where: 'Cytoplasm · no oxygen needed', why: 'Splits glucose into two pyruvate — the entry point every downstream stage assumes is already done.' },
-  { name: 'Krebs cycle', state: 'fading', where: 'Mitochondrial matrix', why: 'Strips carbons from pyruvate, banking electrons onto carriers (NADH, FADH₂) for the next stage.' },
-  { name: 'Electron transport chain', state: 'shaky', where: 'Inner mitochondrial membrane', why: 'Uses those carriers to pump protons and drive most of the cell’s ATP synthesis.' },
-];
-
-const TABLE_ROWS: string[][] = [
-  ['', 'Aerobic', 'Anaerobic'],
-  ['Net ATP', '~30–32', '2'],
-  ['Byproduct', 'CO₂ + H₂O', 'Lactate / ethanol'],
-  ['O₂ required', 'Yes', 'No'],
-];
-
-const SYNTH_BAR_WIDTHS = [92, 78, 85, 60];
-
-function stateStyles(c: Palette): Record<TermState, TextStyle> {
-  return {
-    solid: { color: c.stateSolid, fontWeight: '600', textDecorationLine: 'underline', textDecorationStyle: 'solid', textDecorationColor: c.stateSolid },
-    fading: { color: c.stateFading, textDecorationLine: 'underline', textDecorationStyle: 'dashed', textDecorationColor: c.stateFading },
-    shaky: { color: c.stateShaky, textDecorationLine: 'underline', textDecorationStyle: 'dotted', textDecorationColor: c.stateShaky },
-  };
-}
-
-function stateLabel(state: TermState): string {
-  return { solid: 'Solid', fading: 'Fading', shaky: 'Shaky' }[state];
-}
-
-function stateColor(c: Palette, state: TermState): string {
-  return { solid: c.stateSolid, fading: c.stateFading, shaky: c.stateShaky }[state];
-}
-
-interface TermProps {
-  state: TermState;
-  children: string;
-  onLaunch: (concept: string, state: TermState) => void;
-}
-
-function Term({ state, children, onLaunch }: TermProps) {
-  const { c } = useTheme();
+function PagerButton({ dir, onPress }: { dir: 'prev' | 'next'; onPress: () => void }) {
+  const { c, radius } = useTheme();
   return (
-    <Text onPress={() => onLaunch(children, state)} style={[stateStyles(c)[state], { paddingVertical: 2 }]}>
-      {children}
-    </Text>
+    <Pressable
+      onPress={onPress}
+      accessibilityLabel={dir === 'prev' ? 'Previous topic' : 'Next topic'}
+      hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+      style={{ width: 36, height: 36, flexShrink: 0, borderWidth: 1, borderColor: c.paperEdge, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' }}
+    >
+      <Text style={{ color: c.inkSecondary, fontSize: 16 }}>{dir === 'prev' ? '‹' : '›'}</Text>
+    </Pressable>
   );
+}
+
+function relativeTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return '';
+  const days = Math.floor((Date.now() - then) / 86_400_000);
+  if (days <= 0) return 'today';
+  if (days === 1) return 'yesterday';
+  if (days < 7) return `${days} days ago`;
+  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+// The header attribution beat: what's new since you last read, else the latest contribution,
+// else a plain "updated" fallback. Null when there's nothing real to say.
+function attributionLine(contrib: TopicContributions | null, generatedAt: string | null): string | null {
+  if (contrib?.new_since_last_read && contrib.new_since_last_read > 0) {
+    const n = contrib.new_since_last_read;
+    return `${n} new ${n === 1 ? 'addition' : 'additions'} since you last read`;
+  }
+  const latest = contrib?.recent[0];
+  if (latest) return `${latest.uploader_name} added “${latest.title}” · ${relativeTime(latest.created_at)}`;
+  if (generatedAt) return `Updated ${relativeTime(generatedAt)}`;
+  return null;
+}
+
+function contributorLine(contrib: TopicContributions | null): string | null {
+  if (!contrib || contrib.contributor_count === 0) return null;
+  const names = contrib.contributors.map((x) => x.name);
+  if (names.length === 1) return `Built by ${names[0]}`;
+  if (names.length === 2) return `Built by ${names[0]} & ${names[1]}`;
+  return `Built by ${names[0]}, ${names[1]} & ${contrib.contributor_count - 2} ${contrib.contributor_count - 2 === 1 ? 'other' : 'others'}`;
 }
 
 function Rule({ label }: { label?: string }) {
@@ -97,20 +92,6 @@ function Rule({ label }: { label?: string }) {
   );
 }
 
-function PagerButton({ dir, onPress }: { dir: 'prev' | 'next'; onPress: () => void }) {
-  const { c, radius } = useTheme();
-  return (
-    <Pressable
-      onPress={onPress}
-      accessibilityLabel={dir === 'prev' ? 'Previous topic' : 'Next topic'}
-      hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
-      style={{ width: 36, height: 36, flexShrink: 0, borderWidth: 1, borderColor: c.paperEdge, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' }}
-    >
-      <Text style={{ color: c.inkSecondary, fontSize: 16 }}>{dir === 'prev' ? '‹' : '›'}</Text>
-    </Pressable>
-  );
-}
-
 function TrustLink({ label, color, onPress }: { label: string; color: string; onPress: () => void }) {
   return (
     <Pressable onPress={onPress} style={{ minHeight: 44, justifyContent: 'center' }}>
@@ -121,23 +102,101 @@ function TrustLink({ label, color, onPress }: { label: string; color: string; on
 
 export default function NoteScreen() {
   const { c, font, size, space, radius, trackingUtility } = useTheme();
+  const { topicId, courseId } = useLocalSearchParams<{ topicId?: string; courseId?: string }>();
   const { openSwitcher } = useQuickSwitcher();
-  const [topicIndex, setTopicIndex] = useState(0);
+
+  const [header, setHeader] = useState<TopicHeader | null>(null);
+  const [knowledge, setKnowledge] = useState<TopicKnowledge | null>(null);
+  const [states, setStates] = useState<ConceptStates | null>(null);
+  const [contributions, setContributions] = useState<TopicContributions | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const [siblings, setSiblings] = useState<CourseTopic[]>([]);
+  const [courseName, setCourseName] = useState<string | null>(null);
+
   const [sheet, setSheet] = useState<SheetSelection | null>(null);
-  const [showProvenance, setShowProvenance] = useState(false);
   const [showReport, setShowReport] = useState(false);
+  const [showProvenance, setShowProvenance] = useState(false);
   const [showTutor, setShowTutor] = useState(false);
 
-  const launchTerm = (concept: string, state: TermState) => setSheet({ concept, state });
-  const topic = TOPICS[topicIndex];
-  const cycle = (delta: number) => setTopicIndex((i) => (i + delta + TOPICS.length) % TOPICS.length);
+  const load = useCallback(async () => {
+    if (!topicId) {
+      setError('No topic selected.');
+      setLoading(false);
+      return;
+    }
+    try {
+      setError(null);
+      const [h, k, s, contrib] = await Promise.all([
+        fetchTopicHeader(topicId),
+        fetchTopicKnowledge(topicId),
+        fetchConceptStates(topicId),
+        fetchTopicContributions(topicId).catch(() => null),
+      ]);
+      setHeader(h);
+      setKnowledge(k);
+      setStates(s);
+      setContributions(contrib);
+    } catch {
+      setError('Could not load this note. Pull to retry.');
+    } finally {
+      setLoading(false);
+    }
+  }, [topicId]);
+
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
+  );
+
+  // Sibling topics (for the prev/next pager + breadcrumb) are course-scoped, so they load
+  // once per course and stay put while paging between topics — the header never flickers.
+  useEffect(() => {
+    if (!courseId) return;
+    let alive = true;
+    fetchCourseTopics(courseId)
+      .then((detail) => {
+        if (!alive) return;
+        setSiblings(detail.topics);
+        setCourseName(detail.course.name);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [courseId]);
+
+  const currentIndex = useMemo(() => siblings.findIndex((t) => t.id === topicId), [siblings, topicId]);
+  const canPage = siblings.length > 1 && currentIndex >= 0;
+  const goToTopic = (delta: number) => {
+    if (!canPage) return;
+    const next = siblings[(currentIndex + delta + siblings.length) % siblings.length];
+    router.setParams({ topicId: next.id });
+  };
+
+  const launchConcept = (concept: ConceptMastery) =>
+    setSheet({ concept: concept.term, conceptId: concept.concept_id, state: concept.state, definition: concept.definition });
 
   const startRetrieval = () => {
     if (!sheet) return;
-    const { concept, state } = sheet;
+    const { concept, conceptId, state } = sheet;
     setSheet(null);
-    router.push({ pathname: '/retrieval', params: { concept, conceptState: state } });
+    router.push({ pathname: '/retrieval', params: { concept, conceptId, conceptState: state, topicId, courseId } });
   };
+
+  const conceptIndex = useMemo(() => buildConceptIndex(states?.concepts ?? []), [states]);
+
+  // Prefer the sibling title (stable + instant on paging) over the per-topic fetch.
+  const title = siblings[currentIndex]?.title ?? header?.title ?? 'Note';
+  const note = knowledge?.consolidated_note?.trim() || null;
+  const status = knowledge?.status ?? 'pending';
+  const attribution = attributionLine(contributions, knowledge?.generated_at ?? knowledge?.updated_at ?? null);
+  const builtBy = contributorLine(contributions);
+  const isEmpty = knowledge != null && knowledge.source_count === 0;
+  const isSynthesizing = !isEmpty && !note && (status === 'pending' || status === 'processing');
+  const isFailed = status === 'failed' && !note;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: c.paper }}>
@@ -145,7 +204,7 @@ export default function NoteScreen() {
         <View style={{ padding: 20, paddingTop: 18, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: c.paperEdge }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
             <Text style={{ fontFamily: font.utility, fontSize: size.caption, letterSpacing: trackingUtility(size.caption), textTransform: 'uppercase', color: c.inkTertiary }}>
-              Biology · Cell Biology
+              {courseName ?? (header?.week_number ? `Week ${header.week_number}` : 'Consolidated note')}
             </Text>
             <Pressable
               onPress={openSwitcher}
@@ -157,173 +216,166 @@ export default function NoteScreen() {
           </View>
 
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-            <PagerButton dir="prev" onPress={() => cycle(-1)} />
-            <Text style={{ flex: 1, fontFamily: font.display, fontSize: size.display2, lineHeight: size.display2 * 1.15, textAlign: 'center', color: c.ink }}>
-              {topic.name}
+            {canPage && <PagerButton dir="prev" onPress={() => goToTopic(-1)} />}
+            <Text style={{ flex: 1, fontFamily: font.display, fontSize: size.display2, lineHeight: size.display2 * 1.15, textAlign: canPage ? 'center' : 'left', color: c.ink }}>
+              {title}
             </Text>
-            <PagerButton dir="next" onPress={() => cycle(1)} />
+            {canPage && <PagerButton dir="next" onPress={() => goToTopic(1)} />}
           </View>
 
-          <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 6, marginTop: 8 }}>
-            {TOPICS.map((t, i) => (
-              <View key={t.name} style={{ width: 5, height: 5, borderRadius: 2.5, backgroundColor: i === topicIndex ? c.ink : c.paperEdge }} />
-            ))}
-          </View>
-
-          {topic.status === 'ready' && (
-            <View style={{ marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: c.confirm }} />
-              <Text style={{ fontFamily: font.utility, fontSize: size.utility, color: c.confirm }}>
-                Updated — Ada added the electron transport chain section
-              </Text>
-            </View>
-          )}
-        </View>
-
-        <View style={{ flexDirection: 'row', gap: 10, paddingHorizontal: 20, paddingTop: 14 }}>
-          <Button
-            label="Ask the tutor"
-            variant="secondary"
-            icon={<Text style={{ color: c.ink }}>◎</Text>}
-            onPress={() => setShowTutor(true)}
-            style={{ flex: 1 }}
-          />
-          <Button
-            label="Listen"
-            variant="secondary"
-            icon={<Text style={{ color: c.ink }}>♫</Text>}
-            onPress={() => router.push('/listen')}
-            style={{ flex: 1 }}
-          />
-        </View>
-
-        <View style={{ paddingHorizontal: 20 }}>
-          {topic.status === 'empty' ? (
-            <View style={{ paddingVertical: 48, alignItems: 'center', gap: 12 }}>
-              <Text style={{ fontFamily: font.display, fontSize: size.display3, color: c.ink }}>Nothing here yet</Text>
-              <Text style={{ color: c.inkSecondary, fontSize: size.bodySm, maxWidth: 260, textAlign: 'center' }}>
-                This topic is scaffolded but has no material. Add something to get a note started.
-              </Text>
-              <Button label="Add material" variant="text" onPress={() => router.push('/capture')} />
-            </View>
-          ) : topic.status === 'synthesizing' ? (
-            <View style={{ paddingVertical: 32, gap: 14 }}>
-              <Text style={{ fontFamily: font.utility, fontSize: size.utility, letterSpacing: trackingUtility(size.utility), textTransform: 'uppercase', color: c.stateFading }}>
-                Synthesizing — writing itself in
-              </Text>
-              {SYNTH_BAR_WIDTHS.map((w, i) => (
-                <View key={i} style={{ height: 14, width: `${w}%`, backgroundColor: c.paperRecessed, borderRadius: radius.sm }} />
+          {canPage && (
+            <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 6, marginTop: 8 }}>
+              {siblings.map((t, i) => (
+                <View key={t.id} style={{ width: 5, height: 5, borderRadius: 2.5, backgroundColor: i === currentIndex ? c.ink : c.paperEdge }} />
               ))}
             </View>
-          ) : (
-            <>
-              <Text style={{ fontSize: size.body, lineHeight: size.body * 1.55, color: c.ink, marginVertical: 18 }}>
-                Cells release the energy stored in glucose in three connected stages.{' '}
-                <Term state="solid" onLaunch={launchTerm}>Glycolysis</Term>
-                {' happens first and needs no oxygen; its output feeds the '}
-                <Term state="fading" onLaunch={launchTerm}>Krebs cycle</Term>
-                {', which in turn hands electrons to the '}
-                <Term state="shaky" onLaunch={launchTerm}>electron transport chain</Term>
-                {' — the stage that produces the bulk of usable energy.'}
+          )}
+
+          {note && attribution && (
+            <View style={{ marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: c.confirm }} />
+              <Text style={{ flex: 1, fontFamily: font.utility, fontSize: size.utility, color: c.confirm }}>
+                {attribution}
               </Text>
-
-              <Rule label="The three stages" />
-              <View style={{ gap: 14 }}>
-                {STAGE_ENTRIES.map((e) => (
-                  <View key={e.name} style={{ gap: 2 }}>
-                    <Text style={{ fontWeight: '600' }}>
-                      <Term state={e.state} onLaunch={launchTerm}>{e.name}</Term>
-                    </Text>
-                    <Text style={{ fontFamily: font.utility, fontSize: size.utility, letterSpacing: trackingUtility(size.utility), textTransform: 'uppercase', color: c.inkTertiary }}>
-                      {e.where}
-                    </Text>
-                    <Text style={{ fontSize: size.bodySm, color: c.inkSecondary }}>{e.why}</Text>
-                  </View>
-                ))}
-              </View>
-
-              <Rule label="Worked example" />
-              <View style={{ backgroundColor: c.paperRecessed, borderRadius: radius.lg, padding: 16, paddingHorizontal: 18, gap: 10 }}>
-                <Text style={{ fontWeight: '600', color: c.ink }}>Net ATP yield from one glucose molecule?</Text>
-                <View style={{ gap: 8 }}>
-                  <Text style={{ fontSize: size.bodySm, color: c.ink }}>
-                    {'1. '}<Term state="solid" onLaunch={launchTerm}>Glycolysis</Term>{' nets 2 ATP (substrate-level).'}
-                  </Text>
-                  <Text style={{ fontSize: size.bodySm, color: c.ink }}>
-                    {'2. '}<Term state="fading" onLaunch={launchTerm}>Krebs cycle</Term>{' nets 2 ATP directly, plus electron carriers.'}
-                  </Text>
-                  <Text style={{ fontSize: size.bodySm, color: c.ink }}>
-                    {'3. '}<Term state="shaky" onLaunch={launchTerm}>Electron transport chain</Term>{' converts those carriers into roughly 28–30 ATP.'}
-                  </Text>
-                  <Text style={{ fontSize: size.bodySm, fontWeight: '600', color: c.ink }}>4. Total: about 30–32 ATP per glucose.</Text>
-                </View>
-              </View>
-
-              <Rule label="Rendered math" />
-              <Text style={{ fontSize: size.body, color: c.ink, marginBottom: 18 }}>
-                The free energy released,{' '}
-                <Text style={{ fontFamily: font.math }}>ΔG = ΔH − TΔS</Text>
-                {', is what the ETC captures as a proton gradient.'}
-              </Text>
-
-              <Rule label="Aerobic vs anaerobic" />
-              <View style={{ marginBottom: 18 }}>
-                {TABLE_ROWS.map((row, ri) => (
-                  <View key={ri} style={{ flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: ri === 0 ? c.ink : c.paperEdge }}>
-                    {row.map((cell, ci) => (
-                      <Text
-                        key={ci}
-                        style={{
-                          flex: 1,
-                          textAlign: 'left',
-                          paddingVertical: 8,
-                          paddingHorizontal: 6,
-                          fontSize: size.bodySm,
-                          fontWeight: ri === 0 ? '600' : '400',
-                          color: ri === 0 || ci === 0 ? c.ink : c.inkSecondary,
-                        }}
-                      >
-                        {cell}
-                      </Text>
-                    ))}
-                  </View>
-                ))}
-              </View>
-
-              <View style={{ flexDirection: 'row', gap: 18, flexWrap: 'wrap', marginVertical: 4, marginBottom: 20 }}>
-                <TrustLink label="Says who?" color={c.confirm} onPress={() => setShowProvenance(true)} />
-                <TrustLink label="Read the original" color={c.confirm} onPress={() => router.push('/source')} />
-                <TrustLink label="Report" color={c.inkTertiary} onPress={() => setShowReport(true)} />
-              </View>
-              <Text style={{ fontSize: size.bodySm, color: c.inkTertiary, paddingBottom: 8 }}>6 classmates built this note</Text>
-            </>
+            </View>
           )}
         </View>
+
+        {loading ? (
+          <View style={{ paddingVertical: 64, alignItems: 'center' }}>
+            <ActivityIndicator color={c.ink} />
+          </View>
+        ) : error ? (
+          <View style={{ paddingVertical: 48, paddingHorizontal: 20, alignItems: 'center', gap: 12 }}>
+            <Text style={{ color: c.inkSecondary, fontSize: size.body, textAlign: 'center' }}>{error}</Text>
+            <Button label="Try again" variant="secondary" onPress={load} />
+          </View>
+        ) : (
+          <>
+            {(note || isSynthesizing) && (
+              <View style={{ flexDirection: 'row', gap: 10, paddingHorizontal: 20, paddingTop: 14 }}>
+                <Button label="Ask the tutor" variant="secondary" icon={<Text style={{ color: c.ink }}>◎</Text>} onPress={() => setShowTutor(true)} style={{ flex: 1 }} />
+                <Button label="Listen" variant="secondary" icon={<Text style={{ color: c.ink }}>♫</Text>} onPress={() => router.push({ pathname: '/listen', params: { topicId, courseId } })} style={{ flex: 1 }} />
+              </View>
+            )}
+
+            <View style={{ paddingHorizontal: 20 }}>
+              {isEmpty ? (
+                <View style={{ paddingVertical: 48, alignItems: 'center', gap: 12 }}>
+                  <Text style={{ fontFamily: font.display, fontSize: size.display3, color: c.ink }}>Nothing here yet</Text>
+                  <Text style={{ color: c.inkSecondary, fontSize: size.bodySm, maxWidth: 260, textAlign: 'center' }}>
+                    This topic is scaffolded but has no material. Add something to get a note started.
+                  </Text>
+                  <Button label="Add material" variant="text" onPress={() => router.push({ pathname: '/capture', params: { courseId } })} />
+                </View>
+              ) : isFailed ? (
+                <View style={{ paddingVertical: 48, alignItems: 'center', gap: 12 }}>
+                  <Text style={{ fontFamily: font.display, fontSize: size.display3, color: c.ink }}>Synthesis hit a snag</Text>
+                  <Text style={{ color: c.inkSecondary, fontSize: size.bodySm, maxWidth: 280, textAlign: 'center' }}>
+                    {knowledge?.error_message || 'The note could not be built from the current material.'}
+                  </Text>
+                  <Button
+                    label="Rebuild the note"
+                    variant="secondary"
+                    onPress={async () => {
+                      if (topicId) await regenerateKnowledge(topicId);
+                      load();
+                    }}
+                  />
+                </View>
+              ) : isSynthesizing ? (
+                <View style={{ paddingVertical: 32, gap: 14 }}>
+                  <Text style={{ fontFamily: font.utility, fontSize: size.utility, letterSpacing: trackingUtility(size.utility), textTransform: 'uppercase', color: c.stateFading }}>
+                    Synthesizing — writing itself in
+                  </Text>
+                  {[92, 78, 85, 60].map((w, i) => (
+                    <View key={i} style={{ height: 14, width: `${w}%`, backgroundColor: c.paperRecessed, borderRadius: radius.sm }} />
+                  ))}
+                </View>
+              ) : note ? (
+                <>
+                  <View style={{ marginTop: 6 }}>
+                    <NoteMarkdown value={note} index={conceptIndex} onLaunch={launchConcept} />
+                  </View>
+
+                  {knowledge && knowledge.key_points.length > 0 && (
+                    <>
+                      <Rule label="Key points" />
+                      <View style={{ gap: 8 }}>
+                        {knowledge.key_points.map((kp, i) => (
+                          <View key={i} style={{ flexDirection: 'row', gap: 8 }}>
+                            <Text style={{ color: c.inkTertiary }}>•</Text>
+                            <LitText
+                              value={kp}
+                              index={conceptIndex}
+                              onLaunch={launchConcept}
+                              style={{ flex: 1, fontSize: size.bodySm, color: c.ink, lineHeight: size.bodySm * 1.5 }}
+                            />
+                          </View>
+                        ))}
+                      </View>
+                    </>
+                  )}
+
+                  <View style={{ flexDirection: 'row', gap: 18, flexWrap: 'wrap', marginTop: space[6], marginBottom: 12 }}>
+                    <TrustLink label="Says who?" color={c.confirm} onPress={() => setShowProvenance(true)} />
+                    <TrustLink label="Read the original" color={c.confirm} onPress={() => router.push({ pathname: '/source', params: { topicId, courseId } })} />
+                    <TrustLink label="Report" color={c.inkTertiary} onPress={() => setShowReport(true)} />
+                  </View>
+                  {builtBy ? (
+                    <Text style={{ fontSize: size.bodySm, color: c.inkTertiary, paddingBottom: 8 }}>{builtBy}</Text>
+                  ) : knowledge && knowledge.source_count > 0 ? (
+                    <Text style={{ fontSize: size.bodySm, color: c.inkTertiary, paddingBottom: 8 }}>
+                      Built from {knowledge.source_count} {knowledge.source_count === 1 ? 'source' : 'sources'}
+                    </Text>
+                  ) : null}
+                </>
+              ) : null}
+            </View>
+          </>
+        )}
       </ScrollView>
 
       {sheet && (
-        <RetrievalSheet concept={sheet.concept} state={sheet.state} onClose={() => setSheet(null)} onStart={startRetrieval} />
+        <RetrievalSheet selection={sheet} onClose={() => setSheet(null)} onStart={startRetrieval} />
       )}
 
       <Sheet open={showProvenance} onClose={() => setShowProvenance(false)} title="Says who?">
-        <Text style={{ color: c.inkSecondary, fontSize: size.body }}>
-          This line draws on Ch. 6 of the assigned reading, plus lecture audio from Sept 14, corroborated across both.
+        <Text style={{ color: c.inkSecondary, fontSize: size.body, lineHeight: size.body * 1.5 }}>
+          {knowledge && knowledge.source_count > 0
+            ? `This note is synthesized from the ${knowledge.source_count} ${knowledge.source_count === 1 ? 'source' : 'sources'} uploaded to this topic — nothing invented. Open “Read the original” to see the exact material behind it.`
+            : 'This note is synthesized only from material uploaded to this topic — nothing invented.'}
         </Text>
+        {builtBy && (
+          <Text style={{ marginTop: 12, fontFamily: font.utility, fontSize: size.utility, letterSpacing: trackingUtility(size.utility), textTransform: 'uppercase', color: c.inkTertiary }}>
+            {builtBy}
+          </Text>
+        )}
+        <Button
+          label="Read the original"
+          variant="secondary"
+          onPress={() => {
+            setShowProvenance(false);
+            router.push({ pathname: '/source', params: { topicId, courseId } });
+          }}
+          style={{ width: '100%', marginTop: 16 }}
+        />
       </Sheet>
 
       {showReport && <ReportSheet onClose={() => setShowReport(false)} />}
 
       {showTutor && (
         <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: c.paper, zIndex: 45 }}>
-          <AITutorChat onBack={() => setShowTutor(false)} scope={topic.name} />
+          <AITutorChat onBack={() => setShowTutor(false)} scope={title} />
         </View>
       )}
     </SafeAreaView>
   );
 }
 
-function RetrievalSheet({ concept, state, onClose, onStart }: { concept: string; state: TermState; onClose: () => void; onStart: () => void }) {
+function RetrievalSheet({ selection, onClose, onStart }: { selection: SheetSelection; onClose: () => void; onStart: () => void }) {
   const { c, font, size } = useTheme();
+  const { concept, state } = selection;
   const label = stateLabel(state);
   const color = stateColor(c, state);
 
@@ -336,7 +388,7 @@ function RetrievalSheet({ concept, state, onClose, onStart }: { concept: string;
         </Text>
       </View>
       <Text style={{ marginBottom: 18, fontSize: size.body, color: c.ink }}>
-        {`In your own words: what does ${concept} actually do, and what does it hand off to the next stage?`}
+        {`In your own words: what does ${concept} actually do, and how does it connect to the rest of the topic?`}
       </Text>
       <Button label="Start retrieval" onPress={onStart} style={{ width: '100%' }} />
       <Button label="Back to reading" variant="text" onPress={onClose} style={{ width: '100%', marginTop: 10 }} />

@@ -12,7 +12,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, update
 from jose import jwt, JWTError
 from passlib.context import CryptContext
 import httpx
@@ -123,6 +123,11 @@ class ProfileUpdate(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
+
+
+class DeleteAccountRequest(BaseModel):
+    # Reauth for password accounts; ignored (may be omitted) for OAuth-only accounts.
+    password: Optional[str] = None
 
 
 # =============================================================================
@@ -261,6 +266,11 @@ async def get_current_user(
     if user is None:
         raise credentials_exception
 
+    # A soft-deleted / deactivated account's still-valid access token must stop working
+    # immediately (it has up to 15 min left), so gate every authenticated request here.
+    if not user.is_active:
+        raise credentials_exception
+
     return user
 
 
@@ -379,8 +389,11 @@ async def login(request: LoginRequest, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.phone == phone_value))
     user = result.scalar_one_or_none()
 
-    if not user or not user.password_hash or not verify_password(
-        request.password, user.password_hash
+    if (
+        not user
+        or not user.is_active
+        or not user.password_hash
+        or not verify_password(request.password, user.password_hash)
     ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -436,7 +449,7 @@ async def refresh_access_token(
     )
     user = result.scalar_one_or_none()
 
-    if not user:
+    if not user or not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found",
@@ -541,6 +554,55 @@ async def change_password(
     current_user.password_hash = hash_password(data.new_password)
     await db.commit()
     return {"message": "Password updated successfully."}
+
+
+@router.post("/me/delete", status_code=status.HTTP_200_OK)
+async def delete_account(
+    data: DeleteAccountRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Soft-delete the current account: anonymise PII, free the phone, deactivate,
+    revoke all sessions.
+
+    Contributions (uploaded resources) are intentionally KEPT so shared course notes
+    don't break for classmates — they simply show as "Former member". Password accounts
+    must reauth with their current password; OAuth-only accounts (no password) skip it.
+    """
+    if current_user.password_hash:
+        if not data.password or not pwd_context.verify(
+            data.password, current_user.password_hash
+        ):
+            raise HTTPException(status_code=400, detail="Password is incorrect.")
+
+    # Wipe PII / auth. Phone is NOT NULL + unique, so it takes a unique sentinel — which
+    # also frees the real number for a fresh sign-up later.
+    current_user.full_name = "Former member"
+    current_user.email = None
+    current_user.phone = f"deleted:{secrets.token_hex(10)}"
+    current_user.phone_hash = None
+    current_user.password_hash = None
+    current_user.avatar_url = None
+    current_user.google_id = None
+    current_user.university = None
+    current_user.program = None
+    current_user.entry_year = None
+    current_user.study_personality = None
+    current_user.preferences = None
+    current_user.personality_tags = None
+    current_user.password_reset_token = None
+    current_user.password_reset_expires = None
+    current_user.is_active = False
+
+    # Kill every session — the ≤15-min access token is separately blocked by the
+    # is_active gate in get_current_user.
+    await db.execute(
+        update(RefreshToken)
+        .where(RefreshToken.user_id == current_user.id)
+        .values(is_revoked=True)
+    )
+    await db.commit()
+    return {"message": "Your account has been deleted."}
 
 
 @router.post("/forgot-password", status_code=status.HTTP_200_OK)

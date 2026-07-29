@@ -29,6 +29,7 @@ from sqlalchemy import false, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Course, CourseEnrollment, User
+from app.services.membership import active_member_counts, active_user_ids
 
 # Loose on purpose — see module docstring. This is the knob to tune from data.
 PROXIMITY_MATCH_THRESHOLD = 0.3
@@ -114,7 +115,7 @@ async def find_course_candidates(
 
     candidate_ids = [r.id for r in rows]
 
-    member_counts = await _member_counts(db, candidate_ids)
+    member_counts = await active_member_counts(db, candidate_ids)
     program_overlap, entry_year_overlap = await _people_overlap(db, creator, candidate_ids)
     classmate_overlap = await _classmate_overlap(db, creator, candidate_ids)
 
@@ -146,17 +147,6 @@ async def find_course_candidates(
     return candidates
 
 
-async def _member_counts(db: AsyncSession, candidate_ids: list) -> dict:
-    rows = (
-        await db.execute(
-            select(CourseEnrollment.course_id, func.count())
-            .where(CourseEnrollment.course_id.in_(candidate_ids))
-            .group_by(CourseEnrollment.course_id)
-        )
-    ).all()
-    return {course_id: count for course_id, count in rows}
-
-
 async def _people_overlap(
     db: AsyncSession, creator: User, candidate_ids: list
 ) -> tuple[dict, dict]:
@@ -186,6 +176,7 @@ async def _people_overlap(
             .join(User, User.id == CourseEnrollment.user_id)
             .where(CourseEnrollment.course_id.in_(candidate_ids))
             .where(CourseEnrollment.user_id != creator.id)
+            .where(User.is_active)  # soft-deleted members don't count toward signals
             .group_by(CourseEnrollment.course_id)
         )
     ).all()
@@ -211,6 +202,7 @@ async def _classmate_overlap(
         select(CourseEnrollment.user_id)
         .where(CourseEnrollment.course_id.in_(my_courses))
         .where(CourseEnrollment.user_id != creator.id)
+        .where(CourseEnrollment.user_id.in_(active_user_ids()))  # drop soft-deleted
         .distinct()
     )
 

@@ -117,3 +117,83 @@ async def test_oauth_register_rejects_bad_token(client):
 async def test_protected_route_requires_auth(client):
     resp = await client.get("/api/courses")
     assert resp.status_code in (401, 403)
+
+
+# ── Account deletion (soft-delete + anonymise) ───────────────────────────────────
+
+
+async def test_delete_account_requires_correct_password(client, register_user):
+    """A password account must reauth; a wrong password leaves it untouched."""
+    user = await register_user(password="password123")
+    resp = await client.post(
+        "/api/auth/me/delete", json={"password": "wrong"}, headers=user["headers"]
+    )
+    assert resp.status_code == 400, resp.text
+    # Still usable — the account was not deleted.
+    me = await client.get("/api/auth/me", headers=user["headers"])
+    assert me.status_code == 200
+
+
+async def test_delete_account_locks_out_and_revokes(client, register_user):
+    """After delete: the live access token is rejected and the refresh token is dead."""
+    user = await register_user(password="password123")
+
+    resp = await client.post(
+        "/api/auth/me/delete", json={"password": "password123"}, headers=user["headers"]
+    )
+    assert resp.status_code == 200, resp.text
+
+    # The still-unexpired access token must now be rejected (is_active gate).
+    me = await client.get("/api/auth/me", headers=user["headers"])
+    assert me.status_code == 401
+
+    # The refresh token must no longer mint new access tokens.
+    refreshed = await client.post(
+        "/api/auth/refresh", json={"refresh_token": user["tokens"]["refresh_token"]}
+    )
+    assert refreshed.status_code == 401
+
+
+async def test_delete_account_frees_phone_for_reregistration(client, register_user):
+    """The deleted account's phone is released, so the number can sign up fresh."""
+    user = await register_user(phone=unique_phone(), password="password123")
+    resp = await client.post(
+        "/api/auth/me/delete", json={"password": "password123"}, headers=user["headers"]
+    )
+    assert resp.status_code == 200, resp.text
+
+    # Old credentials no longer log in.
+    login = await client.post(
+        "/api/auth/login", json={"phone": user["phone"], "password": "password123"}
+    )
+    assert login.status_code == 401
+
+    # The same number can register a brand-new account.
+    again = await client.post(
+        "/api/auth/register",
+        json={"phone": user["phone"], "password": "newpass123", "full_name": "Fresh Start"},
+    )
+    assert again.status_code == 201, again.text
+
+
+async def test_delete_account_anonymises_pii(client, register_user, db_session):
+    """PII is wiped and the account is deactivated (contributions are kept elsewhere)."""
+    import uuid as _uuid
+    from sqlalchemy import select
+    from app.models import User
+
+    user = await register_user(password="password123", email="ada@test.dev")
+    resp = await client.post(
+        "/api/auth/me/delete", json={"password": "password123"}, headers=user["headers"]
+    )
+    assert resp.status_code == 200, resp.text
+
+    row = await db_session.scalar(select(User).where(User.id == _uuid.UUID(user["id"])))
+    assert row is not None
+    assert row.is_active is False
+    assert row.full_name == "Former member"
+    assert row.email is None
+    assert row.password_hash is None
+    assert row.phone_hash is None
+    assert row.phone != user["phone"]
+    assert row.phone.startswith("deleted:")

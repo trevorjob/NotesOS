@@ -23,6 +23,7 @@ from app.services.cache import (
     topics_list_key,
 )
 from app.services.proximity import find_course_candidates
+from app.services.membership import active_member_counts
 from app.config import settings
 
 router = APIRouter()
@@ -131,13 +132,10 @@ async def list_courses(
         await cache.set(cache_key, payload, settings.CACHE_TTL_COURSES)
         return payload
 
-    # Batch member counts
-    counts_result = await db.execute(
-        select(CourseEnrollment.course_id, func.count().label("cnt"))
-        .where(CourseEnrollment.course_id.in_(course_ids))
-        .group_by(CourseEnrollment.course_id)
-    )
-    member_counts = {str(row.course_id): row.cnt for row in counts_result}
+    # Batch member counts — active members only (soft-deleted users are invisible).
+    member_counts = {
+        str(cid): cnt for cid, cnt in (await active_member_counts(db, course_ids)).items()
+    }
 
     # Batch completion percentages — average mastery_level per course for this user
     progress_result = await db.execute(
@@ -338,7 +336,9 @@ async def join_course(
     member_count = await db.scalar(
         select(func.count())
         .select_from(CourseEnrollment)
+        .join(User, User.id == CourseEnrollment.user_id)
         .where(CourseEnrollment.course_id == course.id)
+        .where(User.is_active)
     )
 
     # Invalidate caches

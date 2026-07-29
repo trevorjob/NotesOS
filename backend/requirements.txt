@@ -36,6 +36,7 @@ voyageai>=0.2.0
 # Utilities
 python-magic>=0.4.27
 beautifulsoup4>=4.12.0
+pymupdf>=1.24.0
 pdf2image>=1.16.3
 pytesseract>=0.3.10
 mammoth>=1.6.0

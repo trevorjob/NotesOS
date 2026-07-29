@@ -6,6 +6,7 @@ import { isAxiosError } from 'axios';
 import { useTheme } from '@/theme/ThemeProvider';
 import { useQuickSwitcher } from '@/components/nav/QuickSwitcherContext';
 import { IconButton } from '@/components/ui/IconButton';
+import { Button } from '@/components/ui/Button';
 import { CourseDetail, CourseTopic, fetchCourseTopics } from '@/lib/topics';
 
 function readError(err: unknown): string {
@@ -109,9 +110,17 @@ export default function TopicsScreen() {
             )}
 
             {!error && topics.length === 0 && (
-              <Text style={{ color: c.inkTertiary, fontSize: size.body, paddingVertical: 24 }}>
-                No topics yet — add material below and they’ll organise themselves in.
-              </Text>
+              <View style={{ paddingVertical: 24, gap: 16 }}>
+                <Text style={{ color: c.inkTertiary, fontSize: size.body }}>
+                  No topics yet. Start from your syllabus and everything you add later lands in the
+                  right place — or just add material below and it’ll organise itself in.
+                </Text>
+                <Button
+                  label="Set up from your syllabus"
+                  onPress={() => router.push({ pathname: '/capture', params: { courseId, mode: 'outline' } })}
+                  disabled={!courseId}
+                />
+              </View>
             )}
 
             {topics.length > 0 && sectionLabel('Topics')}

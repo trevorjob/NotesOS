@@ -6,28 +6,28 @@ import { isAxiosError } from 'axios';
 import { useTheme } from '@/theme/ThemeProvider';
 import { useQuickSwitcher } from '@/components/nav/QuickSwitcherContext';
 import { IconButton } from '@/components/ui/IconButton';
-import { MyCourse, fetchMyCourses } from '@/lib/courses';
+import { MyCourse, MyCourseTopic, fetchMyCourses } from '@/lib/courses';
 
 interface TermGroup {
   term: string;
   courses: MyCourse[];
 }
 
-// Courses with no term filed go into a single catch-all bucket.
 const UNFILED_LABEL = 'Your courses';
 
 function readError(err: unknown): string {
-  if (isAxiosError(err) && typeof err.response?.data?.detail === 'string') {
-    return err.response.data.detail;
-  }
+  if (isAxiosError(err) && typeof err.response?.data?.detail === 'string') return err.response.data.detail;
   return 'Couldn’t load your courses. Pull to try again.';
 }
 
-// A short "what's happening here" line for the course row, strongest signal first.
 function courseActivity(course: MyCourse): string {
   if (course.last_studied) return `Last studied ${course.last_studied.topic_name}`;
   if (course.member_count > 1) return `${course.member_count} classmates`;
   return 'Just you so far';
+}
+
+function topicSubtitle(topic: MyCourseTopic): string {
+  return topic.week_number != null ? `Week ${topic.week_number}` : 'Topic';
 }
 
 export default function CoursesScreen() {
@@ -35,10 +35,10 @@ export default function CoursesScreen() {
   const { openSwitcher } = useQuickSwitcher();
 
   const [courses, setCourses] = useState<MyCourse[]>([]);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Refetch on focus so returning from the create/join modals shows fresh data.
   useFocusEffect(
     useCallback(() => {
       let alive = true;
@@ -60,7 +60,6 @@ export default function CoursesScreen() {
     }, [])
   );
 
-  // Group by term_label, preserving first-seen order; null labels collapse into one bucket.
   const groups = useMemo<TermGroup[]>(() => {
     const byTerm = new Map<string, MyCourse[]>();
     for (const course of courses) {
@@ -70,18 +69,38 @@ export default function CoursesScreen() {
     return [...byTerm.entries()].map(([term, list]) => ({ term, courses: list }));
   }, [courses]);
 
+  const toggle = (courseId: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(courseId)) next.delete(courseId);
+      else next.add(courseId);
+      return next;
+    });
+  };
+
+  const openNote = (topicId: string, courseId: string) =>
+    router.push({ pathname: '/note', params: { topicId, courseId } });
+
   const footerLink = (label: string, onPress: () => void) => (
     <Pressable onPress={onPress} style={{ minHeight: 44, justifyContent: 'center' }}>
       <Text style={{ color: c.confirm, textDecorationLine: 'underline', fontSize: size.bodySm }}>{label}</Text>
     </Pressable>
   );
 
+  const utilityText = {
+    fontFamily: font.utility,
+    fontSize: size.caption,
+    letterSpacing: trackingUtility(size.caption),
+    textTransform: 'uppercase' as const,
+    color: c.inkTertiary,
+  };
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: c.paper }}>
       <View style={{ flex: 1 }}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: space.gutterPage, paddingTop: 18, paddingBottom: 10 }}>
           <Text style={{ fontFamily: font.display, fontSize: size.display2, color: c.ink }}>Your courses</Text>
-          <IconButton icon={<Text style={{ color: c.ink, fontSize: 16 }}>⌕</Text>} label="Switch" onPress={openSwitcher} />
+          <IconButton icon={<Text style={{ color: c.ink, fontSize: 16 }}>⌕</Text>} label="Jump to a course, topic, or note" onPress={openSwitcher} />
         </View>
 
         {loading ? (
@@ -91,9 +110,7 @@ export default function CoursesScreen() {
           </View>
         ) : (
           <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: space.gutterPage, paddingBottom: 20 }}>
-            {error && (
-              <Text style={{ color: c.stateShaky, fontSize: size.bodySm, marginTop: 14 }}>{error}</Text>
-            )}
+            {error && <Text style={{ color: c.stateShaky, fontSize: size.bodySm, marginTop: 14 }}>{error}</Text>}
 
             {!error && courses.length === 0 && (
               <Text style={{ color: c.inkTertiary, fontSize: size.body, paddingVertical: 24 }}>
@@ -103,32 +120,60 @@ export default function CoursesScreen() {
 
             {groups.map((group) => (
               <View key={group.term} style={{ marginBottom: 20 }}>
-                <Text
-                  style={{
-                    fontFamily: font.utility,
-                    fontSize: size.caption,
-                    letterSpacing: trackingUtility(size.caption),
-                    textTransform: 'uppercase',
-                    color: c.inkTertiary,
-                    marginTop: 14,
-                    marginBottom: 4,
-                  }}
-                >
-                  {group.term}
-                </Text>
-                {group.courses.map((course) => (
-                  <Pressable
-                    key={course.id}
-                    onPress={() => router.push({ pathname: '/topics', params: { courseId: course.id } })}
-                    style={{ paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: c.paperEdge, minHeight: 44, gap: 2 }}
-                  >
-                    <Text style={{ fontWeight: '600', fontSize: 17, color: c.ink }}>{course.name}</Text>
-                    <View style={{ flexDirection: 'row', gap: 10 }}>
-                      <Text style={{ fontSize: size.caption, color: c.inkTertiary }}>{course.code}</Text>
-                      <Text style={{ fontSize: size.caption, color: c.inkSecondary }}>{courseActivity(course)}</Text>
+                <Text style={[utilityText, { marginTop: 14, marginBottom: 4 }]}>{group.term}</Text>
+
+                {group.courses.map((course) => {
+                  const isOpen = expanded.has(course.id);
+                  return (
+                    <View key={course.id}>
+                      <Pressable
+                        onPress={() => toggle(course.id)}
+                        style={{ paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: c.paperEdge, minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 12 }}
+                      >
+                        <Text style={{ color: c.inkTertiary, fontSize: 14, width: 14 }}>{isOpen ? '▾' : '▸'}</Text>
+                        <View style={{ flex: 1, gap: 2 }}>
+                          <Text style={{ fontWeight: '600', fontSize: 17, color: c.ink }}>{course.name}</Text>
+                          <View style={{ flexDirection: 'row', gap: 10 }}>
+                            <Text style={{ fontSize: size.caption, color: c.inkTertiary }}>{course.code}</Text>
+                            <Text style={{ fontSize: size.caption, color: c.inkSecondary }}>{courseActivity(course)}</Text>
+                          </View>
+                        </View>
+                      </Pressable>
+
+                      {isOpen && (
+                        <View style={{ paddingLeft: 26, paddingBottom: 6 }}>
+                          {course.topics.length === 0 ? (
+                            <Pressable
+                              onPress={() => router.push({ pathname: '/capture', params: { courseId: course.id, mode: 'outline' } })}
+                              style={{ paddingVertical: 12, minHeight: 44, justifyContent: 'center' }}
+                            >
+                              <Text style={{ color: c.confirm, fontSize: size.bodySm }}>
+                                No topics yet — set up from your syllabus
+                              </Text>
+                            </Pressable>
+                          ) : (
+                            course.topics.map((topic) => (
+                              <Pressable
+                                key={topic.id}
+                                onPress={() => openNote(topic.id, course.id)}
+                                style={{ paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: c.paperEdge, minHeight: 44, gap: 2 }}
+                              >
+                                <Text style={{ fontSize: 16, color: c.ink }}>{topic.title}</Text>
+                                <Text style={{ fontSize: size.caption, color: c.inkTertiary }}>{topicSubtitle(topic)}</Text>
+                              </Pressable>
+                            ))
+                          )}
+                          <Pressable
+                            onPress={() => router.push({ pathname: '/capture', params: { courseId: course.id } })}
+                            style={{ paddingVertical: 12, minHeight: 44, justifyContent: 'center' }}
+                          >
+                            <Text style={{ color: c.confirm, textDecorationLine: 'underline', fontSize: size.bodySm }}>+ Add material</Text>
+                          </Pressable>
+                        </View>
+                      )}
                     </View>
-                  </Pressable>
-                ))}
+                  );
+                })}
               </View>
             ))}
           </ScrollView>

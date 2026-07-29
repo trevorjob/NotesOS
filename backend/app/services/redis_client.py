@@ -23,7 +23,22 @@ class RedisClient:
         """Get or create Redis client (singleton pattern)."""
         if self._client is None:
             self._client = await redis.from_url(
-                self.redis_url, encoding="utf-8", decode_responses=True
+                self.redis_url,
+                encoding="utf-8",
+                decode_responses=True,
+                # socket_timeout MUST stay comfortably larger than any blocking
+                # command's own timeout (workers block on BRPOPLPUSH for
+                # `poll_timeout`, default 5s). redis-py caps the socket read at
+                # max(socket_timeout, blocking_timeout); with no socket_timeout the
+                # read window equals the blocking timeout exactly, so when several
+                # workers' blocks all expire at the same instant, event-loop jitter
+                # delays reading the server's on-time nil reply past the deadline
+                # and every one raises a spurious "Timeout reading from" error. The
+                # buffer here gives the reply room to land. Keep it >> poll_timeout.
+                socket_timeout=30,
+                socket_keepalive=True,
+                socket_connect_timeout=5,
+                health_check_interval=30,
             )
         return self._client
 

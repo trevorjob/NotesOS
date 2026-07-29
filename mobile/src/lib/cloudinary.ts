@@ -2,6 +2,14 @@
 // (frontend/src/lib/cloudinaryUpload.ts). Capture's endpoint only accepts URLs of files
 // already on Cloudinary, so the device uploads first, then POSTs the URLs. The cloud name
 // and unsigned preset are public by design (safe to ship in EXPO_PUBLIC_* vars).
+//
+// SDK 57 note: the global `fetch`/`FormData` are Expo's "winter" implementations, whose
+// multipart encoder only accepts string or Blob/File parts. The old React-Native
+// `{ uri, name, type }` file-object convention is NOT supported and throws "Unsupported
+// FormData implementation". We therefore wrap the local file URI in an expo-file-system
+// `File` (implements the Blob interface) and append that instead.
+
+import { File } from 'expo-file-system';
 
 const CLOUD_NAME = process.env.EXPO_PUBLIC_CLOUDINARY_CLOUD_NAME ?? '';
 const UPLOAD_PRESET = process.env.EXPO_PUBLIC_CLOUDINARY_UPLOAD_PRESET ?? '';
@@ -27,8 +35,9 @@ export function isCloudinaryConfigured(): boolean {
 
 async function uploadSingleFile(file: PickedFile, folder: string, index: number): Promise<CloudinaryUploadResult> {
   const form = new FormData();
-  // RN multipart: the file part is an object literal, not a Blob.
-  form.append('file', { uri: file.uri, name: file.name, type: file.mimeType } as unknown as Blob);
+  // SDK 57: append a File (Blob-compatible), not the legacy { uri, name, type } object —
+  // Expo's winter FormData encoder rejects the latter. File.name carries the filename part.
+  form.append('file', new File(file.uri));
   form.append('upload_preset', UPLOAD_PRESET);
   form.append('folder', folder);
 

@@ -6,9 +6,15 @@ import { isAxiosError } from 'axios';
 import { useTheme } from '@/theme/ThemeProvider';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { PhoneInput } from '@/components/ui/PhoneInput';
 import { api } from '@/lib/api';
 import { setTokens } from '@/lib/auth';
-import { canonicalPhone } from '@/lib/phone';
+import { composeE164, deviceRegion } from '@/lib/phone';
+import { Country, countryByCode } from '@/lib/countries';
+
+// Device region only *pre-selects* the country — the user can change it. The
+// user's own number is never region-guessed (that's what mangled +234 → +44).
+const DEFAULT_COUNTRY = countryByCode(deviceRegion()) ?? countryByCode('NG')!;
 
 type Mode = 'login' | 'register';
 type Stage = 'form' | 'success';
@@ -17,7 +23,8 @@ export default function LoginScreen() {
   const { c, font, size, space } = useTheme();
   const [mode, setMode] = useState<Mode>('login');
   const [stage, setStage] = useState<Stage>('form');
-  const [phone, setPhone] = useState('');
+  const [country, setCountry] = useState<Country>(DEFAULT_COUNTRY);
+  const [nationalNumber, setNationalNumber] = useState('');
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -28,10 +35,10 @@ export default function LoginScreen() {
     setSubmitting(true);
     try {
       const path = mode === 'login' ? '/api/auth/login' : '/api/auth/register';
-      // Canonicalise to E.164 (device-region aware) so the stored identity — and
-      // therefore the contact-match hash — is region-independent and consistent
-      // across login/register, whatever format the user typed. See lib/phone.ts.
-      const phoneValue = canonicalPhone(phone) || phone.trim();
+      // Compose E.164 from the explicitly chosen country + national number, so the
+      // stored identity — and the contact-match hash — is exact and consistent
+      // across login/register, with no device-region guessing. See lib/phone.ts.
+      const phoneValue = composeE164(country.code, nationalNumber);
       const payload =
         mode === 'login'
           ? { phone: phoneValue, password }
@@ -71,7 +78,13 @@ export default function LoginScreen() {
               <Input label="Name" value={name} onChangeText={setName} placeholder="Ada Obi" />
             )}
 
-            <Input label="Phone number" value={phone} onChangeText={setPhone} placeholder="+234 800 000 0000" keyboardType="phone-pad" />
+            <PhoneInput
+              label="Phone number"
+              country={country}
+              nationalNumber={nationalNumber}
+              onChangeCountry={setCountry}
+              onChangeNationalNumber={setNationalNumber}
+            />
             <Input label="Password" value={password} onChangeText={setPassword} placeholder="••••••••" secureTextEntry />
 
             {error && (
@@ -81,7 +94,7 @@ export default function LoginScreen() {
             <Button
               label={submitting ? 'Please wait…' : 'Continue'}
               onPress={submit}
-              disabled={submitting || !phone || !password || (mode === 'register' && !name)}
+              disabled={submitting || !nationalNumber || !password || (mode === 'register' && !name)}
               style={{ marginTop: 6 }}
             />
 

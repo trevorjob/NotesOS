@@ -1,4 +1,4 @@
-import * as Contacts from 'expo-contacts';
+import { Contact, ContactField, getPermissionsAsync, requestPermissionsAsync } from 'expo-contacts';
 import { api } from '@/lib/api';
 import { canonicalPhone, phoneHash } from '@/lib/phone';
 
@@ -30,34 +30,38 @@ export interface MatchedContact {
 
 export type ContactsPermission = 'granted' | 'denied' | 'undetermined';
 
+/** Map a permission response to the granted/denied/undetermined state the UI
+ *  branches on (`granted` runs the match, `undetermined` can re-ask, `denied`
+ *  is terminal until the user changes it in Settings). */
+function toPermission(res: { granted: boolean; canAskAgain: boolean }): ContactsPermission {
+  if (res.granted) return 'granted';
+  return res.canAskAgain ? 'undetermined' : 'denied';
+}
+
 /** Current contacts-permission state without prompting. */
 export async function getContactsPermission(): Promise<ContactsPermission> {
-  const { status } = await Contacts.getPermissionsAsync();
-  return status as ContactsPermission;
+  return toPermission(await getPermissionsAsync());
 }
 
 /** Prompt for contacts permission (no-op re-grant if already granted). */
 export async function requestContactsPermission(): Promise<ContactsPermission> {
-  const current = await Contacts.getPermissionsAsync();
-  if (current.status === Contacts.PermissionStatus.GRANTED) return 'granted';
-  const { status } = await Contacts.requestPermissionsAsync();
-  return status as ContactsPermission;
+  const current = await getPermissionsAsync();
+  if (current.granted) return 'granted';
+  return toPermission(await requestPermissionsAsync());
 }
 
 /** Read the address book, canonicalise every number, and return the deduped set
  *  of SHA-256 hashes — the only thing that leaves the device. Assumes permission
- *  is already granted. */
+ *  is already granted. Uses the SDK 57 class-based API (`Contact.getAllDetails`). */
 export async function collectContactHashes(): Promise<string[]> {
-  const { data } = await Contacts.getContactsAsync({
-    fields: [Contacts.Fields.PhoneNumbers],
-  });
+  const contacts = await Contact.getAllDetails([ContactField.PHONES] as const);
 
   // Dedupe on the canonical form first (a person is often saved under several
   // formats of the same number), so we only pay the async hash once each.
   const canonicals = new Set<string>();
-  for (const contact of data) {
-    for (const phone of contact.phoneNumbers ?? []) {
-      const raw = phone.number ?? phone.digits;
+  for (const contact of contacts) {
+    for (const phone of contact.phones ?? []) {
+      const raw = phone.number;
       if (!raw) continue;
       const canonical = canonicalPhone(raw);
       if (canonical) canonicals.add(canonical);

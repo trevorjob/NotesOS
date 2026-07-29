@@ -4,20 +4,30 @@ Consolidated topic knowledge and generated audio lessons.
 """
 
 import uuid
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import get_current_user
 from app.database import get_db
 from app.models.course import CourseEnrollment, Topic
 from app.models.knowledge import AudioLesson, KnowledgeStatus, TopicKnowledge
+from app.models.resource import Resource
+from app.models.retrieval import Concept, ConceptState
 from app.models.user import User
-from app.models.consume import ConsumeKind
+from app.models.consume import ConsumeEvent, ConsumeKind
 from app.services.redis_client import redis_client
 from app.services.retrieval.recognition import record_consume
+from app.services.retrieval.scheduler import (
+    MASTERY_FADING,
+    MASTERY_NEW,
+    MASTERY_SHAKY,
+    MASTERY_SOLID,
+    derive_mastery,
+)
 from app.services.synthesis_debounce import schedule_synthesis
 
 router = APIRouter()
@@ -128,6 +138,146 @@ async def get_topic_knowledge(
         db, actor_id=current_user.id, topic_id=topic.id, kind=ConsumeKind.NOTE_VIEW
     )
     return response
+
+
+@router.get("/topics/{topic_id}/concept-states")
+async def get_topic_concept_states(
+    topic_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Per-concept mastery for the caller over a topic — the note's heat-map data.
+    Concepts come from synthesis (shared); the mastery state is the caller's own
+    FSRS ConceptState, so this is per-user and never cached (unlike the note itself).
+    """
+    topic = await _get_topic_or_404(topic_id, db)
+    await _assert_enrolled(db, current_user.id, topic.course_id)
+
+    result = await db.execute(
+        select(Concept, ConceptState)
+        .outerjoin(
+            ConceptState,
+            and_(
+                ConceptState.concept_id == Concept.id,
+                ConceptState.user_id == current_user.id,
+            ),
+        )
+        .where(Concept.topic_id == topic.id)
+        .order_by(Concept.order_index)
+    )
+
+    now = datetime.utcnow()
+    concepts: List[Dict[str, Any]] = []
+    summary = {MASTERY_NEW: 0, MASTERY_SOLID: 0, MASTERY_FADING: 0, MASTERY_SHAKY: 0}
+    for concept, state in result.all():
+        if state is None:
+            mastery, reps, lapses, due = MASTERY_NEW, 0, 0, None
+        else:
+            mastery = derive_mastery(
+                reps=state.reps,
+                last_grade=state.last_grade,
+                fsrs_state=state.fsrs_state,
+                due=state.due,
+                now=now,
+            )
+            reps, lapses, due = state.reps, state.lapses, state.due
+        summary[mastery] += 1
+        concepts.append(
+            {
+                "concept_id": str(concept.id),
+                "term": concept.text,
+                "definition": concept.definition,
+                "state": mastery,
+                "due": due.isoformat() if due else None,
+                "reps": reps,
+                "lapses": lapses,
+            }
+        )
+
+    return {"topic_id": str(topic.id), "concepts": concepts, "summary": summary}
+
+
+# A note read records a NOTE_VIEW on every knowledge GET, so "new since you last read" must
+# ignore the current open — exclude views inside this grace window as "this session".
+_READ_GRACE_SECONDS = 15
+_RECENT_LIMIT = 3
+
+
+@router.get("/topics/{topic_id}/contributions")
+async def get_topic_contributions(
+    topic_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    The note's attribution layer (§4/§10): who built it, what was added recently, and how
+    much is new since the caller last read it. Aggregated from the non-quarantined resources
+    behind the note (quarantined ones aren't in the shared note). Per-user, so uncached.
+    """
+    topic = await _get_topic_or_404(topic_id, db)
+    await _assert_enrolled(db, current_user.id, topic.course_id)
+
+    result = await db.execute(
+        select(Resource, User.full_name)
+        .join(User, User.id == Resource.uploaded_by)
+        .where(Resource.topic_id == topic.id, Resource.quarantined.is_(False))
+        .order_by(Resource.created_at.desc())
+    )
+    rows = result.all()
+
+    contributors: List[Dict[str, str]] = []
+    recent: List[Dict[str, Any]] = []
+    seen: set = set()
+    for resource, uploader_name in rows:
+        if resource.uploaded_by not in seen:
+            seen.add(resource.uploaded_by)
+            contributors.append({"id": str(resource.uploaded_by), "name": uploader_name})
+        if len(recent) < _RECENT_LIMIT:
+            recent.append(
+                {
+                    "resource_id": str(resource.id),
+                    "title": resource.title or resource.file_name or "Untitled",
+                    "uploader_name": uploader_name,
+                    "created_at": resource.created_at.isoformat(),
+                }
+            )
+
+    # "new since you last read": resources added after the caller's previous NOTE_VIEW
+    # (the grace window drops this session's own view). None if they've never read it before.
+    grace_cutoff = datetime.utcnow() - timedelta(seconds=_READ_GRACE_SECONDS)
+    last_read = (
+        await db.execute(
+            select(func.max(ConsumeEvent.created_at)).where(
+                ConsumeEvent.actor_id == current_user.id,
+                ConsumeEvent.topic_id == topic.id,
+                ConsumeEvent.kind == ConsumeKind.NOTE_VIEW,
+                ConsumeEvent.created_at < grace_cutoff,
+            )
+        )
+    ).scalar_one_or_none()
+
+    new_since_last_read: Optional[int] = None
+    if last_read is not None:
+        new_since_last_read = (
+            await db.execute(
+                select(func.count())
+                .select_from(Resource)
+                .where(
+                    Resource.topic_id == topic.id,
+                    Resource.quarantined.is_(False),
+                    Resource.created_at > last_read,
+                )
+            )
+        ).scalar_one()
+
+    return {
+        "topic_id": str(topic.id),
+        "contributors": contributors,
+        "contributor_count": len(contributors),
+        "recent": recent,
+        "new_since_last_read": new_since_last_read,
+    }
 
 
 @router.post("/topics/{topic_id}/knowledge/regenerate", status_code=status.HTTP_202_ACCEPTED)

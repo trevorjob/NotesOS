@@ -121,6 +121,10 @@ async def process_transcription_job(job_data: dict) -> None:
                     is_handwritten=False,
                 )
                 resource.content = processing_result["text"]
+                confidence = processing_result.get("confidence")
+                if confidence is not None:
+                    resource.ocr_confidence = confidence
+                    resource.ocr_provider = "pymupdf"
 
             await db.commit()
             print(

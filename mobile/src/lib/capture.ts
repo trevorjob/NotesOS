@@ -25,6 +25,35 @@ export async function startCapture(
   return data;
 }
 
+// ── Outline scaffold (the syllabus → topic-skeleton surface) ─────────────────────
+// Distinct from the dump: POST /api/courses/{id}/outline is synchronous (no worker /
+// WebSocket). Paste the syllabus text and/or snap photos of it (Cloudinary URLs, vision-
+// transcribed server-side); the LLM parses it into empty labeled topics, deduped by title.
+
+export interface OutlineTopic {
+  id: string;
+  title: string;
+  description: string | null;
+  week_number: number | null;
+  order_index: number;
+}
+
+export interface OutlineResult {
+  created: OutlineTopic[];
+  skipped: string[]; // titles that already existed (case-insensitive) — no dupes
+}
+
+export async function scaffoldOutline(
+  courseId: string,
+  params: { text?: string; imageUrls?: string[] }
+): Promise<OutlineResult> {
+  const { data } = await api.post(`/api/courses/${courseId}/outline`, {
+    text: params.text,
+    image_urls: params.imageUrls ?? [],
+  });
+  return data;
+}
+
 // ── Capture WebSocket events (must match app/workers/capture_worker.py) ──────────
 
 export interface CaptureFailedItem {

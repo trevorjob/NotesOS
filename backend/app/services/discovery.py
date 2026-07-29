@@ -23,6 +23,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Course, CourseEnrollment, Resource, Topic, User
+from app.services.membership import active_member_counts, active_user_ids
 
 # A course surfaces in discovery once it clears *either* bar: someone uploaded to
 # it, or a second person joined. Both are "a human did something here" signals.
@@ -51,6 +52,7 @@ async def get_classmates(db: AsyncSession, user_id) -> list[dict]:
             .join(CourseEnrollment, CourseEnrollment.user_id == User.id)
             .where(CourseEnrollment.course_id.in_(my_courses))
             .where(User.id != user_id)
+            .where(User.is_active)  # soft-deleted classmates are invisible to peers
             .group_by(User.id)
             .order_by(shared.desc(), User.full_name)
         )
@@ -141,7 +143,7 @@ async def match_contacts(db: AsyncSession, user, phone_hashes: list[str]) -> lis
     candidate_ids = list({course_id for _, course_id in enroll_rows})
     joinable_by_course: dict = {}
     if candidate_ids:
-        member_by_course = await _member_counts(db, candidate_ids)
+        member_by_course = await active_member_counts(db, candidate_ids)
         resource_by_course = await _resource_counts(db, candidate_ids)
         # Keep it scoped to the caller's school (when they have one) and active +
         # past the activity gate — a contact's private, empty course stays hidden.
@@ -203,7 +205,7 @@ async def get_cohort_courses(db: AsyncSession, user) -> list[dict]:
     if user.school_id is None:
         return []
 
-    peer_conds = [User.school_id == user.school_id, User.id != user.id]
+    peer_conds = [User.school_id == user.school_id, User.id != user.id, User.is_active]
     if user.program:
         peer_conds.append(User.program == user.program)
     if user.entry_year is not None:
@@ -231,7 +233,7 @@ async def get_cohort_courses(db: AsyncSession, user) -> list[dict]:
     candidate_ids = [r.course_id for r in cand_rows]
     peer_by_course = {r.course_id: r.peers for r in cand_rows}
 
-    member_by_course = await _member_counts(db, candidate_ids)
+    member_by_course = await active_member_counts(db, candidate_ids)
     resource_by_course = await _resource_counts(db, candidate_ids)
 
     # Belt-and-suspenders: a cohort peer could (rarely) be in an off-school course;
@@ -277,17 +279,6 @@ async def get_cohort_courses(db: AsyncSession, user) -> list[dict]:
     return discovered
 
 
-async def _member_counts(db: AsyncSession, course_ids: list) -> dict:
-    rows = (
-        await db.execute(
-            select(CourseEnrollment.course_id, func.count())
-            .where(CourseEnrollment.course_id.in_(course_ids))
-            .group_by(CourseEnrollment.course_id)
-        )
-    ).all()
-    return {course_id: count for course_id, count in rows}
-
-
 async def _resource_counts(db: AsyncSession, course_ids: list) -> dict:
     rows = (
         await db.execute(
@@ -313,6 +304,7 @@ async def get_classmate_courses(db: AsyncSession, user_id) -> list[dict]:
         select(CourseEnrollment.user_id)
         .where(CourseEnrollment.course_id.in_(my_courses))
         .where(CourseEnrollment.user_id != user_id)
+        .where(CourseEnrollment.user_id.in_(active_user_ids()))  # drop soft-deleted
         .distinct()
     )
 
@@ -333,16 +325,7 @@ async def get_classmate_courses(db: AsyncSession, user_id) -> list[dict]:
     candidate_ids = [r.course_id for r in cand_rows]
     classmate_by_course = {r.course_id: r.classmates for r in cand_rows}
 
-    member_by_course = {
-        course_id: count
-        for course_id, count in (
-            await db.execute(
-                select(CourseEnrollment.course_id, func.count())
-                .where(CourseEnrollment.course_id.in_(candidate_ids))
-                .group_by(CourseEnrollment.course_id)
-            )
-        ).all()
-    }
+    member_by_course = await active_member_counts(db, candidate_ids)
     resource_by_course = {
         course_id: count
         for course_id, count in (

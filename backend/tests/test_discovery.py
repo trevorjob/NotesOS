@@ -142,3 +142,41 @@ async def test_public_search_join_is_gone(client, register_user):
         "/api/courses/join", headers=b["headers"], json={"search": "Findable"}
     )
     assert resp.status_code == 404, resp.text
+
+
+# ── Soft-deleted users are invisible to peers (account deletion) ─────────────────
+
+
+async def test_soft_deleted_user_disappears_from_classmates(client, register_user):
+    """A deleted account stops appearing in a former classmate's list."""
+    a = await register_user()
+    b = await register_user()
+    course = await _create_course(client, a["headers"])
+    await _join(client, b["headers"], course["id"])
+    assert [m["id"] for m in await _classmates(client, a["headers"])] == [b["id"]]
+
+    resp = await client.post(
+        "/api/auth/me/delete", json={"password": "password123"}, headers=b["headers"]
+    )
+    assert resp.status_code == 200, resp.text
+
+    assert await _classmates(client, a["headers"]) == []
+
+
+async def test_soft_deleted_user_not_counted_in_members(client, register_user):
+    """member_count reflects active members only after a classmate deletes."""
+    a = await register_user()
+    b = await register_user()
+    course = await _create_course(client, a["headers"])
+    await _join(client, b["headers"], course["id"])
+
+    before = (await client.get("/api/courses", headers=a["headers"])).json()["courses"]
+    assert before[0]["member_count"] == 2
+
+    resp = await client.post(
+        "/api/auth/me/delete", json={"password": "password123"}, headers=b["headers"]
+    )
+    assert resp.status_code == 200, resp.text
+
+    after = (await client.get("/api/courses", headers=a["headers"])).json()["courses"]
+    assert after[0]["member_count"] == 1

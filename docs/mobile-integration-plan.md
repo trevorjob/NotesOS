@@ -11,7 +11,7 @@
 > Work happens **step by step, one screen/flow at a time** — explicit user preference.
 > Don't batch multiple screens into one pass unless asked to.
 >
-> Last updated: 2026-07-26. Branch: `v2`.
+> Last updated: 2026-07-28. Branch: `v2`.
 
 ---
 
@@ -92,11 +92,14 @@ Auth is closed out for launch. Google sign-in on mobile is post-launch, tracked 
   Mock catalog/code "setup" step removed; `CourseAcquisition` component + `lib/courses.ts`
   drive it. Contact-match (final beat) is still pending as §6.4 step 4.
 
-### 2.3 Courses ✅ (wired 2026-07-27)
+### 2.3 Courses ✅ (wired 2026-07-27; navigation/IA reworked 2026-07-28)
 
 - [x] `courses.tsx` — list/read from `api/courses.py` (`fetchMyCourses()`), grouped by
-  `term_label` (null → "Your courses"), real loading/empty states, refetch-on-focus, rows
-  route to `/topics?courseId=…`. Mis-routed "Join with a code" (was `/topics`) → `/coursejoin`.
+  `term_label` (null → "Your courses"), real loading/empty states, refetch-on-focus.
+  **Reworked to an accordion 2026-07-28** (see the IA-rework log entry): tap a course →
+  topics expand inline (each → its note); expanded also shows "+ Add material" and, when the
+  course has no topics, "set up from your syllabus" (→ `/capture?mode=outline`). Mis-routed
+  "Join with a code" (was `/topics`) → `/coursejoin`.
 - [x] `coursecreate.tsx` — now reuses `<CourseAcquisition/>` (cohort→create→proximity→invite,
   native Share, force-create fallback). Mock MATCHES/name-only form gone. Mis-routes fixed by
   reuse ("Join this one" → `joinCourse`, "Make my own anyway" → force-create).
@@ -117,7 +120,7 @@ Auth is closed out for launch. Google sign-in on mobile is post-launch, tracked 
   only and is **empty for a brand-new user** — it becomes useful only after they have ≥1
   course. Don't wire onboarding to it expecting results.
 
-### 2.5 Topics & resources 🟡
+### 2.5 Topics & resources ✅ (wired 2026-07-27; topic-status badge is a tracked backend enhancement below)
 
 - [x] `topics.tsx` — wired 2026-07-27. Consumes the `courseId` param from the course row,
   fetches `GET /api/courses/{id}` (course header + topics in one enrollment-checked call)
@@ -165,11 +168,101 @@ Auth is closed out for launch. Google sign-in on mobile is post-launch, tracked 
     `NEXT_PUBLIC_CLOUDINARY_*`); (2) **rebuild the dev client** — `expo-document-picker` +
     `expo-image-picker` are native modules (installed at `~57.0.x` via
     `npm install … --ignore-scripts`).
-- [ ] `source.tsx` — wire to `api/resources.py` (file upload & retrieval)
+- [x] **Outline scaffold (syllabus → topic skeleton)** — wired 2026-07-28. The *other*
+  `api/capture.py` surface: `POST /api/courses/{id}/outline` (synchronous, no worker/WS).
+  `scaffoldOutline()` in `lib/capture.ts` + reusable `components/capture/OutlineScaffold.tsx`
+  (paste syllabus text and/or snap photos → uploaded to Cloudinary as `image_urls`,
+  vision-transcribed server-side → LLM parses into empty labeled topics, deduped by title).
+  **Two entry points, one component (user asked for both):** (a) inside the capture modal
+  as an `intent` fork — `mode=outline` opens straight into it, and the dump's source list
+  links across ("Set up topics from a syllabus instead" ↔ "Add material instead"); (b) the
+  `topics.tsx` empty state's "Set up from your syllabus" button → `/capture?mode=outline`.
+  **Why it matters:** the dump worker classifies into existing topics when the course has
+  any, else cluster-guesses — so scaffolding first makes later dumps land in the right
+  buckets. Note: the Next.js frontend never implemented this endpoint (it creates topics
+  manually via `CreateTopicModal` → `POST /topics`), so there was no web pattern to mirror.
+- [x] `source.tsx` — wired 2026-07-27. "Read the original" now lists a topic's raw
+  resources from `GET /api/topics/{topic_id}/resources` via `fetchTopicResources()` in
+  `lib/resources.ts`. Reads the `topicId` param, real loading/empty/error states,
+  refetch-on-focus, expand-a-row → verbatim `content` (+ "Added by", + "Hard to read" when
+  `needs_review`). Quarantine gate honoured: the server only returns a quarantined resource
+  to its own uploader, so the "Held · only you" badge = `quarantined`. **Id-chain:**
+  `note.tsx` (still mock, §2.6) got a one-line forward — it already receives
+  `topicId`/`courseId` from topics, now passes them into `/source`.
 
-### 2.6 Note / knowledge ⬜
+### 2.6 Note / knowledge ✅ (wired 2026-07-28; backend concept-states endpoint added)
 
-- [ ] `note.tsx` — wire to `api/knowledge.py`. **Read `docs/system-spec.md` before building this one** — this is the "note = root of retrieval tree" surface, structure-first synthesis, mastery heat-map (see `[[note-lit-by-mastery-kept]]` memory — the full heat-map is the design, not decoration, don't simplify it away).
+- [x] **Backend — `GET /api/topics/{id}/concept-states` (NEW, TDD).** The note's heat-map had
+  no backend (`GET .../knowledge` returns the shared note but no per-user mastery). Added a
+  per-user endpoint joining `Concept` ⋈ `ConceptState` (the note's `concepts[].term` maps 1:1
+  to `Concept.text` via `sync_concepts`), returning `[{concept_id, term, definition, state,
+  due, reps, lapses}]` + a `summary` count. State derived by new `derive_mastery()` in
+  `services/retrieval/scheduler.py` (the FSRS-owning file): `new` (reps 0) → `shaky`
+  (last_grade `again` or FSRS Relearning) → `fading` (due ≤ now) → `solid` (due in future).
+  **Per-user, so never cached** (the shared note is cached separately). 10 tests
+  (`test_knowledge_concept_states.py`: derivation edges, ordering, per-user isolation,
+  enrollment 403, 404, empty topic); 38 green across concept-states + retrieval scheduler/api/
+  concepts/engine, no regressions. **Owner: no migration** (no model change; `Concept`/
+  `ConceptState` already existed).
+- [x] `note.tsx` — wired 2026-07-28. Fetches its own header (`GET /api/topics/{id}` — callers
+  only pass `topicId`/`courseId`, not the title) + `GET .../knowledge` + `GET .../concept-states`
+  in parallel, `useFocusEffect`, real loading/error/empty/synthesizing/failed states.
+  **Note body is markdown** (`react-native-marked` via the `useMarkdown` hook so it lives in
+  the screen's own ScrollView, not a nested FlatList; `components/note/NoteMarkdown.tsx` wraps
+  it in an error boundary → plain-text fallback). **The WHOLE note is lit by mastery, inline**
+  (reworked 2026-07-29 — see below): a custom renderer (`makeRenderer` → overrides `Renderer.
+  text()`) scans every text run for concept terms and wraps each in a tappable, mastery-coloured
+  span; `LitText` does the same for key points; `buildConceptIndex` builds the matcher
+  (`components/note/mastery.ts` holds the state→style map). Tap a lit term → retrieval sheet →
+  `/retrieval` (id-chain `concept`/`conceptId`/`conceptState`/`topicId`/`courseId` forwarded;
+  retrieval itself is §2.7). `lib/note.ts` is the typed client (`fetchTopicHeader`/
+  `fetchTopicKnowledge`/`fetchConceptStates`/`regenerateKnowledge`).
+  - **Restored 2026-07-29 (I over-trimmed these as "drift"; user caught it):**
+    - **Topic pager** (prev/next buttons + dots) — back, now backed by real sibling topics
+      (`fetchCourseTopics(courseId)`); prev/next `router.setParams({topicId})` cycles with
+      wrap-around, dots track position, title/active-dot update instantly (course-scoped fetch,
+      so the header doesn't flicker while paging). The ⌕ QuickSwitcher stays as the *global* jump.
+    - **Course breadcrumb** — real course name (from the same call), not a hardcoded subject.
+    - **Attribution layer (contribution-level) — built 2026-07-29, backend + mobile.** New
+      `GET /api/topics/{id}/contributions` (per-user, uncached): distinct **contributors**
+      (uploaders of non-quarantined resources), **recent** additions (last 3: who/what/when),
+      and **new_since_last_read** (resources added after the caller's prior `NOTE_VIEW`; a 15s
+      grace window drops the current open, since `record_consume` appends a view on every
+      knowledge GET). Header shows a real attribution beat ("Ada added “Lecture 5” · 2d ago",
+      or "N new since you last read"); footer "Built by Ada, Kofi & N others"; "Says who?"
+      lists contributors. 8 TDD tests (`test_knowledge_contributions.py`), **no migration**.
+    - **"Says who?" provenance sheet** — back with honest copy + the contributor list + a button
+      into "Read the original". (The mock's section-level "Ada added the ETC *section*" attribution
+      is the deferred richer version — would need the synthesizer to tag sections; user chose
+      contribution-level for now.)
+  - **Still drift (correctly gone):**
+    - **Hardcoded typed sections** (stages / worked-example / table / rendered-math) — those
+      are all *markdown content* now, rendered from `consolidated_note`, not typed props.
+    - **"6 classmates built this note"** — replaced by the real contributor line above.
+  - **Math rendering — DONE 2026-07-29 (real LaTeX).** Display math (`$$…$$`, `\[…\]`) splits
+    out (`splitNoteSegments`) and renders as true MathJax SVG via `react-native-mathjax-svg`
+    (uses the installed `react-native-svg` — **no WebView, no fonts, offline**), horizontally
+    scrollable, own error-boundary → raw-LaTeX fallback (`MathBlock.tsx`). Inline math (`$…$`,
+    `\(…\)`) → Unicode (`latex.ts` `texToUnicode`: greek, super/subscripts, operators, frac/
+    sqrt) so it flows inside prose as lightable text — an SVG View can't sit mid-line in a
+    wrapping RN `<Text>`, so inline stays text (complex inline degrades readably; a known
+    limit). Converter unit-tested off-device (pure module). `components/note/latex.ts` +
+    `MathBlock.tsx` + a `react-native-mathjax-svg` ambient d.ts.
+    - **⚠️ Owner:** `react-native-mathjax-svg` added (pure-JS, bundles its own MathJax; peer
+      `react-native-svg` already in `package.json`). If `react-native-svg` is already in your
+      dev client (it has been in deps), this is a **JS-only reload, no rebuild**; if it was
+      never built in, one rebuild picks up both.
+  - **⚠️ Owner action:** `react-native-marked@^8.1.1` added (pure-JS; peer dep
+    `react-native-svg` was already installed, so **no dev-client rebuild needed** for this one).
+  - **Verify:** `tsc --noEmit` clean; `eslint` clean on `note.tsx` + `lib/note.ts` +
+    `NoteMarkdown.tsx`. Not run on-device (owner runs the dev build).
+  - **⚠️ Lighting depends on §2.7.** The heat-map is data-driven: mastery is written *only* by a
+    completed `POST /api/retrieval/attempt`. Retrieval is still the mock screen, so the app has
+    recorded **0 attempts** (dev DB 2026-07-28: 84 concepts, **0 concept_states**) — every
+    concept is `new`/neutral and nothing lights until §2.7 records real attempts. The note is
+    correct and armed; it lights as a side-effect of wiring retrieval. Zero-mastery UX hardened
+    (per-concept marker dot — hollow → fills with colour as it lights — + an always-on hint) so a
+    fresh note reads as "not started," not broken.
 
 ### 2.7 Retrieval / study loop ⬜
 
@@ -189,10 +282,45 @@ Auth is closed out for launch. Google sign-in on mobile is post-launch, tracked 
   **reconnect-on-background** (AppState-aware — RN backgrounding drops the socket) and the
   user-scoped `/ws/user/{user_id}` channel for personal notifications.
 
-### 2.10 Settings / profile ⬜
+### 2.10 Settings / profile ✅ (wired 2026-07-28)
 
 - [x] Sign-out — wired under §2.1, lives on this screen
-- [ ] `settings.tsx` — wire remaining fields: `PATCH /me`, `/me/personality`, `/me/preferences`, `/me/change-password`
+- [x] `settings.tsx` — wired 2026-07-28. Hydrates on mount from `GET /api/auth/me` +
+  `GET /api/notifications/preferences` (`lib/profile.ts`, `lib/notifications.ts`); real
+  loading/error states. **Tutor personality** (tone / explanation-style chips + "Use emoji"
+  toggle) → `PATCH /me/personality`; chips carry backend slugs (lowercase), emoji maps to
+  the `emoji_usage` **string** (`moderate`/`none`, not a bool). **Daily decay digest** →
+  `PATCH /api/notifications/preferences` (`digest_enabled`) — its real home is the
+  `notification_preferences` table, NOT the generic `/me/preferences` dict, so that's where
+  it's wired. **Name** editable inline → `PATCH /me`; **phone** shown read-only (primary
+  identity, not editable). **Change password** inline form → `POST /me/change-password`
+  (8-char client guard + surfaces the server's "current password is incorrect"). All
+  personality/digest saves are optimistic with per-control rollback on failure.
+  - **Drift (both flagged, not faked):** (1) **"Night Journal"** (dark mode) removed — it's
+    a theme concern needing `ThemeProvider` wiring + persistence, no clean `/me` field;
+    revisit as a theming task. (2) **"Delete account"** removed — **no backend endpoint
+    exists** (`api/auth.py` has no delete-account route); a red button that half-deletes is
+    worse than none (Google-button precedent). Add the endpoint first if we want it.
+  - **Note:** `/me/preferences` (the generic `preferences` dict + `personality_tags`) has no
+    field in this mock, **and nothing in the backend consumes those columns** — they're
+    write/read-only via `PATCH /me/preferences` with no service/worker/tutor reading them
+    (traced 2026-07-28). Dead storage for now; `study_personality` and
+    `notification_preferences` are the fields that actually drive behaviour. So `/me/preferences`
+    is intentionally not called from settings.
+- [x] **Delete account — soft-delete + anonymise (user chose this policy 2026-07-28).**
+  Backend: new `POST /api/auth/me/delete` (`DeleteAccountRequest{password}`) — reauth for
+  password accounts, then wipe PII (email/phone_hash/password/avatar/google_id/university/
+  program/entry_year/personality/preferences/reset-token → null; `full_name` → "Former
+  member"), set the `NOT NULL`+unique `phone` to a `deleted:{token}` sentinel (**frees the
+  real number for re-registration**), `is_active=False`, and revoke all `RefreshToken`s.
+  **Uploaded resources are kept** so classmates' shared notes don't break (they show
+  "Former member"). Added an `is_active` gate to `get_current_user` (kills the ≤15-min
+  access token instantly), `refresh`, and `login`. No model change (`is_active` already
+  existed). 4 new tests in `test_auth.py` (reauth required, lock-out + token revoke, phone
+  freed, PII anonymised); **44 green** across auth+user_signals+discovery_contacts+
+  practice_test, no regressions. Mobile: `deleteAccount()` in `lib/profile.ts` + a
+  destructive inline confirm in `settings.tsx` (warning + password → endpoint →
+  `clearTokens()` → `/login`).
 
 ### 2.11 Cross-cutting / not yet screen-specific
 
@@ -368,7 +496,294 @@ User decisions this pass: **live progress** (not fire-and-forget) and **files + 
 
 ---
 
-## 4. Known gaps / traps for whoever picks this up
+### 2026-07-27 — Phone input: explicit country picker (fix `+234 → +44` mangling)
+
+- **Bug the user hit:** login "sent me +44…" for a Nigerian number. Cause: the earlier
+  client canonicalisation guessed the region from the *device* locale (GB), and a national
+  `0813…` is *also* a valid GB number, so libphonenumber rewrote it `+44…`. Guessing the
+  region for the user's OWN number is fundamentally wrong.
+- **Fix (user call: *"let the user provide their own intl codes"*):** explicit country
+  picker, nothing guessed. New `components/ui/PhoneInput.tsx` (flag + dial-code button →
+  searchable full-country modal, national-number field), `lib/countries.ts` (245 countries,
+  names baked at build time — Hermes has no `Intl.DisplayNames`; regen script in §6.5),
+  and `composeE164(country, national)` in `lib/phone.ts` (parses against the *chosen*
+  country; a typed `+…` overrides the picker). `login.tsx` swapped its phone `Input` for
+  `PhoneInput`; device region only pre-selects the country. Verified: `NG` + `08131234567`
+  → `+2348131234567` (was `+44…`). Closes the §6.5 "register in international format" caveat.
+- **Local auth (biometrics): user asked, answer = skip for launch.** Phone+password + the
+  SecureStore session is enough; biometric unlock is a post-launch convenience (tracked §5).
+- `contacts.ts` canonicalisation is unchanged — device region is *correct* for the address
+  book (see §6.5). `tsc` + lint clean on all new/changed files. Not run on a device.
+
+### 2026-07-27 — Source screen wired ("Read the original") + capture native-permission fix
+
+- **`source.tsx`** — dropped the mock `RESOURCES`. New `fetchTopicResources()` in
+  `lib/resources.ts` (typed `TopicResource`) reads `GET /api/topics/{topic_id}/resources`.
+  Reads the `topicId` param, real loading/empty/error states, `useFocusEffect`, accordion
+  rows → verbatim `content` with an "Added by {uploader}" line and a "Hard to read" note
+  when `needs_review`. The Merge-Agent quarantine gate is server-side (a quarantined
+  resource only ever comes back to its own uploader), so "Held · only you" = `quarantined`
+  with no client logic. `note.tsx` (still mock) got a one-line id-forward into `/source`.
+  Completes §2.5.
+- **Capture native-permission crash fixed.** On-device capture crashed with missing
+  `NSCameraUsageDescription`/`NSPhotoLibraryUsageDescription`. Root cause: `ios/` is a
+  gitignored CNG artifact whose `Info.plist` was generated before the `expo-image-picker`
+  plugin was added, so it only had the contacts key. The `app.json` plugin config was
+  correct (`cameraPermission`/`photosPermission` → the NS* keys); it just needed a
+  regenerate. Ran `npx expo prebuild -p ios --no-install`; `Info.plist` now carries all
+  three usage-description keys. **Owner:** rebuild with a pod install (`npx expo run:ios`)
+  since `--no-install` skipped CocoaPods. (Owner had already set the `EXPO_PUBLIC_CLOUDINARY_*`
+  env vars — visible in `.env` during prebuild.) General rule reinforced: any `app.json`
+  native/permission/plugin change needs prebuild + rebuild to take effect.
+- **Verify:** `tsc --noEmit` clean; `eslint` clean on `source.tsx` + `lib/resources.ts`
+  (the note.tsx `space` warning is pre-existing, confirmed via stash). Not run on-device.
+
+### 2026-07-28 — Outline scaffold wired (syllabus → topic skeleton, two entry points)
+
+- **Context:** the Next.js frontend **never calls** `POST /courses/{id}/outline` (grep-
+  confirmed — it builds topics manually via `CreateTopicModal`/`POST /topics`). So this is a
+  v2 backend capability with no web UI to mirror; mobile is the first client for it.
+- **New:** `scaffoldOutline()` in `lib/capture.ts` (→ `{created, skipped}`) and reusable
+  `components/capture/OutlineScaffold.tsx` — a multiline paste field + "Snap syllabus" /
+  "Choose photos" (reusing `filePicker` + `uploadFilesToCloudinary`, folder
+  `notesos/{courseId}/outline`). Submit → optional photo upload → `POST /outline` → result
+  view ("Topics set up" / "N already existed"). Synchronous; **no WebSocket** (unlike the
+  dump).
+- **Both entry points share the one component** (user: *"inside capture and on empty state
+  on a topics page — add from both"*): `capture.tsx` gained an `intent` state
+  (`dump`|`outline`) seeded from a `mode` param, with cross-links each way; `topics.tsx`
+  empty state got a "Set up from your syllabus" button → `/capture?mode=outline`.
+- **Interaction with the dump:** seeding topics first = the dump worker *classifies* files
+  into named buckets instead of cluster-guessing (it branches on "course has any topics").
+  Scaffold→dump is the intended happy path.
+- **Verify:** `tsc --noEmit` clean; `eslint` clean on all changed files. Not run on-device
+  (same two owner actions as the dump: Cloudinary env vars — already set — + dev-client
+  rebuild for the native pickers).
+
+### 2026-07-28 — Settings wired (personality, digest, name, change-password)
+
+- **`settings.tsx`** — dropped all mock local-only state. New `lib/profile.ts` (`fetchMe`,
+  `updatePersonality`, `updateProfile`, `changePassword`) + `lib/notifications.ts`
+  (`fetch`/`updateNotificationPreferences`). Hydrates from `GET /me` +
+  `GET /notifications/preferences` on mount; loading/error states. Personality chips
+  (tone/style) + emoji toggle → `PATCH /me/personality`; digest toggle →
+  `PATCH /notifications/preferences`; inline name edit → `PATCH /me`; inline change-password
+  → `POST /me/change-password`. Optimistic saves with per-control rollback.
+- **Backend mapping gotchas worth remembering:** `emoji_usage` is a **string**
+  (`moderate`/`none`), not a bool; the digest lives in the `notification_preferences` table
+  (`digest_enabled`), **not** `/me/preferences`; `GET /me` does **not** return the generic
+  `preferences` dict, so anything stored there can't be hydrated from `/me` (didn't need it
+  here).
+- **Drift removed + flagged:** Night Journal (dark mode → a theme task, deferred) and Delete
+  account (**no backend endpoint** — needs one built first). Both dropped rather than shipped
+  as dead controls.
+- **Verify:** `tsc --noEmit` clean; `eslint` clean on the three changed files. Not run
+  on-device.
+
+### 2026-07-28 — Delete account (soft-delete + anonymise) — backend + mobile
+
+First backend change of this integration effort (user: *"we definitely need delete acct
+functionality"*; chose soft-delete over hard-delete to protect communal notes).
+
+- **Backend (`api/auth.py`):** `POST /me/delete` anonymises PII, frees the phone (unique
+  `deleted:{token}` sentinel), `is_active=False`, revokes all refresh tokens; keeps uploaded
+  resources ("Former member"). Password reauth required. `is_active` gates added to
+  `get_current_user` (kills the live access token), `refresh`, and `login`. `is_active`
+  already existed on the model → **no migration**. `import update` added.
+- **Tests:** 4 new (`test_auth.py`) — wrong-password rejected + account survives; lock-out
+  (old access token → 401) + refresh revoked; phone freed for re-registration; PII wiped +
+  deactivated (DB introspection). Ran `TEST_DATABASE_URL=…@localhost:5432/notesos_test`
+  (note: conftest default password `blessed` didn't match the docker container's
+  `notesos_dev_password` — set `TEST_DATABASE_URL` explicitly to run the suite). 44 green
+  across the touched suites.
+- **Mobile:** `deleteAccount()` in `lib/profile.ts`; destructive inline confirm in
+  `settings.tsx` (warning copy + password field → endpoint → `clearTokens()` → `/login`).
+  `tsc`/`eslint` clean.
+- **Trap noted:** running backend tests needs `TEST_DATABASE_URL` pointed at
+  `notesos_test` with the container's real password; the conftest default won't
+  authenticate against the docker-compose Postgres.
+
+### 2026-07-28 — Soft-deleted users made invisible to peers (delete follow-up)
+
+User caught that anonymising ≠ hiding: a soft-deleted account was still enrolled, so it
+leaked into classmate lists, discovery signals, and "N members" counts as "Former member".
+Fixed the invariant **soft-deleted users are invisible to peers** in one place:
+
+- **New `app/services/membership.py`** — `active_user_ids()` (subquery) + `active_member_counts()`;
+  documents the rule so future enrollment queries don't re-derive it.
+- **`discovery.py`** — `get_classmates` + `User.is_active`; `get_classmate_courses` classmate-id
+  subquery filtered to active; `get_cohort_courses` peers filtered to active; all member counts
+  now via `active_member_counts` (removed the local un-filtered `_member_counts`).
+- **`proximity.py`** — member counts via `active_member_counts`; `_people_overlap` +
+  `User.is_active`; `_classmate_overlap` classmate-ids filtered to active (removed local helper).
+- **`courses.py`** — `list_courses` + `join_course` member counts are active-only.
+- Contact-match already filtered `is_active` (and a deleted user's `phone_hash` is nulled) —
+  untouched.
+- **Tests:** 2 new in `test_discovery.py` (deleted classmate leaves the list; member_count drops
+  2→1). 50 green across discovery/cohort/contacts/courses/enrollment/auth.
+- **Known minor cache gap (not fixed):** the `/api/courses` list `member_count` is cached
+  (`courses_list_key`); a *peer* deleting doesn't bust co-enrolled users' caches, so their count
+  can read one high until TTL. Discovery/classmates are computed live (uncached), so those are
+  correct immediately. Uploaded resources still show "Former member" as provenance (intentional —
+  content is kept, identity anonymised).
+
+### 2026-07-28 — Courses/notes navigation rework (IA — reach a note in ≤2 taps)
+
+User: the add-to-course + course-browsing flow "is not at all intuitive" — Home "Add
+material" went to `/capture` with no course (hit the guard, effectively broken), and a note
+was 3 taps (courses → topics → note). Chose the **accordion** browse model. Deliberately a
+multi-screen pass (one coherent flow, by request) — **all client-side**, no backend:
+`GET /api/courses` already returns courses + embedded topics + `last_studied`.
+
+- **QuickSwitcher wired to real data** (`components/nav/QuickSwitcher.tsx`, was 100% mock) —
+  it's mounted on Home + every course/topic header, so ⌕ → tap a topic = its note is the
+  **≤2-tap jump to any note from anywhere**. Flattens courses + topics into one searchable
+  directory; "Recents" from `last_studied`; routes with real `topicId`/`courseId`.
+- **`courses.tsx` → accordion** — tap a course expands its topics inline (no page change),
+  tap a topic → note (2 taps while browsing). Expanded course also has "+ Add material"
+  (→ `/capture?courseId`) and, when empty, "set up from your syllabus"
+  (→ `/capture?courseId&mode=outline`). Term grouping kept.
+- **Home "Add material" fixed** — was `/capture` with no course. Now opens a
+  `CoursePickerSheet` (new reusable bottom sheet, `components/course/`) → pick → `/capture?courseId`.
+- **Home recents wired** — "Jump back in" lists your recently-studied notes (from
+  `last_studied`) as 1-tap links; removed the fabricated "2 classmates used your note" stat
+  (no endpoint). Retrieval hero left as mock on purpose (that's §2.7, user's later task).
+- **Verify:** `tsc` + `eslint` clean on all four changed files. Not run on-device.
+
+### 2026-07-28 — Capture "did nothing" root cause: PDF force-OCR with tesseract missing
+
+Report: uploaded a PDF, `POST /capture` returned 202, but "the worker never ran" and it
+"returned an error." Traced end-to-end (all backend; mobile was fine):
+
+- **Not a queue/Redis problem.** The `job:*` hashes were in the local redis with
+  `status=completed`, `queue:capture:dead` empty. (`localhost:6379`'s `ssh` listener is
+  **Colima's own port-forward** to the `notesos-redis` container — not a rogue tunnel; verify
+  with `lsof -nP -iTCP:6379` → path contains `.colima`.) The user was watching the uvicorn
+  terminal, not the `run_workers.py` one — the worker *did* run.
+- **Real cause:** the job "completed" but created **0 resources**. `file_processor.extract_text_from_pdf`
+  force-**OCR'd every PDF** (`pdf2image`→poppler, then `pytesseract`), and **tesseract isn't
+  installed** here → extraction threw → the file was dropped → worker broadcast
+  `capture_failed` and returned normally (so the job still marks `completed`). Debugging tell:
+  **a "completed" capture with 0 attached resources = transcription failed.**
+- **Fix:** `extract_text_from_pdf` is now **text-layer-first via `pypdf`** (pure-Python, no
+  system binary), OCR only as a fallback for scanned PDFs. The exact failing PDF now yields
+  3112 chars through the full worker path. `pypdf>=4.2.0` added to `requirements.txt`
+  (**owner: `pip install -r requirements.txt`**). 23 capture tests green.
+- **Types:** `.txt/.md` (decode), `.docx/.doc` (mammoth), images (GPT-vision), `.pdf` (now
+  text-first) all work. **tesseract is now only needed for *scanned* PDFs** — optional;
+  `brew install tesseract` if you want scanned-PDF OCR.
+
+### 2026-07-28 — Note screen wired + note lit by mastery (new concept-states endpoint)
+
+The §2.6 note surface — the wedge. User chose **"backend first, ship it lit"**: the note body
+wired to existing `api/knowledge.py`, but the mastery heat-map (the note's signature per
+`[[note-lit-by-mastery-kept]]` + system-spec §4/§5) had **no backend**, so that came first.
+
+- **Backend (first change to `api/knowledge.py` this effort):** `GET /api/topics/{id}/
+  concept-states` — per-user `Concept` ⋈ `ConceptState`, returns each concept's mastery
+  `state` + a `summary`. `derive_mastery()` lives in `services/retrieval/scheduler.py` (the
+  one FSRS-owning file): new → shaky → fading → solid. Per-user ⇒ uncached. 10 TDD tests, 38
+  green across the touched suites, **no migration**.
+- **Mobile:** `note.tsx` rewritten (3 parallel fetches: header + knowledge + concept-states),
+  markdown body via `react-native-marked`'s `useMarkdown` hook (`NoteMarkdown.tsx`, error-
+  boundary → plain-text fallback), key points list, **Concepts section lit by mastery** (tap →
+  retrieval sheet → `/retrieval`, ids forwarded). `lib/note.ts` typed client. Full
+  empty/synthesizing/failed/ready state machine off `knowledge.status` + `source_count`.
+- **Drift dropped/flagged** (see §2.6): topic pager, hardcoded typed sections (now markdown),
+  per-line "Says who?", "6 classmates built this" (→ honest "N sources"), freshness banner.
+- **Two tracked follow-ups:** inline-lit terms *in prose* (v1 lights the Concepts section
+  instead — robust vs. fragile find-and-wrap over markdown) and **LaTeX math rendering**
+  (`react-native-marked` passes `$…$` through as text).
+- **Owner:** `react-native-marked@^8.1.1` added — pure-JS, `react-native-svg` peer already
+  present, so **no dev-client rebuild** for this. `tsc`/`eslint` clean; not run on-device.
+
+### 2026-07-29 — Note lit INLINE (whole-note), Concepts section removed, seed for verification
+
+Follow-up after the user saw the note on-device. Two things: (1) confirmed the lighting was
+correct but invisible (0 attempts in the DB → all `new`); (2) design correction — **the whole
+note lights up inline, not a separate Concepts section.** User: *"from the original designs its
+the whole note that lights up not just the concepts section … if there's the words of the
+concepts it should light up."* This is the spec's "active surface" (§4) — the words themselves
+carry mastery, in the reading flow.
+
+- **Inline lighting (the design's point).** A custom `react-native-marked` renderer overrides
+  `Renderer.text()` (verified via the lib's Parser that plain/bold/heading/list text all route
+  through `text()`), scanning each text run for concept terms (case-insensitive, longest-first,
+  `\b`-bounded) and wrapping matches in a tappable, mastery-coloured `<Text>` span. `LitText`
+  applies the same to key points. `buildConceptIndex` builds the matcher once (memoized) and is
+  threaded into both. `new` terms get a faint dotted underline (still a live retrieval entry
+  point); solid/fading/shaky get their colours. Recursion trap avoided by binding the original
+  `text` before overriding. Non-string (already-composed) nodes pass straight through.
+- **Concepts section deleted** (`ConceptsSection` gone) per the user — the note reads as one
+  continuous surface again. Mastery style map extracted to `components/note/mastery.ts`.
+- **Seed for immediate verification** (user asked to *see* it before wiring §2.7): 14
+  `concept_states` rows (7 concepts × both `Trev` accounts) on topic *"Sources II: oral
+  tradition"* — 3 solid, 2 fading, 2 shaky, 2 left `new`. Direct SQL, `ON CONFLICT` idempotent,
+  `due` written as naive UTC to match the app. **Disposable** — delete when §2.7 makes mastery
+  organically. (User confirmed the lit render works.)
+- `tsc`/`eslint` clean on `note.tsx` + `NoteMarkdown.tsx` + `mastery.ts`. No backend change
+  this pass.
+
+### 2026-07-29 — Term-match hardening + full LaTeX math (SVG, no WebView)
+
+Two follow-up asks after the inline-lighting pass.
+
+- **Concept matching hardened.** Case-insensitive already (`gi`); added whitespace tolerance
+  (term whitespace → `\s+`, so line-wrapped / double-spaced mentions match) and a shared
+  `normalizeTerm` for both the lookup keys and each match. Trims terms before building the
+  pattern. **Not** handled: morphological variants (plurals/tense) — needs stemming, risks
+  over-matching; flagged.
+- **Math rendering shipped (see §2.6).** User: *"we're building now … build the complete
+  system so all students can use this."* So real LaTeX, not a stopgap: display math →
+  MathJax-SVG (`react-native-mathjax-svg`, no WebView/fonts/network — uses the installed
+  `react-native-svg`); inline math → Unicode so it flows and stays tappable. `react-native-
+  marked` can't host a custom math token (its Parser's default case returns null), so math is
+  split out *around* the markdown rather than tokenised inside it. Pure `latex.ts` converter
+  unit-tested off-device. No math content exists in any note yet (0/14), so this is validated
+  by construction + the converter tests until a STEM note is added.
+- `tsc`/`eslint` clean across `note/` + `note.tsx`.
+
+### 2026-07-29 — Restored note-page features I wrongly cut as "drift"
+
+User: features from the original design were missing — "the navigation where u can go to the
+next topic by clicking btns … and a few other missing things." I'd dropped them in the first
+wiring pass calling them drift; that was over-trimming. Restored, each backed by real data (not
+the mock's hardcoded arrays):
+
+- **Topic pager** (prev/next + position dots) — `fetchCourseTopics(courseId)` gives the ordered
+  sibling topics; prev/next `router.setParams({topicId})` cycles with wrap-around. Course-scoped
+  fetch runs once per course (separate from the topic-scoped body load) so the header/pager don't
+  flicker while paging, and the title updates instantly from the sibling list.
+- **Course-name breadcrumb**, **"Updated {relative}"** line (real `generated_at`), and the
+  **"Says who?"** provenance sheet (honest source-count copy → "Read the original").
+- Only the mock's *fabricated* bits stay gone (per-change attribution, contributor count).
+- `tsc`/`eslint` clean. Reminder for future passes: mock UI that implies data we lack should be
+  flagged, but interaction/navigation the design intends shouldn't be dropped for lack of an
+  endpoint when the data to drive it already exists (sibling topics did).
+
+### 2026-07-29 — Note attribution layer (contribution-level) + accordion note
+
+- **Attribution** was a key wanted feature I'd under-built. User chose **contribution-level**
+  (over section-level or contributors-only). Backend: `GET /api/topics/{id}/contributions`
+  (knowledge.py) — contributors / recent additions / new-since-last-read, all from existing
+  `Resource.uploaded_by` + `ConsumeEvent(NOTE_VIEW)`; 15s grace excludes the current open (views
+  are appended on every knowledge GET). 8 TDD tests, no migration, no regressions (18 green with
+  concept-states). Mobile: `fetchTopicContributions` + `TopicContributions` in `lib/note.ts`;
+  header attribution beat, "Built by …" footer, contributor list in "Says who?". Fetched
+  non-fatally (`.catch(()=>null)`) so it never blocks the note.
+- **Section-level attribution** ("Ada added the ETC *section*") is the deferred richer version —
+  needs the synthesizer to tag note sections with their source resource/uploader. Not built.
+- **Collapse default**: user's "everything open, all together" was the **QuickSwitcher** (⌕),
+  not the browse page (`courses.tsx` is already a default-closed accordion). The switcher's idle
+  view dumped a flat "All courses & topics" list (every topic expanded). Reworked to mirror the
+  browse accordion: idle = Recents + **collapsed** course rows (tap → reveal topics inline → note);
+  only a typed query shows the flat cross-course/topic results. Reset-on-close moved out of the
+  open-effect (was a synchronous-setState-in-effect lint error) into a `close()` wrapper. Also
+  added a **Cancel** button — the full-screen panel covered the tap-to-dismiss scrim, so there was
+  no way out without selecting an item.
+- `tsc`/`eslint` clean across `note.tsx` + `lib/note.ts`.
+
+---
 
 - **`EXPO_PUBLIC_API_URL` defaults to `http://localhost:8000`** in `lib/api.ts`. On a
   physical phone via Expo Go, `localhost` resolves to the *phone*, not the Mac — see
@@ -410,6 +825,13 @@ Do not start these without the user raising them again:
   remaining work is purely mobile-side (in-app browser or deep-link handler for
   `GET /google` → `/google/callback` → `POST /oauth/register`). Not launch-scoped; pick
   up only if the user asks for it post-launch.
+- **Biometric local auth (Face ID / fingerprint).** User weighed it 2026-07-27 and chose
+  skip for launch — phone+password + the SecureStore session covers it. If wanted later:
+  `expo-local-authentication` gating a stored-session unlock on app open + a settings
+  toggle; it does *not* replace phone+password login.
+- **Dark mode toggle ("Night Journal").** User decided 2026-07-28: auto/system is fine for
+  launch. Deferred as a theming task — a real toggle needs `ThemeProvider` wiring + a
+  persisted preference (the `user.preferences` bag or local storage). Not launch-scoped.
 - Jumping ahead in the §2 queue to wire multiple unrelated screens in one pass — this is
   a step-by-step integration, not a batch rewrite of all 19 screens.
 
@@ -571,16 +993,32 @@ for the same number. We use Google's libphonenumber on both sides — `phonenumb
 both ports of the same library, so valid numbers agree on E.164. For the rare unparseable
 input a tiny digit-strip fallback is mirrored in both files so hashing stays total.
 
-**Global, not NG-only (the region seam).** The product launches in Nigeria but must work
-everywhere. National-format numbers need a *default region* to interpret; the client uses
-the **device's own region** (`expo-localization` `getLocales()[0].regionCode`), falling
-back to `NG` only when the OS reports nothing — so a US user's `(415) …` and a Nigerian
-user's `0803 …` both canonicalise correctly from the same address book. International
-`+…` numbers carry their own country code and ignore the region on both sides. The
-server's `DEFAULT_PHONE_REGION` (`NG`) only interprets a registering user's *own* phone
-when they type it in national format — the one caveat: a non-NG user who registers in bare
-national format (no `+`) would be canonicalised against NG. Documented limitation; register
-in international format (or from the launch market) and it's exact. Multi-region hardening
-later = confirm both libphonenumber ports still agree; the seam is already there.
+**Global, not NG-only — two different jobs, two different rules:**
+
+- **The user's OWN number (register/login): explicit country picker, NEVER guessed.**
+  Superseded the earlier device-region-guess approach 2026-07-27 after it mangled a
+  Nigerian `0813…` into `+44…` on a GB-locale phone (a national number that's *also* valid
+  in the device's country parses to the wrong country). `login.tsx` now uses `PhoneInput`
+  (`components/ui/PhoneInput.tsx`) — a searchable country/dial-code picker (data in
+  `lib/countries.ts`) + national-number field — and `composeE164(country.code, national)`
+  in `lib/phone.ts` builds the E.164 from the *chosen* country. Device region only
+  *pre-selects* the picker. A user who types a full `+…` number overrides the picker. This
+  fully closes the old "register in international format or it's wrong" caveat.
+- **CONTACTS (the address book): device region is the right default.** Contacts are stored
+  in the phone owner's own local format, so `canonicalPhone` (in `lib/contacts.ts`) keeps
+  using `expo-localization` device region — a US user's `(415)…` and a Nigerian user's
+  `0803…` both canonicalise from the same book. International `+…` ignores region either way.
+
+The server's `DEFAULT_PHONE_REGION` (`NG`) now only matters as a no-op: the client always
+sends E.164, so the server re-canonicalises already-`+…` input region-independently.
+
+**Regenerating `lib/countries.ts`** (245 countries, names baked in because Hermes lacks
+`Intl.DisplayNames` at runtime): run in `mobile/` —
+
+```js
+node -e "const {getCountries,getCountryCallingCode}=require('libphonenumber-js');const n=new Intl.DisplayNames(['en'],{type:'region'});const flag=c=>String.fromCodePoint(...[...c].map(x=>0x1F1E6+x.charCodeAt(0)-65));const rows=getCountries().map(c=>({code:c,name:n.of(c)||c,dialCode:getCountryCallingCode(c),flag:flag(c)})).filter(r=>r.name!==r.code).sort((a,b)=>a.name.localeCompare(b.name));console.log(JSON.stringify(rows,null,2));"
+```
+
+Multi-region hardening later = confirm both libphonenumber ports still agree; the seam is there.
 
 Each ships behind tests and one screen/flow at a time, per the top-of-doc rule.
