@@ -11,7 +11,7 @@
 > Work happens **step by step, one screen/flow at a time** — explicit user preference.
 > Don't batch multiple screens into one pass unless asked to.
 >
-> Last updated: 2026-07-28. Branch: `v2`.
+> Last updated: 2026-07-29. Branch: `v2`.
 
 ---
 
@@ -264,10 +264,23 @@ Auth is closed out for launch. Google sign-in on mobile is post-launch, tracked 
     (per-concept marker dot — hollow → fills with colour as it lights — + an always-on hint) so a
     fresh note reads as "not started," not broken.
 
-### 2.7 Retrieval / study loop ⬜
+### 2.7 Retrieval / study loop 🟡
 
-- [ ] `retrieval.tsx` — wire to `api/retrieval.py` (`POST /next`, `POST /attempt`, `GET /modes`). Layout stays as-is per §1 parked complaint — wire data only.
-- [ ] `testbuilder.tsx` — wire to `api/practice_test.py` (B14 authored practice test). This is a **distinct concept** from `retrieval.tsx`'s scheduled review — see `[[authored-practice-test]]` memory. Don't merge them.
+> **Retrieval is getting an experience redesign** (engine-chooses doorway, ambient across the
+> app, session-as-flow) — scoped in [`retrieval-experience.md`](./retrieval-experience.md).
+> The §1 parked "mode-picker" complaint is now reopened *with the user's direction*. Wiring
+> below is the foundation the redesign builds on; the redesign itself is not started (see that
+> doc's §10 build order).
+
+- [x] `retrieval.tsx` — wired 2026-07-29 to `api/retrieval.py`. `lib/retrieval.ts` typed client
+  (`fetchModes`/`nextChallenge`/`submitAttempt`/`revealSolution`/`recap*`/`dump*`). Full session:
+  next → (confidence beat on posed modes) → attempt → real outcome + calibration + new FSRS
+  schedule ("next review in N days"). Modes driven off `GET /modes` (quiz/pretest/ramble/teach)
+  with recap/dump appended (topic-scoped, outside the registry). Layout preserved per §1. **This is
+  what lights the note for real** — every completed `/attempt` writes ConceptState. See the log
+  entry for the mode→shape map, the worked-STEM reveal flow, and what was deferred (voice, paper
+  photo, keep-going, home hero).
+- [ ] `testbuilder.tsx` — wire to `api/practice_test.py` (B14 authored practice test). This is a **distinct concept** from `retrieval.tsx`'s scheduled review — see `[[authored-practice-test]]` memory. Don't merge them. **Note:** the old mock timed-test (`?mode=test` → a hardcoded-question quiz in `retrieval.tsx`) was removed as fabricated data — testbuilder's `?mode=test` link now lands on an honest "coming soon" placeholder until this item wires it to `/api/practice-tests`.
 
 ### 2.8 Voice / audio ⬜
 
@@ -782,6 +795,261 @@ the mock's hardcoded arrays):
   added a **Cancel** button — the full-screen panel covered the tap-to-dismiss scrim, so there was
   no way out without selecting an item.
 - `tsc`/`eslint` clean across `note.tsx` + `lib/note.ts`.
+
+### 2026-07-30 — Retrieval: course-page scoped "study now" + voice Info.plist fix (redesign complete)
+
+[`retrieval-experience.md`](./retrieval-experience.md) §11 step 6 — the last step. **The retrieval
+experience redesign is now complete** (all six steps).
+
+- **`topics.tsx` — course-scoped "Study now" card.** `fetchNextAction({ course_id })` drives a
+  highlighted card at the top of the course page (topic + warm `reason` + est_minutes); one tap
+  launches retrieval on the engine's pick for *this* course. Hidden when nothing's due. Same launch
+  contract as the home hero + FAB. `tsc`/`eslint` clean.
+- **Voice crash fixed (owner had rebuilt + hit it):** tapping 🎤 crashed with
+  `NSSpeechRecognitionUsageDescription` missing — the **same stale-CNG-Info.plist gap as the 07-27
+  camera fix**: `ios/` is a gitignored prebuild artifact generated *before* the speech-recognition
+  plugin was added to `app.json`. Ran `npx expo prebuild -p ios --no-install`; `Info.plist` now
+  carries `NSSpeechRecognitionUsageDescription` + `NSMicrophoneUsageDescription` (verified via
+  `plutil`), alongside the existing camera/contacts keys. **Owner: rebuild with pods
+  (`npx expo run:ios`)** since `--no-install` skipped CocoaPods. General rule (again): any
+  `app.json` native/permission/plugin change needs a prebuild + rebuild to take effect.
+- **Noted, not built:** *social-sciences subject family* — the backend `SubjectFamily` is only
+  STEM/LANGUAGE/HUMANITIES/GENERAL, so social-sciences topics classify as GENERAL/HUMANITIES today.
+  A dedicated family is a backend taxonomy change (enum + subject profile + classifier prompt) — its
+  own item if wanted, not blocking.
+- **Redesign status:** ✅ warm close · ✅ session flow · ✅ per-mode (STEM/paper/voice) · ✅
+  context-worthy picker · ✅ FAB doorway · ✅ course-page entry. Non-blocking polish tracked in the
+  design doc (cross-restart FAB persistence, affinity chips in the FAB menu, optional worked-photo).
+
+### 2026-07-30 — Retrieval: the FAB reborn as the "study now" doorway (draggable, engine-picks)
+
+[`retrieval-experience.md`](./retrieval-experience.md) §11 step 5. The global `NavFab` **was** the
+exact flat-list problem the user complained about — and worse, it routed `/retrieval?mode=X` with
+**no topic/concept**, which now hits the "open a note first" guard (i.e. it was broken against the
+real backend). Rebuilt as the engine-chooses doorway (design §4).
+
+- **Tap = study now** — `GET /next-action` (global) → `/retrieval` with the engine's topic/concept/
+  mode. Nothing due → `/courses`. This is the fast path: engine picks WHAT *and* HOW, one tap.
+- **Long-press = the pick menu** — the next-action's warm `reason` as context, a prominent
+  "▶ Start — {mode}", then **mode-override rows** (keep the engine's topic/concept, change only the
+  mode), + **Home** (kept — the FAB is still the global nav affordance). Backdrop-dismiss.
+- **Draggable** — `PanResponder` + `Animated` (RN core, **no new deps, no rebuild**): moves only
+  past a 6px threshold so taps/long-press pass through; clamped on-screen on release; position
+  persists across route changes via module state (cross-restart persistence = flagged follow-up,
+  needs a storage dep).
+- **Discoverability** — a one-time hint bubble ("Tap to study now · hold to choose how"), dismissed
+  on first interaction (module-flagged so it doesn't nag every remount).
+- **Cleanups** — dropped the phantom "Timed test" (testbuilder's, not a retrieval mode); hid the FAB
+  on `/retrieval` itself (`_layout.tsx`) so it doesn't overlap the session UI.
+- **Coexists** with the per-surface entries (home hero, note-tap) per the locked decision. `tsc`/
+  `eslint` clean on `NavFab.tsx` + `_layout.tsx`. Not run on-device (drag/gesture feel needs the
+  owner's device pass).
+- **Next (doc §11 step 6, last):** scoped `next-action` entry on the course/topic page.
+
+### 2026-07-30 — Retrieval: context-worthy mode picker (best-fit-first, ranked by subject)
+
+[`retrieval-experience.md`](./retrieval-experience.md) §11 step 4. The parked §1 complaint was
+that the picker is "just a list" — now it's ranked and recommends.
+
+- **`fetchTopicProfile` in `lib/retrieval.ts`** → `GET /api/retrieval/topics/{id}/profile` (existing,
+  enrollment-gated). One call gives the topic's `subject_family` + `mode_mix` (affinity 0..1 for all
+  six modes — note brain dump keys as `brain_dump`, mapped client-side).
+- **`ModePicker` reworked** in `retrieval.tsx`: modes are ordered **best-fit-first** by `mode_mix`,
+  the top one is badged **"Best fit"** and outlined, and a "Ranked for this {STEM/humanities/
+  language} topic" header sets the context. STEM ranks quiz/pretest up; humanities ranks
+  ramble/teach up (the engine's own knob, surfaced instead of acted on). Best-effort — falls back to
+  the default order if the profile can't load; sheet layout otherwise unchanged.
+- **No backend change** — reuses the existing profile endpoint. `tsc`/`eslint` clean on
+  `retrieval.tsx` + `lib/retrieval.ts`. Not run on-device.
+- **Next (doc §11 step 5):** the draggable FAB — global "study now" (default = `next-action`,
+  long-press/caret = this picker), then step 6 (course-page scoped entry).
+
+### 2026-07-30 — Retrieval: voice-answer input (on-device STT) across every written mode
+
+[`retrieval-experience.md`](./retrieval-experience.md) §11 step 3, the second shared input surface.
+**Clarified with the user: voice input is NOT premium** — the premium lane is *generated audio*
+(listen mode), a separate later integration. So voice answering ships freely.
+
+- **`useVoiceDictation` hook + "🎤 Speak" button** in `WrittenAnswer` (`components/retrieval/`).
+  Speech is transcribed **on-device** via `expo-speech-recognition` (offline, free, live partial
+  results) and streams into the editable answer field — same edit-before-grade confirm as paper.
+  Available in every written mode (dump/recap/ramble/teach/quiz-short). Submits as plain text (the
+  grader's voice-leniency is challenge-driven, so no per-attempt marker).
+- **On-device vs server Whisper — a real fork the user raised.** Chose on-device: live partial
+  results (big for rambling), offline, free, private; the editable confirm step covers OS-STT's
+  weaker jargon accuracy. **I had drafted a server-Whisper endpoint** (`/transcribe-voice` +
+  `transcription_service.transcribe_bytes` + tests) earlier this turn and **fully reverted it** when
+  the user chose on-device — no dead backend left (grep-clean; 22 retrieval tests green).
+- **Owner actions:** new dep `expo-speech-recognition` (native) + its config-plugin added to
+  `app.json` (mic + speech-recognition usage strings) → **prebuild + rebuild the dev client** (same
+  rebuild that picks up the image-picker). Accuracy varies by OS.
+- **Verify:** `tsc`/`eslint` clean on `WrittenAnswer.tsx`, `useVoiceDictation.ts`, `retrieval.tsx`,
+  `lib/retrieval.ts`. Not run on-device.
+- **Net:** with STEM + paper + voice done, the written/STEM mode interfaces are substantially
+  complete. Next is the context-worthy picker (doc §11 step 4).
+
+### 2026-07-30 — Retrieval: paper-input surface (B8) wired into every written mode
+
+[`retrieval-experience.md`](./retrieval-experience.md) §11 step 3, the shared input surface. The
+paper substrate is "any written answer, in any mode can be a photo of handwriting" (system-spec
+§5), so it went in as one reusable component and lit up all the written modes at once.
+
+- **`components/retrieval/WrittenAnswer.tsx`** (NEW) — Textarea + "✎ Snap a photo of your
+  handwriting". The photo is transcribed server-side and **drops into the editable field**, so
+  correcting the text *is* the confirm step the substrate promises (grade what the student
+  confirms, never the raw OCR guess). Shows the model's uncertainty as a check-hint
+  (`has_illegible`/`has_uncertain`).
+- **`transcribePaper` in `lib/retrieval.ts`** — `POST /api/retrieval/transcribe` (multipart).
+  Uses raw `fetch` + a manual JWT header (not the axios instance): SDK-57's winter `FormData`
+  needs Blob-compatible `expo-file-system` `File` parts, the same constraint `lib/cloudinary.ts`
+  hit. Reuses `takePhoto` (burst, multi-page) from `lib/filePicker.ts`; camera/photo perms already
+  shipped with capture, so **no new native config**.
+- **Wired into every written mode** — dump, recap, ramble, teach, and quiz short/essay all use
+  `WrittenAnswer`; submits carry `answer_origin:"paper"` (plumbed server-side through `/attempt`
+  and the recap/dump grader — verified). Photos are ephemeral (never stored). **No backend change**
+  — `/transcribe` (B8) already existed and is tested.
+- **This also advances dump/ramble/teach** (their handwritten-input half is done); the remaining
+  per-mode work for them is **voice** (§2.8, `/ws/voice`) — premium-gated, deferred until the lane
+  is confirmed.
+- **Verify:** `tsc`/`eslint` clean on `retrieval.tsx` + `lib/retrieval.ts` + `WrittenAnswer.tsx`.
+  Not run on-device (owner runs the dev build; `/transcribe` needs the OpenAI vision key set).
+
+### 2026-07-30 — Retrieval redesign: per-mode interfaces begin with STEM (worked)
+
+[`retrieval-experience.md`](./retrieval-experience.md) §11 step 3, first mode. The generic renderer
+gave every mode the same shape; STEM/worked is the most distinct, so it went first.
+
+- **`components/retrieval/MathText.tsx`** (NEW) — renders a string that mixes prose + inline math
+  (`$…$`) + display math (`$$…$$`), reusing the note's pipeline (`MathBlock` SVG for display,
+  `latex.ts` Unicode for inline). No new deps.
+- **`retrieval.tsx` — worked/STEM interface.** Problem, revealed solution, and result feedback now
+  render **math as math**. STEM framing: "work it out on paper," confidence-*before*-reveal copy
+  (protects the B9 ordering), reveal → the 4 honest self-grade buttons → a self-graded result
+  headline (keyed off `outcome.detail.self_graded`, not a fake "/10"). Numeric STEM = a typed-number
+  "Check". All other modes fall through unchanged. **No backend change** — the worked flow (`/next`
+  worked → `/reveal` → self-grade `/attempt`) was already backed and tested.
+- **Deferred (correctly):** the *optional* photo-of-work attachment (spec §5 — never required before
+  self-grade; no attempt-image endpoint exists) folds into the paper-input surface built with
+  dump/ramble.
+- **Verify:** `tsc`/`eslint` clean on `retrieval.tsx` + `MathText.tsx` + `lib/retrieval.ts`. Not run
+  on-device. **Owner note:** worked problems only appear on topics whose `subject_family` resolves
+  to the self-calibration grading directive — set/override via `PATCH /api/retrieval/topics/{id}/profile`
+  to see it on a given topic.
+- **Next (doc §11 step 3):** ramble/teach/dump — these need the voice (§2.8) + paper (`/transcribe`)
+  input surfaces, built with the first mode that needs them.
+
+### 2026-07-30 — Retrieval redesign build starts: warm close (session flow + backend derive)
+
+First build step of the retrieval experience redesign ([`retrieval-experience.md`](./retrieval-experience.md)
+§11). Turns retrieval from one-shot into a **bout that ends with a warm close** (system-spec §5/§6).
+
+- **Backend — `GET /api/retrieval/session-summary`** (`api/retrieval.py`) +
+  `services/retrieval/session_summary.py`. Derives, over the user's most recent session (the same
+  ≥15-min idle-gap clustering as `session.py` — refactored to expose `split_attempt_buckets` +
+  `last_session_attempts`, DRY with `split_sessions`), what the bout changed: **firmed** (current
+  mastery `solid`) vs. **slipping** (`shaky`/`fading`) concepts via the note's `derive_mastery`,
+  plus the **calibration delta** (mean actual−predicted over attempts that carried a prediction,
+  same ±0.15 band as `/attempt`). Uncached/per-user; enrollment-gated on `course_id`; `null` when
+  there's no session. **No model change, no migration.** 10 tests (6 service in
+  `test_session_summary.py` + 4 API in `test_retrieval_api.py`); 76 green across
+  retrieval/session/recap/dump.
+- **Mobile — session flow + warm close** in `retrieval.tsx`. "Keep going" now runs a real bout:
+  it pulls the engine-selected **next due** concept (no `concept_id`), and an exhausted queue (404)
+  is treated as the natural end, not an error → flows into the close. Result screen now offers
+  **Keep going** + **Done for now**; "Done for now" (or exhaustion) → `CloseView`: growth-led
+  headline ("You firmed up N concepts"), whispered slipping ("M still shaky — …"), a calibration
+  line, and the recap-tomorrow hook. `fetchSessionSummary` + `SessionSummary` types in
+  `lib/retrieval.ts`. Summary is best-effort (a plain "good push" close if it can't load).
+- **Verify:** backend via `TEST_DATABASE_URL=…notesos_test`; mobile `tsc`/`eslint` clean on
+  `retrieval.tsx` + `lib/retrieval.ts`. Not run on-device.
+- **Next (doc §11 step 3):** per-mode interfaces — each mode gets its real experience (currently
+  one generic renderer), coordinated with the voice (§2.8) + paper (`/transcribe`, B8) inputs.
+
+### 2026-07-30 — Retrieval experience direction + home hero + labeled continuation
+
+User reopened the parked retrieval-UX question (§1) with a clear direction: retrieval should
+*live across the app*, engine-chooses by default, pick as the expand. Wrote the design doc and
+landed the enabling wiring (the redesign itself — FAB, session flow, context-worthy picker — is
+scoped but not built; see the doc's §10).
+
+- **Design doc** — [`retrieval-experience.md`](./retrieval-experience.md): the doorway
+  principle (engine-chooses / pick-as-expand, DECIDED), the per-surface map, FAB rework,
+  session-as-flow + warm close, the context-worthy picker, backend support vs. gaps, and open
+  decisions (§9) that need the user before the redesign builds.
+- **Backend — `concept_text` on `POST /next`** (`api/retrieval.py`). `NextResponse` now carries
+  the concept term (no model change, no migration — `Concept.text` already existed). Unblocks a
+  labeled continuous session: each next challenge names its own concept instead of inheriting the
+  one you started on. Test added to `test_retrieval_api.py` (happy-path asserts `concept_text`);
+  13 retrieval-api tests green.
+- **`retrieval.tsx` — "Keep going" restored** now that continuation is labeled correctly: after a
+  result it pulls the next due concept in the topic (engine-selected, no `concept_id`), header +
+  result label follow the response's `concept_text`. The seed of the session flow (doc §5).
+- **Home hero → `GET /next-action`** (`home.tsx`, `fetchNextAction` in `lib/retrieval.ts`). The
+  mock "3 concepts slipping…" hero is gone; the engine now picks the single highest-value thing
+  (kind cascade review→calibration→dump→new→get_ahead), shown with a kind-lead label + topic +
+  the warm `reason` + `est_minutes`. "Start review" opens retrieval straight into the chosen
+  mode/topic/concept. Loading, caught-up ("Nothing due right now"), and no-concepts states
+  handled. This is the fast path's first surface (doc §3).
+- **Answered the user's two side-questions:** "keep going" was dropped only because `/next` lacked
+  the concept term (now fixed); the concept-click flow uses **real** concept ids + a live
+  LLM-generated challenge (no stock data) — only the *lighting* on the demo topic is still the
+  disposable seed.
+- **Verify:** `tsc --noEmit` clean; `eslint` clean on `retrieval.tsx` + `lib/retrieval.ts` +
+  `home.tsx`. Backend tests via `TEST_DATABASE_URL=…@localhost:5432/notesos_test`. Not run
+  on-device.
+
+### 2026-07-29 — Retrieval / study loop wired (the loop that lights the note for real)
+
+§2.7's first item. `retrieval.tsx` was pure mock (hardcoded biology Q&A, fake grading). Now it
+drives a real two-request session against `api/retrieval.py`, which is the **only writer of
+ConceptState** — so this is what makes the note's mastery heat-map light organically (was 0 real
+attempts; the note was lit only by the disposable seed).
+
+- **New `lib/retrieval.ts`** — typed client mirroring `api/retrieval.py`: `fetchModes`,
+  `nextChallenge`, `submitAttempt`, `revealSolution`, `recapNext`/`recapAttempt`,
+  `dumpNext`/`dumpAttempt`. Types for the sanitized `NextChallenge` payload, `AttemptResult`
+  (outcome + FSRS `state` + `calibration`), `RevealResult`, and the free-recall shapes.
+- **The session flow (system-spec §5, preserving the LOCKED layout — data only):**
+  - **next → confidence → answer → attempt → result.** `POST /next` picks the *handed* concept
+    (`concept_id` from the note's id-chain) and has the mode pose a challenge; the answer key
+    stays server-side under `challenge_id`. The **confidence beat is captured BETWEEN seeing the
+    challenge and answering** (the calibration signal) — kept for posed modes (quiz/pretest) as
+    the mock had it; open/free-recall skip it (backend accepts null). `POST /attempt` returns the
+    real outcome, the advanced schedule ("next review in N days"), and calibration
+    (predicted vs actual → *calibrated / underconfident / overconfident* copy).
+  - **Mode → shape map** (drives rendering off the real payload, not mock arrays):
+    `quiz`/`pretest` = **posed** (MCQ renders `answer_options`; `short_answer`/`essay`/`numeric`
+    → text input); `ramble`/`teach` = **open** (one written response, AI-graded, shows
+    `key_points_missed`); `recap`/`dump` = **free-recall** (`/recap|/dump` next+attempt, one
+    response graded across many concepts → per-concept grade table).
+  - **Worked STEM (B9)** — `question_type:"worked"` gets the reveal flow: predict confidence →
+    **`POST /reveal`** (stamps confidence server-side, returns the worked solution) → 4 honest
+    self-grade buttons → `/attempt` with the grade. Ordering (confidence-before-reveal) is the
+    backend's guarantee; the UI respects it. No STEM notes exist yet, so this is validated by
+    construction against the contract.
+  - **Modes driven off `GET /modes`** (registry = quiz/pretest/ramble/teach); recap/dump appended
+    client-side when a topic is in scope (they're free-recall surfaces outside the registry).
+    Falls back to the built-in list if `/modes` fails.
+- **Drift / deferred (flagged, not faked):**
+  - **Voice answering** — the mock's voice tab/`(preview)` link is gone this pass; it's §2.8
+    (`/ws/voice`, premium-gated). Retrieval reads/writes text only.
+  - **Paper photo (B8)** — `/transcribe` (handwriting photo → confirm → `answer_origin:"paper"`)
+    is a real, distinct sub-flow; deferred to a dedicated retrieval pass. The mock's fake photo
+    tab was removed rather than left non-functional.
+  - **Mock timed test removed** — `?mode=test` (hardcoded questions, client-side grading) was
+    fabricated data. It now shows an honest "coming soon" placeholder; the real thing is
+    testbuilder's item (wire to `/api/practice-tests`), not a retrieval mode.
+  - **"Keep going" (continuous session)** — dropped: `/next`'s response carries `concept_id` but
+    not the concept *term*, so a next-due concept would be mislabeled. The honest loop is
+    back-to-note (re-lights on focus) → tap the next term. A backend follow-up (return the term
+    in `NextResponse`) would unlock in-screen continuation.
+  - **Home hero ("Start review", no params)** stays out of scope — with no topic/concept it shows
+    the guidance empty state. Wiring it to `GET /next-action` is a follow-up.
+- **Verify:** `tsc --noEmit` clean; `eslint` clean on `retrieval.tsx` + `lib/retrieval.ts`.
+  Used `useFocusEffect` (not `useEffect`) for the challenge load so the synchronous state resets
+  don't trip `react-hooks/set-state-in-effect` (same pattern as the other screens). Not run
+  on-device (owner runs the dev build). **Optional cleanup once real attempts exist:** drop the
+  14 seed `concept_states` on topic `71778267-…` (see the 07-29 seed log entry).
 
 ---
 

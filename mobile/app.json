@@ -21,7 +21,8 @@
       "predictiveBackGestureEnabled": false,
       "permissions": [
         "android.permission.READ_CONTACTS",
-        "android.permission.WRITE_CONTACTS"
+        "android.permission.WRITE_CONTACTS",
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "web": {
@@ -49,6 +50,19 @@
         {
           "cameraPermission": "NotesOS uses your camera so you can snap boards, slides, and handwriting straight into your notes.",
           "photosPermission": "NotesOS accesses your photos so you can add slides and study material to your notes."
+        }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "NotesOS uses your microphone so you can speak your answers instead of typing.",
+          "speechRecognitionPermission": "NotesOS transcribes your speech on your device so you can answer out loud."
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "NotesOS uses your microphone so you can record a lecture straight into your notes."
         }
       ]
     ],

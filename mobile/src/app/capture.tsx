@@ -17,6 +17,8 @@ import {
 } from '@/lib/capture';
 import { CourseSocket } from '@/lib/courseSocket';
 import { OutlineScaffold } from '@/components/capture/OutlineScaffold';
+import { AudioRecorder } from '@/components/capture/AudioRecorder';
+import { enqueueRecording, flushRecordingQueue, pendingRecordingCount } from '@/lib/recordingQueue';
 
 // Capture is instant-and-dumb: pick files → upload to Cloudinary → POST the URLs → the
 // server returns 202 and a worker transcribes, sorts into topics, and auto-files, telling
@@ -27,7 +29,7 @@ import { OutlineScaffold } from '@/components/capture/OutlineScaffold';
 // scaffold (OutlineScaffold). `mode=outline` opens straight into the scaffold; otherwise
 // the dump leads and offers a link across. Both are course-level surfaces of api/capture.py.
 type Intent = 'dump' | 'outline';
-type Phase = 'source' | 'uploading' | 'working' | 'done' | 'failed';
+type Phase = 'source' | 'uploading' | 'working' | 'done' | 'failed' | 'recording' | 'savingRecording' | 'recorded';
 type WorkStage = 'transcribing' | 'organizing';
 
 interface SourceOption {
@@ -59,12 +61,32 @@ export default function CaptureDump() {
   const [topics, setTopics] = useState<CaptureTopicResult[]>([]);
   const [failed, setFailed] = useState<CaptureFailedItem[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [recordedOffline, setRecordedOffline] = useState(false);
+  const [pendingUploads, setPendingUploads] = useState(0);
 
   const socketRef = useRef<CourseSocket | null>(null);
   const batchIdRef = useRef<string | null>(null);
 
   // Tear the socket down if the user leaves mid-capture.
   useEffect(() => () => socketRef.current?.disconnect(), []);
+
+  // Opening the screen with connectivity is our chance to drain any recordings that were
+  // captured offline on a previous visit.
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      if (pendingRecordingCount() === 0) return;
+      try {
+        await flushRecordingQueue();
+      } catch {
+        // still offline — leave them queued
+      }
+      if (active) setPendingUploads(pendingRecordingCount());
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const handleEvent = (msg: { type?: string } & Record<string, unknown>) => {
     if (!isCaptureEvent(msg)) return;
@@ -123,6 +145,29 @@ export default function CaptureDump() {
     }
   };
 
+  // A finished recording is saved durably first (survives an app kill), then we try to
+  // push it. Offline, it stays queued and uploads next time the screen opens online.
+  const handleRecordingComplete = async (file: PickedFile) => {
+    if (!courseId) {
+      setError('No course selected.');
+      setPhase('failed');
+      return;
+    }
+    setError(null);
+    setPhase('savingRecording');
+    try {
+      enqueueRecording(courseId, file);
+      const result = await flushRecordingQueue();
+      setRecordedOffline(result.uploaded === 0);
+      setPendingUploads(result.remaining);
+      setPhase('recorded');
+    } catch {
+      setRecordedOffline(true);
+      setPendingUploads(pendingRecordingCount());
+      setPhase('recorded');
+    }
+  };
+
   const reset = () => {
     socketRef.current?.disconnect();
     socketRef.current = null;
@@ -130,6 +175,8 @@ export default function CaptureDump() {
     setTopics([]);
     setFailed([]);
     setError(null);
+    setRecordedOffline(false);
+    setPendingUploads(pendingRecordingCount());
     setPhase('source');
   };
 
@@ -178,6 +225,15 @@ export default function CaptureDump() {
                 <Text style={{ fontSize: size.caption, color: c.inkTertiary }}>{source.hint}</Text>
               </Pressable>
             ))}
+            <Pressable onPress={() => { setError(null); setPhase('recording'); }} style={rowStyle}>
+              <Text style={{ fontFamily: font.bodySemibold, color: c.ink }}>Record a lecture</Text>
+              <Text style={{ fontSize: size.caption, color: c.inkTertiary }}>Record live in the room — works offline too</Text>
+            </Pressable>
+            {pendingUploads > 0 && (
+              <Text style={{ color: c.stateFading, fontSize: size.bodySm, marginTop: 12 }}>
+                {pendingUploads} recording{pendingUploads === 1 ? '' : 's'} waiting to upload — we’ll send {pendingUploads === 1 ? 'it' : 'them'} when you’re online.
+              </Text>
+            )}
             <Pressable onPress={() => setIntent('outline')} style={{ paddingTop: 16, minHeight: 44, justifyContent: 'center' }}>
               <Text style={{ color: c.confirm, textDecorationLine: 'underline', fontSize: size.bodySm }}>
                 Set up topics from a syllabus instead
@@ -191,6 +247,32 @@ export default function CaptureDump() {
           <View style={{ alignItems: 'center', gap: 14, paddingTop: 60 }}>
             <ActivityIndicator color={c.ink} />
             <Text style={{ color: c.inkSecondary, fontSize: size.body }}>Uploading your files…</Text>
+          </View>
+        )}
+
+        {phase === 'recording' && (
+          <AudioRecorder onComplete={handleRecordingComplete} onCancel={() => setPhase('source')} />
+        )}
+
+        {phase === 'savingRecording' && (
+          <View style={{ alignItems: 'center', gap: 14, paddingTop: 60 }}>
+            <ActivityIndicator color={c.ink} />
+            <Text style={{ color: c.inkSecondary, fontSize: size.body }}>Sending your recording…</Text>
+          </View>
+        )}
+
+        {phase === 'recorded' && (
+          <View style={{ gap: 14, paddingTop: 40 }}>
+            <Text style={[titleStyle, { textAlign: 'center' }]}>
+              {recordedOffline ? 'Saved for later' : 'Got it'}
+            </Text>
+            <Text style={{ color: c.inkSecondary, fontSize: size.bodySm, textAlign: 'center' }}>
+              {recordedOffline
+                ? 'You’re offline, so we’ve saved your recording. It’ll upload and sort itself into your topics the moment you’re back online.'
+                : 'Your lecture is uploading and we’re transcribing it into your topics in the background — you can leave this screen.'}
+            </Text>
+            <Button label="Back to course" onPress={() => router.back()} style={{ marginTop: 10 }} />
+            <Button label="Record another" variant="secondary" onPress={reset} />
           </View>
         )}
 

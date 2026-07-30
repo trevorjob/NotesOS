@@ -1,14 +1,27 @@
 """
 NotesOS Models - Knowledge System
 TopicKnowledge: consolidated AI-synthesized notes per topic.
-AudioLesson: generated TTS audio lecture per topic.
+AudioArtifact: generated TTS audio over a scope (course/topic/concept/cluster),
+a lens (how it's told), and an owner (global/shared vs. personal/credited).
+See docs/listen-audio-plan.md for the design this generalizes.
 """
 
 import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Enum as SAEnum, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Enum as SAEnum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
@@ -20,6 +33,22 @@ class KnowledgeStatus(str, enum.Enum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+class AudioScopeType(str, enum.Enum):
+    COURSE = "course"
+    TOPIC = "topic"
+    CONCEPT = "concept"
+    CONCEPT_CLUSTER = "concept_cluster"
+
+
+class AudioLens(str, enum.Enum):
+    DEFAULT = "default"
+    USER_INSTRUCTION = "user_instruction"
+    REMEDIATION = "remediation"
+    EXAM_FOCUSED = "exam_focused"
+    SLOWER = "slower"
+    WORKED_EXAMPLE = "worked_example"
 
 
 class TopicKnowledge(Base):
@@ -61,32 +90,47 @@ class TopicKnowledge(Base):
 
     # Relationships
     topic = relationship("Topic", back_populates="knowledge")
-    audio_lessons = relationship(
-        "AudioLesson", back_populates="knowledge", cascade="all, delete-orphan"
+    audio_artifacts = relationship(
+        "AudioArtifact", back_populates="knowledge", cascade="all, delete-orphan"
     )
 
 
-class AudioLesson(Base):
+class AudioArtifact(Base):
     """
-    TTS-generated audio lecture for a topic.
-    Linked to the TopicKnowledge it was generated from.
+    TTS-generated audio over a scope (course/topic/concept/concept_cluster).
+
+    ``scope_ref`` is polymorphic (topic_id / concept_id / cluster key depending on
+    ``scope_type``) so it carries no FK constraint — callers that hard-delete a
+    scope (e.g. ``DELETE /topics/{id}``) must explicitly clean up matching
+    artifacts themselves (see api/topics.py delete_topic).
+
+    ``owner_id`` null = global/shared (free, deduped one-per-scope-per-lens via
+    the partial unique index below); set = personal (Phase 1 request flow).
     """
 
-    __tablename__ = "audio_lessons"
+    __tablename__ = "audio_artifacts"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    topic_id = Column(
-        UUID(as_uuid=True),
-        ForeignKey("topics.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
+
+    scope_type = Column(SAEnum(AudioScopeType, name="audioscopetype"), nullable=False, index=True)
+    scope_ref = Column(UUID(as_uuid=True), nullable=False, index=True)
     knowledge_id = Column(
         UUID(as_uuid=True),
         ForeignKey("topic_knowledge.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
         index=True,
     )
+
+    lens = Column(SAEnum(AudioLens, name="audiolens"), nullable=False, default=AudioLens.DEFAULT)
+    instruction = Column(Text, nullable=True)  # only set for lens=user_instruction
+
+    owner_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    cost_credits = Column(Integer, nullable=False, default=0)
 
     # Content
     script = Column(Text, nullable=True)           # conversational audio script
@@ -101,6 +145,7 @@ class AudioLesson(Base):
         default=KnowledgeStatus.PENDING,
     )
     error_message = Column(Text, nullable=True)
+    stale = Column(Boolean, nullable=False, default=False)  # source knowledge re-synthesized since
     generated_at = Column(DateTime, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -109,5 +154,18 @@ class AudioLesson(Base):
     )
 
     # Relationships
-    topic = relationship("Topic", back_populates="audio_lessons")
-    knowledge = relationship("TopicKnowledge", back_populates="audio_lessons")
+    knowledge = relationship("TopicKnowledge", back_populates="audio_artifacts")
+
+    __table_args__ = (
+        # The shared/global artifact is unique per (scope, lens) — dedup rule from
+        # docs/listen-audio-plan.md §1. Personal artifacts (owner_id set) are exempt;
+        # their own dedup key lands with the Phase 1 request flow.
+        Index(
+            "uq_audio_artifact_global_scope_lens",
+            "scope_type",
+            "scope_ref",
+            "lens",
+            unique=True,
+            postgresql_where=text("owner_id IS NULL"),
+        ),
+    )

@@ -6,24 +6,41 @@ The user explains the concept as if teaching a peer. Teaching forces retrieval p
 holes show up under your own hand (Learning Science Part 15). A strong explanation is
 also the raw material for a note **contribution** later (the recognition loop, §7).
 
-Single-shot, like ramble: one "explain this" prompt, one judged ``Outcome`` whose
-``feedback`` names what a learner would still be confused about. The LLM judgement is
-isolated behind ``_judge`` for testing.
+Conversational (design note): the "explain this" opener is one turn; a confused-classmate
+persona then probes the gaps ("wait, why does that follow?") until the explanation is
+complete or the student runs dry. The one-shot generate/evaluate stays for run_once / tests
+/ offline — close() grades the whole dialogue, evaluate() grades a single reply, and both
+share ``_grade``. The LLM judgement is isolated behind ``_judge`` for testing.
 """
 
 import json
 from typing import Any
 
 from app.services.llm import call_llm
-from app.services.retrieval.modes import Challenge, ModeContext, Outcome, score_to_grade
+from app.services.retrieval import conversation
+from app.services.retrieval.modes import (
+    Challenge,
+    ConversationTurn,
+    ModeContext,
+    Outcome,
+    TurnResult,
+    join_user_turns,
+    score_to_grade,
+)
+
+_PERSONA = (
+    "Play a curious classmate who's never seen this concept: when their explanation glosses "
+    "over something or leans on a word without unpacking it, that's exactly where you ask why."
+)
 
 
 class TeachMode:
     """Explain a concept to a naive learner; we judge the explanation."""
 
     key = "teach"
+    conversational = True
 
-    async def generate(self, concept, ctx: ModeContext) -> Challenge:
+    async def open(self, concept, ctx: ModeContext) -> Challenge:
         prompt = (
             f"Explain **{concept.text}** as if you're teaching it to a classmate who's "
             "never seen it. Use your own words, and don't skip the parts that are hard "
@@ -31,10 +48,24 @@ class TeachMode:
         )
         return Challenge(concept_id=str(concept.id), prompt=prompt, payload={"teach": True})
 
+    async def generate(self, concept, ctx: ModeContext) -> Challenge:
+        return await self.open(concept, ctx)  # one-shot opener == conversational opener
+
+    async def turn(self, concept, history: list[ConversationTurn], ctx: ModeContext) -> TurnResult:
+        return await conversation.decide_next_turn(
+            concept, history, persona=_PERSONA, task="teach_turn", close_reason="taught_enough",
+        )
+
+    async def close(self, concept, history: list[ConversationTurn], ctx: ModeContext) -> Outcome:
+        return await self._grade(concept, join_user_turns(history), ctx)
+
     async def evaluate(
         self, concept, challenge: Challenge, response: Any, ctx: ModeContext
     ) -> Outcome:
         explanation = response if isinstance(response, str) else (response or {}).get("answer", "")
+        return await self._grade(concept, explanation, ctx)
+
+    async def _grade(self, concept, explanation: str, ctx: ModeContext) -> Outcome:
         if not explanation.strip():
             return Outcome(score=0.0, grade="again", feedback="No explanation yet — teaching it is how it sticks.")
 

@@ -83,3 +83,47 @@ class RetrievalMode(Protocol):
 
     # NOTE: a mode no longer knows about subjects. How strongly a mode suits a subject
     # family lives in ``subject_profiles.PROFILES`` (keyed by mode), not on the mode.
+
+
+# ── Conversational modes (teach · ramble) ──────────────────────────────────────
+# Some modes are a back-and-forth, not one answer: the dialogue IS the retrieval act.
+# They keep the one-shot generate/evaluate above (run_once, offline, tests) AND add the
+# turn loop below. The invariant is unchanged — one FSRS grade committed once, at close.
+
+# A hard ceiling on the back-and-forth, enforced by the driver (not the mode): after this
+# many user turns the mode closes gracefully regardless of how live the thread is.
+MAX_CONVO_TURNS = 7
+
+ROLE_AI = "ai"
+ROLE_USER = "user"
+
+
+@dataclass(frozen=True)
+class ConversationTurn:
+    """One line of a conversational bout — an AI probe or the user's reply."""
+
+    role: str  # ROLE_AI | ROLE_USER
+    text: str
+
+
+@dataclass(frozen=True)
+class TurnResult:
+    """A mode's decision after a user turn: dig with ``reply``, or ``closed`` (grade now)."""
+
+    closed: bool
+    reply: Optional[str] = None          # the next probe, when not closed
+    close_reason: Optional[str] = None   # why we stopped (dug_enough, emptied_out, …)
+
+
+def is_conversational(mode: Any) -> bool:
+    """Whether a mode runs the open/turn/close dialogue loop instead of one-shot."""
+    return bool(getattr(mode, "conversational", False))
+
+
+def user_turns(history: list[ConversationTurn]) -> list[ConversationTurn]:
+    return [t for t in history if t.role == ROLE_USER]
+
+
+def join_user_turns(history: list[ConversationTurn]) -> str:
+    """The user's side of the dialogue as one block — what close() grades over."""
+    return "\n".join(t.text.strip() for t in user_turns(history) if t.text.strip())

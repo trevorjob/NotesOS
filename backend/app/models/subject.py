@@ -16,4 +16,5 @@ class SubjectFamily(str, enum.Enum):
     STEM = "STEM"              # math / science / engineering — worked examples, calibration
     LANGUAGE = "LANGUAGE"      # language acquisition — output-first (speak / produce)
     HUMANITIES = "HUMANITIES"  # reading / argument-heavy — explanation, teaching
+    SOCIAL_SCIENCE = "SOCIAL_SCIENCE"  # theory + evidence — frameworks, studies, applied explanation
     GENERAL = "GENERAL"        # the safe default when nothing more specific fits

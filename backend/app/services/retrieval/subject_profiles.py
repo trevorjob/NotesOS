@@ -30,6 +30,12 @@ RENDER_DEFAULT = "default"
 GRADE_SELF_CALIBRATION = "self_calibration"  # worked-example + predicted-vs-actual (STEM)
 GRADE_AI = "ai"                              # open-answer AI grading
 
+# Modality suitability threshold (docs/listen-audio-plan.md §7): below this, a family's
+# audio isn't worth generating plain — narration can't carry symbol-heavy material the
+# way it carries prose. The UI defers to the worked_example lens (narrating a solved
+# problem's steps still works) or declines audio outright for the default lens.
+AUDIO_SUITABILITY_THRESHOLD = 0.5
+
 # The retrieval modes an affinity is defined over. Kept explicit so a new mode that
 # forgets to register an affinity is caught loudly (see assert_modes_covered).
 # recap + brain_dump are log-level modes (orchestrations, not registry plugins) — two
@@ -45,38 +51,52 @@ class SubjectProfile:
     mode_mix: dict[str, float]  # mode key → affinity 0..1
     render: str
     grading: str
+    audio_suitability: float = 1.0  # 0..1 — how well plain narration carries this family
 
 
 # The family→behaviour map. Weights carry over the exact intent the per-mode strings
 # encoded, now in one auditable table:
-#   STEM       — worked-example (pretest) + self-graded calibration (quiz) lead.
-#   LANGUAGE   — output-first: ramble/teach lead, cued recall (quiz) leans lower.
-#   HUMANITIES — explanation-heavy: teaching leads, ramble close behind.
-#   GENERAL    — balanced; quiz is the safe workhorse.
+#   STEM           — worked-example (pretest) + self-graded calibration (quiz) lead.
+#   LANGUAGE       — output-first: ramble/teach lead, cued recall (quiz) leans lower.
+#   HUMANITIES     — explanation-heavy: teaching leads, ramble close behind.
+#   SOCIAL_SCIENCE — theory+evidence: teach leads, quiz solid (named theories/studies),
+#                    pretest applies frameworks to scenarios.
+#   GENERAL        — balanced; quiz is the safe workhorse.
 PROFILES: dict[SubjectFamily, SubjectProfile] = {
     SubjectFamily.STEM: SubjectProfile(
         family=SubjectFamily.STEM,
         mode_mix={"quiz": 1.0, "pretest": 1.0, "ramble": 0.5, "teach": 0.6, "recap": 0.8, "brain_dump": 0.8},
         render=RENDER_MATH,
         grading=GRADE_SELF_CALIBRATION,
+        audio_suitability=0.3,  # symbol-heavy notation doesn't narrate; worked_example is the exception
     ),
     SubjectFamily.LANGUAGE: SubjectProfile(
         family=SubjectFamily.LANGUAGE,
         mode_mix={"quiz": 0.7, "pretest": 0.6, "ramble": 1.0, "teach": 0.9,  "recap": 0.8, "brain_dump": 0.8},
         render=RENDER_PROSE,
         grading=GRADE_AI,
+        audio_suitability=1.0,  # hearing pronunciation/phrasing is the point
     ),
     SubjectFamily.HUMANITIES: SubjectProfile(
         family=SubjectFamily.HUMANITIES,
         mode_mix={"quiz": 0.8, "pretest": 0.7, "ramble": 0.9, "teach": 1.0, "recap": 1.0, "brain_dump": 1.0},
         render=RENDER_PROSE,
         grading=GRADE_AI,
+        audio_suitability=1.0,
+    ),
+    SubjectFamily.SOCIAL_SCIENCE: SubjectProfile(
+        family=SubjectFamily.SOCIAL_SCIENCE,
+        mode_mix={"quiz": 0.85, "pretest": 0.7, "ramble": 0.9, "teach": 1.0, "recap": 1.0, "brain_dump": 1.0},
+        render=RENDER_PROSE,
+        grading=GRADE_AI,
+        audio_suitability=1.0,
     ),
     SubjectFamily.GENERAL: SubjectProfile(
         family=SubjectFamily.GENERAL,
         mode_mix={"quiz": 1.0, "pretest": 0.7, "ramble": 0.8, "teach": 0.85, "recap": 1.0, "brain_dump": 1.0},
         render=RENDER_DEFAULT,
         grading=GRADE_AI,
+        audio_suitability=0.9,
     ),
 }
 
@@ -89,6 +109,17 @@ def profile_for(family: SubjectFamily) -> SubjectProfile:
 def mode_affinity(family: SubjectFamily, mode_key: str) -> float:
     """How strongly ``mode_key`` suits ``family`` (0..1). Unknown mode → neutral 0.5."""
     return profile_for(family).mode_mix.get(mode_key, 0.5)
+
+
+def is_audio_suitable(family: SubjectFamily) -> bool:
+    """Whether a plain narrated explainer suits this family (docs/listen-audio-plan.md §7).
+
+    Below threshold, the generic "explainer" lenses (default/exam_focused/slower) are
+    withheld — narration can't carry symbol-heavy material the prose lenses assume.
+    worked_example is exempt (narrating solved-problem steps works in audio); personal
+    lenses the user explicitly asked for (user_instruction/remediation) are exempt too.
+    """
+    return profile_for(family).audio_suitability >= AUDIO_SUITABILITY_THRESHOLD
 
 
 def preferred_mode(family: SubjectFamily, candidates: tuple[str, ...]) -> str:

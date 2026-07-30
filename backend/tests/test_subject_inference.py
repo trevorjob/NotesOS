@@ -72,6 +72,15 @@ async def test_synthesis_infers_and_stores_the_family(db_session, monkeypatch):
     assert reloaded.subject_family_overridden is False
 
 
+async def test_synthesis_stores_social_science(db_session, monkeypatch):
+    _install_llm(monkeypatch, family="SOCIAL_SCIENCE")
+    topic = await _seed(db_session)
+
+    await synth.synthesize(str(topic.id), db_session)
+
+    assert (await _reload(db_session, topic.id)).subject_family == SubjectFamily.SOCIAL_SCIENCE
+
+
 async def test_unknown_family_degrades_to_general(db_session, monkeypatch):
     _install_llm(monkeypatch, family="astrology")  # not a real family
     topic = await _seed(db_session)

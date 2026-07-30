@@ -6,11 +6,11 @@ much of the concept they surfaced and where the gaps are. Free recall is a stron
 retrieval event than the cued recall a quiz question gives (Learning Science Parts 3, 9)
 — there's no prompt to lean on, so producing the structure is the work.
 
-Single-shot: one open prompt out of ``generate``, one judged ``Outcome`` out of
-``evaluate`` whose ``feedback`` names the gaps. (Multi-turn Socratic follow-ups are a
-later enhancement — they'd need session state the engine doesn't model.) The response
-is already text here; audio→text transcription is an upstream concern shared by every
-voice mode.
+Conversational (design note): the free-recall opener is one turn, but ramble is a *hybrid*
+— the user dumps, and a curious-friend persona digs into whatever thread has more in it
+("why does that happen? then what?"), stopping when the well runs dry (don't badger). The
+one-shot generate/evaluate stays for run_once / tests / offline — close() grades the whole
+dump-and-dig, evaluate() grades a single dump, and both share ``_grade``.
 
 The LLM call lives behind ``_analyze`` so the mode is testable without a live model.
 """
@@ -19,15 +19,30 @@ import json
 from typing import Any
 
 from app.services.llm import call_llm
-from app.services.retrieval.modes import Challenge, ModeContext, Outcome, score_to_grade
+from app.services.retrieval import conversation
+from app.services.retrieval.modes import (
+    Challenge,
+    ConversationTurn,
+    ModeContext,
+    Outcome,
+    TurnResult,
+    join_user_turns,
+    score_to_grade,
+)
+
+_PERSONA = (
+    "Play a genuinely interested friend pulling the thread: latch onto whatever they just "
+    "said that has more underneath it and ask them to go deeper — mechanisms, consequences, why."
+)
 
 
 class RambleMode:
     """Free recall over a single concept — talk about it, we find the gaps."""
 
     key = "ramble"
+    conversational = True
 
-    async def generate(self, concept, ctx: ModeContext) -> Challenge:
+    async def open(self, concept, ctx: ModeContext) -> Challenge:
         prompt = (
             f"Tell me everything you understand about **{concept.text}** — "
             "in your own words, as much as you can. Don't worry about structure; "
@@ -35,10 +50,24 @@ class RambleMode:
         )
         return Challenge(concept_id=str(concept.id), prompt=prompt, payload={"free_recall": True})
 
+    async def generate(self, concept, ctx: ModeContext) -> Challenge:
+        return await self.open(concept, ctx)  # one-shot opener == conversational opener
+
+    async def turn(self, concept, history: list[ConversationTurn], ctx: ModeContext) -> TurnResult:
+        return await conversation.decide_next_turn(
+            concept, history, persona=_PERSONA, task="ramble_turn", close_reason="ran_dry",
+        )
+
+    async def close(self, concept, history: list[ConversationTurn], ctx: ModeContext) -> Outcome:
+        return await self._grade(concept, join_user_turns(history), ctx)
+
     async def evaluate(
         self, concept, challenge: Challenge, response: Any, ctx: ModeContext
     ) -> Outcome:
         said = response if isinstance(response, str) else (response or {}).get("answer", "")
+        return await self._grade(concept, said, ctx)
+
+    async def _grade(self, concept, said: str, ctx: ModeContext) -> Outcome:
         if not said.strip():
             # Nothing recalled — a blank is a lapse, not a zero to be graded around.
             return Outcome(score=0.0, grade="again", feedback="Nothing came out this time — that's the gap to close.")

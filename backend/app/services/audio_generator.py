@@ -7,12 +7,12 @@ Generates conversational audio lessons from TopicKnowledge using:
 """
 
 import json
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import httpx
 
 from app.config import settings
-from app.models.knowledge import TopicKnowledge
+from app.models.knowledge import AudioLens, TopicKnowledge
 from app.services.storage import storage_service
 from app.services.llm import call_llm
 from app.core.logging import get_logger
@@ -24,18 +24,110 @@ logger = get_logger(__name__)
 _MP3_BYTES_PER_SECOND = 16_000
 
 
+def _concept_focus_directive(concept_focus: Optional[Dict[str, Any]]) -> str:
+    """A personal concept-scoped request narrows the lesson to one concept (docs/
+    listen-audio-plan.md §3) — empty string (no-op) when the request is topic-scoped."""
+    if not concept_focus:
+        return ""
+    term = concept_focus.get("term", "")
+    definition = concept_focus.get("definition") or ""
+    focus = f"{term} — {definition}" if definition else term
+    return f"""
+
+SCOPE — ONE CONCEPT, NOT THE WHOLE TOPIC:
+The listener asked specifically about {focus}. Use the rest of the note only as supporting
+context; don't survey the whole topic. Stay on this concept until it's genuinely landed, then
+stop — don't pad outward to cover more ground."""
+
+
+# Lens directives (docs/listen-audio-plan.md §1/§3) — guidance, not a rigid script, per the
+# generative-prompt principle (B13): each nudges judgment in a direction, it doesn't hand the
+# model a template to fill in. DEFAULT has no directive — it's today's prompt, untouched.
+_LENS_DIRECTIVES: Dict[AudioLens, str] = {
+    AudioLens.EXAM_FOCUSED: """
+
+LENS — EXAM-FOCUSED:
+The listener is reviewing for an exam, not meeting this material for the first time. Lead with
+what's actually testable: the distinctions examiners like to probe, the definitions that get
+confused with each other, the edge cases. Skip color and motivation the exam won't ask about.""",
+    AudioLens.SLOWER: """
+
+LENS — SLOWER PACE:
+The listener wants this to actually sink in, not move fast. Take longer per idea: more restating
+in different words, more worked-through reasoning, longer [PAUSE] recall gaps. Simpler sentences.
+Cover less ground overall rather than rushing to fit everything in.""",
+    AudioLens.WORKED_EXAMPLE: """
+
+LENS — WORKED EXAMPLE:
+Narrate an actual worked example from the material step by step — the reasoning at each step, not
+just the answer — rather than describing the concept in the abstract. If the material has a
+concrete problem or calculation, walk through solving it out loud; this is the version built for
+material that doesn't land as pure prose.""",
+}
+
+
+def _instruction_directive(instruction: Optional[str]) -> str:
+    """The user's own free-text ask for a personal request — empty when there isn't one."""
+    if not instruction:
+        return ""
+    return f"""
+
+WHAT THE LISTENER SPECIFICALLY ASKED FOR:
+"{instruction}"
+Shape the lesson around this ask while staying accurate to the material above — don't ignore it,
+and don't invent material the notes don't support."""
+
+
+def _remediation_directive(wrong_answers: Optional[list]) -> str:
+    """Remediation (docs/listen-audio-plan.md §6) grounds itself in the listener's actual
+    misses rather than re-explaining the concept generically. Falls back to a softer
+    directive if the attempt log somehow has nothing usable (still better than silence)."""
+    if not wrong_answers:
+        return """
+
+LENS — REMEDIATION:
+The listener has struggled with this concept before. Don't generically re-explain it — lead
+with the misconception that's easy to fall into here and why, then rebuild from there."""
+
+    lines = "\n".join(
+        f'- Asked: "{qa["question"]}" — they answered: "{qa["your_answer"]}"' for qa in wrong_answers
+    )
+    return f"""
+
+LENS — REMEDIATION:
+The listener has specifically gotten this wrong before:
+{lines}
+Don't generically re-explain the concept from scratch — start from what they actually got
+wrong and why that answer is wrong, then rebuild the correct understanding from there. This is
+a targeted fix for a specific misunderstanding, not a survey of the topic."""
+
+
 class AudioGenerator:
     """Generate TTS audio lessons from consolidated topic knowledge."""
 
     def __init__(self):
         self.openai_api_key = settings.OPENAI_API_KEY
 
-    async def generate_script(self, knowledge: TopicKnowledge, topic_name: str) -> str:
+    async def generate_script(
+        self,
+        knowledge: TopicKnowledge,
+        topic_name: str,
+        *,
+        lens: AudioLens = AudioLens.DEFAULT,
+        concept_focus: Optional[Dict[str, Any]] = None,
+        instruction: Optional[str] = None,
+        wrong_answers: Optional[list] = None,
+    ) -> str:
         """
         Convert a consolidated note into a spoken, conversational audio script.
 
         Format follows the memory-loop pattern:
           concept → explanation → example → question → pause → answer
+
+        ``lens``/``concept_focus``/``instruction`` are personal-request additions
+        (docs/listen-audio-plan.md Phase 1) layered onto the base prompt as directives,
+        never templates — the default lens with no concept/instruction produces the
+        exact same prompt this always has.
         """
         prompt = f"""You are writing a spoken audio lesson a student listens to while walking or
 commuting — ears only, nothing on screen. Your job is to make THIS material actually stick in
@@ -90,7 +182,15 @@ SPOKEN-WORD RULES (real constraints, not style):
 
 Before you finish, check your own script: does the opening come from THIS topic specifically, or
 could it head any lesson? Is any stretch running on autopilot — a predictable loop, a filler
-transition, a recall question asked out of habit? If so, rewrite that part.
+transition, a recall question asked out of habit? If so, rewrite that part."""
+
+        prompt += _concept_focus_directive(concept_focus)
+        if lens == AudioLens.REMEDIATION:
+            prompt += _remediation_directive(wrong_answers)
+        else:
+            prompt += _LENS_DIRECTIVES.get(lens, "")
+        prompt += _instruction_directive(instruction)
+        prompt += """
 
 Return ONLY the script — start straight in with the first line, no title, no label."""
 
@@ -138,6 +238,27 @@ Return ONLY the script — start straight in with the first line, no title, no l
                 parts.append(response.content)
             return b"".join(parts)
 
+    async def stream_speech(self, text: str, voice: str = "nova"):
+        """Stream MP3 audio for a short text — yields bytes as OpenAI produces them.
+
+        For the real-time probe voice-out (conversational modes): playback can start before
+        the whole clip is done, no server-side buffering. Single-shot (no sentence chunking) —
+        callers bound the length.
+        """
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            async with client.stream(
+                "POST",
+                "https://api.openai.com/v1/audio/speech",
+                headers={
+                    "Authorization": f"Bearer {self.openai_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={"model": "tts-1", "input": text, "voice": voice, "response_format": "mp3"},
+            ) as response:
+                response.raise_for_status()
+                async for chunk in response.aiter_bytes():
+                    yield chunk
+
     @staticmethod
     def _chunk_script(text: str, limit: int = 4000) -> list[str]:
         """Split text into chunks ≤ limit chars, breaking at sentence boundaries."""
@@ -162,10 +283,14 @@ Return ONLY the script — start straight in with the first line, no title, no l
         return chunks
 
     async def upload_audio(
-        self, audio_bytes: bytes, topic_id: str
+        self, audio_bytes: bytes, artifact_id: str
     ) -> Tuple[str, int]:
         """
         Upload MP3 bytes to Cloudinary.
+
+        Keyed by ``artifact_id`` (not scope_ref/topic_id) — a topic can now have several
+        artifacts (global default + personal lens requests), and keying by topic would
+        make concurrent generations overwrite each other's file at the same public_id.
 
         Returns:
             (audio_url, duration_seconds)
@@ -174,7 +299,7 @@ Return ONLY the script — start straight in with the first line, no title, no l
             file=audio_bytes,
             folder="audio_lessons",
             resource_type="raw",
-            public_id=f"topic_{topic_id}.mp3",
+            public_id=f"audio_{artifact_id}.mp3",
         )
         url = result["url"]
         # Estimate duration from file size

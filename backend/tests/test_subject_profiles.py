@@ -42,7 +42,15 @@ def test_stem_profile_is_worked_example_plus_self_graded():
 def test_non_stem_families_grade_with_ai():
     assert profile_for(SubjectFamily.LANGUAGE).grading == GRADE_AI
     assert profile_for(SubjectFamily.HUMANITIES).grading == GRADE_AI
+    assert profile_for(SubjectFamily.SOCIAL_SCIENCE).grading == GRADE_AI
     assert profile_for(SubjectFamily.GENERAL).grading == GRADE_AI
+
+
+def test_social_science_leads_on_teaching_and_holds_recall():
+    ss = profile_for(SubjectFamily.SOCIAL_SCIENCE)
+    # Explanation-forward like humanities, but cued recall stays solid (named theories/studies).
+    assert preferred_mode(SubjectFamily.SOCIAL_SCIENCE, ("quiz", "teach", "ramble")) == "teach"
+    assert ss.mode_mix["quiz"] > mode_affinity(SubjectFamily.HUMANITIES, "quiz")
 
 
 def test_mode_affinity_is_family_specific():

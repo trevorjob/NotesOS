@@ -8,19 +8,23 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import get_current_user
 from app.database import get_db
 from app.models.course import CourseEnrollment, Topic
-from app.models.knowledge import AudioLesson, KnowledgeStatus, TopicKnowledge
+from app.models.knowledge import AudioArtifact, AudioLens, AudioScopeType, KnowledgeStatus, TopicKnowledge
 from app.models.resource import Resource
 from app.models.retrieval import Concept, ConceptState
+from app.models.subject import SubjectFamily
 from app.models.user import User
 from app.models.consume import ConsumeEvent, ConsumeKind
+from app.services.audio_credits import can_generate
 from app.services.redis_client import redis_client
 from app.services.retrieval.recognition import record_consume
+from app.services.retrieval.remediation import weakest_concepts
 from app.services.retrieval.scheduler import (
     MASTERY_FADING,
     MASTERY_NEW,
@@ -28,6 +32,7 @@ from app.services.retrieval.scheduler import (
     MASTERY_SOLID,
     derive_mastery,
 )
+from app.services.retrieval.subject_profiles import is_audio_suitable
 from app.services.synthesis_debounce import schedule_synthesis
 
 router = APIRouter()
@@ -79,19 +84,58 @@ def _knowledge_response(k: TopicKnowledge) -> Dict[str, Any]:
     }
 
 
-def _audio_response(a: AudioLesson) -> Dict[str, Any]:
+def _audio_response(a: AudioArtifact, *, audio_suitable: bool) -> Dict[str, Any]:
     return {
         "id": str(a.id),
-        "topic_id": str(a.topic_id),
-        "knowledge_id": str(a.knowledge_id),
+        "scope_type": a.scope_type.value,
+        "scope_ref": str(a.scope_ref),
+        "knowledge_id": str(a.knowledge_id) if a.knowledge_id else None,
+        "lens": a.lens.value,
+        "owner_id": str(a.owner_id) if a.owner_id else None,
         "status": a.status.value,
         "audio_url": a.audio_url,
         "duration_seconds": a.duration_seconds,
         "voice": a.voice,
         "error_message": a.error_message,
+        "stale": a.stale,
+        "audio_suitable": audio_suitable,
         "generated_at": a.generated_at.isoformat() if a.generated_at else None,
         "updated_at": a.updated_at.isoformat(),
     }
+
+
+def _audio_pending_stub(scope_type: str, scope_ref: str, lens: str, *, audio_suitable: bool) -> Dict[str, Any]:
+    return {
+        "id": None,
+        "scope_type": scope_type,
+        "scope_ref": scope_ref,
+        "knowledge_id": None,
+        "lens": lens,
+        "owner_id": None,
+        "status": "pending",
+        "audio_url": None,
+        "duration_seconds": None,
+        "voice": "nova",
+        "error_message": None,
+        "stale": False,
+        "audio_suitable": audio_suitable,
+        "generated_at": None,
+        "updated_at": None,
+    }
+
+
+async def _scope_subject_family(db: AsyncSession, scope_type_enum: AudioScopeType, scope_ref) -> SubjectFamily:
+    """The family behind a scope (docs/listen-audio-plan.md §7) — concepts inherit
+    their topic's family; course/concept_cluster scopes have no consumer yet."""
+    if scope_type_enum == AudioScopeType.TOPIC:
+        family = await db.scalar(select(Topic.subject_family).where(Topic.id == scope_ref))
+    elif scope_type_enum == AudioScopeType.CONCEPT:
+        family = await db.scalar(
+            select(Topic.subject_family).join(Concept, Concept.topic_id == Topic.id).where(Concept.id == scope_ref)
+        )
+    else:
+        family = None
+    return family or SubjectFamily.GENERAL
 
 
 # =============================================================================
@@ -198,6 +242,31 @@ async def get_topic_concept_states(
     return {"topic_id": str(topic.id), "concepts": concepts, "summary": summary}
 
 
+@router.get("/topics/{topic_id}/weak-concepts")
+async def get_topic_weak_concepts(
+    topic_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    The caller's shakiest concepts within this topic (docs/listen-audio-plan.md §6) — the
+    remediation-suggestion candidates, most-lapsed first. Surface-agnostic: whatever UI
+    shows "you keep missing X, want a breakdown?" reads this list and, on accept, fires
+    POST /audio/request with scope_type=concept, lens=remediation for the chosen concept.
+    """
+    topic = await _get_topic_or_404(topic_id, db)
+    await _assert_enrolled(db, current_user.id, topic.course_id)
+
+    concepts = await weakest_concepts(db, user_id=current_user.id, topic_id=topic.id)
+
+    return {
+        "topic_id": str(topic.id),
+        "concepts": [
+            {"concept_id": str(c.id), "term": c.text, "definition": c.definition} for c in concepts
+        ],
+    }
+
+
 # A note read records a NOTE_VIEW on every knowledge GET, so "new since you last read" must
 # ignore the current open — exclude views inside this grace window as "this session".
 _READ_GRACE_SECONDS = 15
@@ -300,71 +369,120 @@ async def regenerate_topic_knowledge(
 
 # =============================================================================
 # Audio endpoints
+#
+# Generalized over (scope_type, scope_ref, lens, owner) per docs/listen-audio-plan.md.
+# course/concept_cluster scopes still aren't wired to a generation path and are
+# rejected with a 400 rather than silently no-op'd. The generic "explainer" lenses
+# (default/exam_focused/slower) are further gated by a scope's audio_suitability
+# (§7) — worked_example and the personal user_instruction/remediation lenses aren't.
 # =============================================================================
 
+_VALID_SCOPE_TYPES = {s.value for s in AudioScopeType}
 
-@router.get("/topics/{topic_id}/audio")
-async def get_topic_audio(
-    topic_id: str,
+# Lenses that are just angles on the same narrated note as the default explainer —
+# gated by audio_suitability alongside it (docs/listen-audio-plan.md §7). worked_example
+# (narrates solved-problem steps) and the personal user_instruction/remediation lenses
+# (the caller explicitly asked for them) are never gated.
+_GENERIC_EXPLAINER_LENSES = {AudioLens.EXAM_FOCUSED, AudioLens.SLOWER}
+
+
+@router.get("/audio/{scope_type}/{scope_ref}")
+async def get_audio_artifact(
+    scope_type: str,
+    scope_ref: str,
+    lens: str = "default",
+    owner: str = "global",
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
-    Get the latest audio lesson for a topic.
-    Returns the most recently completed or in-progress lesson.
+    Latest audio artifact for a scope + lens (``owner=global`` for the shared
+    default, ``owner=me`` for the caller's own personal/lens requests).
+    Returns a "pending" stub if nothing has been generated yet.
     """
-    topic = await _get_topic_or_404(topic_id, db)
-    await _assert_enrolled(db, current_user.id, topic.course_id)
+    if scope_type not in _VALID_SCOPE_TYPES:
+        raise HTTPException(status_code=400, detail=f"Unknown scope_type '{scope_type}'")
+    try:
+        lens_enum = AudioLens(lens)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Unknown lens '{lens}'")
+    if owner not in ("global", "me"):
+        raise HTTPException(status_code=400, detail="owner must be 'global' or 'me'")
 
-    # Return the latest audio lesson (most recently created)
+    scope_ref_uuid = uuid.UUID(scope_ref)
+    scope_type_enum = AudioScopeType(scope_type)
+
+    if scope_type_enum == AudioScopeType.TOPIC:
+        topic = await _get_topic_or_404(scope_ref, db)
+        await _assert_enrolled(db, current_user.id, topic.course_id)
+    elif scope_type_enum == AudioScopeType.CONCEPT:
+        concept_result = await db.execute(select(Concept).where(Concept.id == scope_ref_uuid))
+        concept = concept_result.scalar_one_or_none()
+        if not concept:
+            raise HTTPException(status_code=404, detail="Concept not found")
+        await _assert_enrolled(db, current_user.id, concept.course_id)
+
+    owner_filter = (
+        AudioArtifact.owner_id.is_(None) if owner == "global" else AudioArtifact.owner_id == current_user.id
+    )
     result = await db.execute(
-        select(AudioLesson)
-        .where(AudioLesson.topic_id == uuid.UUID(topic_id))
-        .order_by(AudioLesson.created_at.desc())
+        select(AudioArtifact)
+        .where(
+            AudioArtifact.scope_type == scope_type_enum,
+            AudioArtifact.scope_ref == scope_ref_uuid,
+            AudioArtifact.lens == lens_enum,
+            owner_filter,
+        )
+        .order_by(AudioArtifact.created_at.desc())
         .limit(1)
     )
-    lesson = result.scalar_one_or_none()
+    artifact = result.scalar_one_or_none()
 
-    if not lesson:
-        return {
-            "id": None,
-            "topic_id": topic_id,
-            "knowledge_id": None,
-            "status": "pending",
-            "audio_url": None,
-            "duration_seconds": None,
-            "voice": "nova",
-            "error_message": None,
-            "generated_at": None,
-            "updated_at": None,
-        }
+    family = await _scope_subject_family(db, scope_type_enum, scope_ref_uuid)
+    suitable = is_audio_suitable(family)
 
-    response = _audio_response(lesson)
-    # Passive consume (§11): fetching a ready lesson is the server-side listen signal.
-    if lesson.audio_url:
+    if not artifact:
+        return _audio_pending_stub(scope_type, scope_ref, lens_enum.value, audio_suitable=suitable)
+
+    response = _audio_response(artifact, audio_suitable=suitable)
+    # Passive consume (§11): fetching a ready artifact is the server-side listen signal.
+    if artifact.audio_url and scope_type == AudioScopeType.TOPIC.value:
         await record_consume(
-            db, actor_id=current_user.id, topic_id=topic.id, kind=ConsumeKind.AUDIO_LISTEN
+            db, actor_id=current_user.id, topic_id=scope_ref_uuid, kind=ConsumeKind.AUDIO_LISTEN
         )
     return response
 
 
-@router.post("/topics/{topic_id}/audio/regenerate", status_code=status.HTTP_202_ACCEPTED)
-async def regenerate_topic_audio(
-    topic_id: str,
+@router.post("/audio/{scope_type}/{scope_ref}/regenerate", status_code=status.HTTP_202_ACCEPTED)
+async def regenerate_audio_artifact(
+    scope_type: str,
+    scope_ref: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
-    Manually trigger audio re-generation for a topic.
-    Requires knowledge to be in completed state first.
-    Enqueues an audio job and returns 202 Accepted.
+    Trigger regeneration of the shared global default artifact for a scope.
+    Requires the scope's knowledge to be synthesized first. Enqueues an audio
+    job and returns 202 Accepted.
     """
-    topic = await _get_topic_or_404(topic_id, db)
+    if scope_type != AudioScopeType.TOPIC.value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Audio generation for scope '{scope_type}' isn't available yet",
+        )
+
+    topic = await _get_topic_or_404(scope_ref, db)
     await _assert_enrolled(db, current_user.id, topic.course_id)
 
-    # Verify knowledge exists and is completed
+    if not is_audio_suitable(topic.subject_family):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="This topic doesn't suit a narrated overview — request the worked_example "
+                   "lens via POST /audio/request instead, or read the note directly.",
+        )
+
     result = await db.execute(
-        select(TopicKnowledge).where(TopicKnowledge.topic_id == uuid.UUID(topic_id))
+        select(TopicKnowledge).where(TopicKnowledge.topic_id == topic.id)
     )
     knowledge = result.scalar_one_or_none()
 
@@ -379,9 +497,125 @@ async def regenerate_topic_audio(
         "audio",
         {
             "knowledge_id": str(knowledge.id),
-            "topic_id": topic_id,
+            "topic_id": scope_ref,
             "course_id": str(topic.course_id),
         },
     )
 
     return {"message": "Audio generation queued", "job_id": job_id}
+
+
+class AudioRequestBody(BaseModel):
+    scope_type: str
+    scope_ref: uuid.UUID
+    lens: str
+    instruction: Optional[str] = Field(default=None, max_length=2000)
+
+
+@router.post("/audio/request", status_code=status.HTTP_202_ACCEPTED)
+async def request_audio_artifact(
+    body: AudioRequestBody,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Request a personal audio artifact — a specific lens over a scope, optionally with
+    the caller's own instruction (Phase 1, docs/listen-audio-plan.md §4).
+
+    Personal artifacts are never deduped/reused (§1) — every call creates a fresh row
+    and enqueues a fresh job, unlike the shared global artifact.
+    """
+    if body.scope_type not in _VALID_SCOPE_TYPES:
+        raise HTTPException(status_code=400, detail=f"Unknown scope_type '{body.scope_type}'")
+    try:
+        lens_enum = AudioLens(body.lens)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Unknown lens '{body.lens}'")
+
+    if lens_enum == AudioLens.DEFAULT:
+        raise HTTPException(
+            status_code=400,
+            detail="The default lens is the free shared lesson — fetch it with GET instead of requesting it.",
+        )
+    if lens_enum == AudioLens.USER_INSTRUCTION and not body.instruction:
+        raise HTTPException(status_code=400, detail="The user_instruction lens requires an instruction")
+    if lens_enum != AudioLens.USER_INSTRUCTION and body.instruction:
+        raise HTTPException(status_code=400, detail="instruction is only used with the user_instruction lens")
+
+    scope_type_enum = AudioScopeType(body.scope_type)
+    if lens_enum == AudioLens.REMEDIATION and scope_type_enum != AudioScopeType.CONCEPT:
+        raise HTTPException(
+            status_code=400, detail="Remediation audio is scoped to a single concept — pass scope_type=concept"
+        )
+
+    topic = None
+    concept = None
+    subject_family = SubjectFamily.GENERAL
+
+    if scope_type_enum == AudioScopeType.TOPIC:
+        topic = await _get_topic_or_404(str(body.scope_ref), db)
+        await _assert_enrolled(db, current_user.id, topic.course_id)
+        knowledge_result = await db.execute(
+            select(TopicKnowledge).where(TopicKnowledge.topic_id == topic.id)
+        )
+        knowledge = knowledge_result.scalar_one_or_none()
+        course_id = topic.course_id
+        subject_family = topic.subject_family
+    elif scope_type_enum == AudioScopeType.CONCEPT:
+        concept_result = await db.execute(select(Concept).where(Concept.id == body.scope_ref))
+        concept = concept_result.scalar_one_or_none()
+        if not concept:
+            raise HTTPException(status_code=404, detail="Concept not found")
+        await _assert_enrolled(db, current_user.id, concept.course_id)
+        knowledge_result = await db.execute(
+            select(TopicKnowledge).where(TopicKnowledge.topic_id == concept.topic_id)
+        )
+        knowledge = knowledge_result.scalar_one_or_none()
+        course_id = concept.course_id
+        subject_family = await _scope_subject_family(db, scope_type_enum, concept.id)
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Audio generation for scope '{body.scope_type}' isn't available yet",
+        )
+
+    if lens_enum in _GENERIC_EXPLAINER_LENSES and not is_audio_suitable(subject_family):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="This scope doesn't suit a narrated overview — try the worked_example lens instead.",
+        )
+
+    if not knowledge or knowledge.status != KnowledgeStatus.COMPLETED:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="This topic's knowledge must be synthesized before generating audio.",
+        )
+
+    decision = can_generate(
+        owner_id=current_user.id, scope_type=scope_type_enum, scope_ref=body.scope_ref, lens=lens_enum,
+    )
+    if not decision.allow:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED, detail=decision.reason or "Not enough credits"
+        )
+
+    artifact = AudioArtifact(
+        scope_type=scope_type_enum,
+        scope_ref=body.scope_ref,
+        knowledge_id=knowledge.id,
+        lens=lens_enum,
+        instruction=body.instruction,
+        owner_id=current_user.id,
+        cost_credits=decision.cost,
+        status=KnowledgeStatus.PENDING,
+    )
+    db.add(artifact)
+    await db.commit()
+    await db.refresh(artifact)
+
+    job_id = await redis_client.enqueue_job(
+        "audio",
+        {"artifact_id": str(artifact.id), "course_id": str(course_id)},
+    )
+
+    return {"message": "Audio generation queued", "job_id": job_id, "artifact_id": str(artifact.id)}

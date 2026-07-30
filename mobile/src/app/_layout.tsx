@@ -13,8 +13,9 @@ import { ThemeProvider } from '@/theme/ThemeProvider';
 
 SplashScreen.preventAutoHideAsync();
 
-// Screens where the global nav FAB doesn't apply yet — there's no "home" to jump to.
-const NAV_FAB_HIDDEN_ROUTES = ['/login', '/onboarding', '/contacts', '/'];
+// Screens where the global "study now" FAB doesn't apply: pre-auth/onboarding (no home yet),
+// and the retrieval screen itself (you're already studying — the FAB would overlap it).
+const NAV_FAB_HIDDEN_ROUTES = ['/login', '/onboarding', '/contacts', '/', '/retrieval', '/practice-test'];
 
 function GlobalNav() {
   const pathname = usePathname();
@@ -48,6 +49,7 @@ export default function RootLayout() {
               <Stack.Screen name="voice" />
               <Stack.Screen name="capture" options={{ presentation: 'modal' }} />
               <Stack.Screen name="testbuilder" options={{ presentation: 'modal' }} />
+              <Stack.Screen name="practice-test" />
               <Stack.Screen name="courses" />
               <Stack.Screen name="topics" />
               <Stack.Screen name="coursecreate" options={{ presentation: 'modal' }} />

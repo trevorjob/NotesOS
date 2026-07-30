@@ -166,9 +166,9 @@ class Topic(Base):
     knowledge = relationship(
         "TopicKnowledge", back_populates="topic", uselist=False, cascade="all, delete-orphan"
     )
-    audio_lessons = relationship(
-        "AudioLesson", back_populates="topic", cascade="all, delete-orphan"
-    )
+    # No ORM relationship to AudioArtifact: scope_ref is polymorphic (topic/concept/
+    # course/cluster), so it carries no FK to topics.id. delete_topic() in
+    # api/topics.py explicitly deletes matching artifacts instead.
 
 
 class CourseOutline(Base):

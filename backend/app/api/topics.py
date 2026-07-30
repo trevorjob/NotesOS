@@ -8,12 +8,12 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models.course import Course, Topic, CourseEnrollment
-from app.models.knowledge import AudioLesson, KnowledgeStatus, TopicKnowledge
+from app.models.knowledge import AudioArtifact, AudioScopeType, KnowledgeStatus, TopicKnowledge
 from app.models.progress import UserProgress
 from app.api.auth import get_current_user
 from app.models.user import User
@@ -190,11 +190,16 @@ async def get_topic(
     )
     knowledge = knowledge_result.scalar_one_or_none()
 
-    # Fetch latest audio lesson status
+    # Fetch latest audio artifact status — the shared global/default one, which is
+    # what this course-wide "does this topic have audio" summary means.
     audio_result = await db.execute(
-        select(AudioLesson)
-        .where(AudioLesson.topic_id == topic.id)
-        .order_by(AudioLesson.created_at.desc())
+        select(AudioArtifact)
+        .where(
+            AudioArtifact.scope_type == AudioScopeType.TOPIC,
+            AudioArtifact.scope_ref == topic.id,
+            AudioArtifact.owner_id.is_(None),
+        )
+        .order_by(AudioArtifact.created_at.desc())
         .limit(1)
     )
     audio = audio_result.scalar_one_or_none()
@@ -265,6 +270,14 @@ async def delete_topic(
     course_id = str(topic.course_id)
     await _assert_enrolled(db, current_user.id, course_id)
 
+    # AudioArtifact.scope_ref is polymorphic (topic/concept/course/cluster), so it
+    # carries no FK to topics.id — clean up matching artifacts explicitly.
+    await db.execute(
+        delete(AudioArtifact).where(
+            AudioArtifact.scope_type == AudioScopeType.TOPIC,
+            AudioArtifact.scope_ref == topic.id,
+        )
+    )
     await db.delete(topic)
     await db.commit()
 

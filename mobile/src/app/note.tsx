@@ -5,10 +5,13 @@ import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useTheme } from '@/theme/ThemeProvider';
 import { Button } from '@/components/ui/Button';
 import { Sheet } from '@/components/ui/Sheet';
+import { Textarea } from '@/components/ui/Textarea';
 import { useQuickSwitcher } from '@/components/nav/QuickSwitcherContext';
 import { AITutorChat } from '@/components/note/AITutorChat';
 import { buildConceptIndex, LitText, NoteMarkdown } from '@/components/note/NoteMarkdown';
 import { stateColor, stateLabel } from '@/components/note/mastery';
+import { WeakConceptSuggestion } from '@/components/note/WeakConceptSuggestion';
+import { NoteStudyPrompt } from '@/components/note/NoteStudyPrompt';
 import { ReportSheet } from '@/components/report/ReportSheet';
 import { CourseTopic, fetchCourseTopics } from '@/lib/topics';
 import {
@@ -186,6 +189,16 @@ export default function NoteScreen() {
     router.push({ pathname: '/retrieval', params: { concept, conceptId, conceptState: state, topicId, courseId } });
   };
 
+  const explainConceptMyWay = (instruction: string) => {
+    if (!sheet) return;
+    const { concept, conceptId } = sheet;
+    setSheet(null);
+    router.push({
+      pathname: '/listen',
+      params: { conceptId, conceptTerm: concept, instruction, topicId, courseId },
+    });
+  };
+
   const conceptIndex = useMemo(() => buildConceptIndex(states?.concepts ?? []), [states]);
 
   // Prefer the sibling title (stable + instant on paging) over the per-topic fetch.
@@ -259,6 +272,8 @@ export default function NoteScreen() {
               </View>
             )}
 
+            {note && <WeakConceptSuggestion topicId={topicId} courseId={courseId} />}
+
             <View style={{ paddingHorizontal: 20 }}>
               {isEmpty ? (
                 <View style={{ paddingVertical: 48, alignItems: 'center', gap: 12 }}>
@@ -329,6 +344,8 @@ export default function NoteScreen() {
                       Built from {knowledge.source_count} {knowledge.source_count === 1 ? 'source' : 'sources'}
                     </Text>
                   ) : null}
+
+                  {topicId && <NoteStudyPrompt topicId={topicId} courseId={courseId} />}
                 </>
               ) : null}
             </View>
@@ -337,7 +354,12 @@ export default function NoteScreen() {
       </ScrollView>
 
       {sheet && (
-        <RetrievalSheet selection={sheet} onClose={() => setSheet(null)} onStart={startRetrieval} />
+        <RetrievalSheet
+          selection={sheet}
+          onClose={() => setSheet(null)}
+          onStart={startRetrieval}
+          onExplainMyWay={explainConceptMyWay}
+        />
       )}
 
       <Sheet open={showProvenance} onClose={() => setShowProvenance(false)} title="Says who?">
@@ -373,11 +395,44 @@ export default function NoteScreen() {
   );
 }
 
-function RetrievalSheet({ selection, onClose, onStart }: { selection: SheetSelection; onClose: () => void; onStart: () => void }) {
+function RetrievalSheet({
+  selection,
+  onClose,
+  onStart,
+  onExplainMyWay,
+}: {
+  selection: SheetSelection;
+  onClose: () => void;
+  onStart: () => void;
+  onExplainMyWay: (instruction: string) => void;
+}) {
   const { c, font, size } = useTheme();
   const { concept, state } = selection;
   const label = stateLabel(state);
   const color = stateColor(c, state);
+  const [asking, setAsking] = useState(false);
+  const [instruction, setInstruction] = useState('');
+
+  if (asking) {
+    return (
+      <Sheet open onClose={onClose} title={`Explain: ${concept}`}>
+        <Textarea
+          label="What do you want explained?"
+          placeholder="e.g. focus on why this happens, not just what it is"
+          value={instruction}
+          onChangeText={setInstruction}
+          rows={3}
+        />
+        <Button
+          label="Generate audio"
+          onPress={() => onExplainMyWay(instruction.trim())}
+          disabled={!instruction.trim()}
+          style={{ width: '100%', marginTop: 14 }}
+        />
+        <Button label="Back" variant="text" onPress={() => setAsking(false)} style={{ width: '100%', marginTop: 10 }} />
+      </Sheet>
+    );
+  }
 
   return (
     <Sheet open onClose={onClose} title={`Retrieve: ${concept}`}>
@@ -391,6 +446,7 @@ function RetrievalSheet({ selection, onClose, onStart }: { selection: SheetSelec
         {`In your own words: what does ${concept} actually do, and how does it connect to the rest of the topic?`}
       </Text>
       <Button label="Start retrieval" onPress={onStart} style={{ width: '100%' }} />
+      <Button label="Explain this my way" variant="secondary" onPress={() => setAsking(true)} style={{ width: '100%', marginTop: 10 }} />
       <Button label="Back to reading" variant="text" onPress={onClose} style={{ width: '100%', marginTop: 10 }} />
     </Sheet>
   );

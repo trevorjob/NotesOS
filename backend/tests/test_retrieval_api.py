@@ -16,7 +16,7 @@ from app.models import Concept, Course, Topic
 from app.models.course import CourseEnrollment
 from app.services.redis_client import redis_client
 from app.services.retrieval import registry
-from app.services.retrieval.modes import Challenge, Outcome
+from app.services.retrieval.modes import Challenge, Outcome, TurnResult, user_turns
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -95,6 +95,7 @@ async def test_next_then_attempt_happy_path(client, register_user, seeded, stub_
     body = nxt.json()
     assert body["mode"] == "stubapi"
     assert body["concept_id"] == str(concept.id)
+    assert body["concept_text"] == "Photosynthesis"  # labels a continuous session
     assert body["challenge_id"]
     # Answer key must not leak to the client.
     assert "correct_answer" not in body["payload"]
@@ -256,3 +257,225 @@ async def test_next_action_enrollment_gate(client, register_user):
         f"/api/retrieval/next-action?course_id={uuid.uuid4()}", headers=user["headers"]
     )
     assert resp.status_code == 403
+
+
+async def test_session_summary_null_without_a_session(client, register_user, seeded):
+    """No attempts yet → null (the client shows no warm close)."""
+    user = await register_user()
+    await seeded(user["id"])
+    resp = await client.get("/api/retrieval/session-summary", headers=user["headers"])
+    assert resp.status_code == 200
+    assert resp.json() is None
+
+
+async def test_session_summary_after_an_attempt(client, register_user, seeded, stub_mode):
+    """A completed attempt surfaces in the warm close, with its calibration delta."""
+    user = await register_user()
+    _, concept = await seeded(user["id"])
+    nxt = await client.post(
+        "/api/retrieval/next", headers=user["headers"],
+        json={"mode": "stubapi", "concept_id": str(concept.id)},
+    )
+    await client.post(
+        "/api/retrieval/attempt", headers=user["headers"],
+        json={"challenge_id": nxt.json()["challenge_id"], "response": "A", "predicted_confidence": 0.3},
+    )
+
+    resp = await client.get("/api/retrieval/session-summary", headers=user["headers"])
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["attempt_count"] == 1
+    assert body["concept_count"] == 1
+    assert [c["concept_id"] for c in body["firmed"]] == [str(concept.id)]
+    assert body["firmed"][0]["concept_text"] == "Photosynthesis"
+    # Predicted 0.3, scored 1.0 → underconfident.
+    assert body["predicted_count"] == 1
+    assert body["calibration_label"] == "underconfident"
+
+
+async def test_session_summary_enrollment_gate(client, register_user):
+    """Scoping to a course the user isn't in is rejected."""
+    user = await register_user()
+    resp = await client.get(
+        f"/api/retrieval/session-summary?course_id={uuid.uuid4()}", headers=user["headers"]
+    )
+    assert resp.status_code == 403
+
+
+# ── Conversational modes (/turn) ────────────────────────────────────────────────
+
+class StubConvoMode:
+    """A deterministic conversational mode: digs until ``close_after`` user turns."""
+
+    key = "stubconvo"
+    conversational = True
+    close_after = 2
+
+    async def generate(self, concept, ctx) -> Challenge:
+        return Challenge(concept_id=str(concept.id), prompt="Explain it in your words.", payload={"teach": True})
+
+    async def turn(self, concept, history, ctx) -> TurnResult:
+        if len(user_turns(history)) >= self.close_after:
+            return TurnResult(closed=True, close_reason="dug_enough")
+        return TurnResult(closed=False, reply="Why does that happen?")
+
+    async def close(self, concept, history, ctx) -> Outcome:
+        return Outcome(score=0.75, grade="good", feedback="solid", detail={"turns": len(user_turns(history))})
+
+
+@pytest.fixture
+def convo_mode():
+    mode = StubConvoMode()
+    registry.register(mode)
+    yield mode
+    registry._MODES.pop("stubconvo", None)
+
+
+async def test_next_flags_conversational(client, register_user, seeded, convo_mode):
+    user = await register_user()
+    _, concept = await seeded(user["id"])
+    nxt = await client.post(
+        "/api/retrieval/next", headers=user["headers"],
+        json={"mode": "stubconvo", "concept_id": str(concept.id)},
+    )
+    assert nxt.status_code == 200, nxt.text
+    body = nxt.json()
+    assert body["conversational"] is True
+    assert body["challenge_id"] and body["prompt"]
+
+
+async def test_turn_digs_then_closes_with_one_graded_attempt(client, register_user, seeded, convo_mode):
+    user = await register_user()
+    _, concept = await seeded(user["id"])
+    cid = (await client.post(
+        "/api/retrieval/next", headers=user["headers"],
+        json={"mode": "stubconvo", "concept_id": str(concept.id)},
+    )).json()["challenge_id"]
+
+    # First turn digs; confidence is stamped here (captured at open).
+    t1 = await client.post(
+        "/api/retrieval/turn", headers=user["headers"],
+        json={"challenge_id": cid, "message": "it spreads out", "predicted_confidence": 0.5},
+    )
+    assert t1.status_code == 200, t1.text
+    b1 = t1.json()
+    assert b1["closed"] is False
+    assert b1["reply"] == "Why does that happen?"
+    assert b1["turn_count"] == 1
+
+    # Second turn closes: mode grades, one attempt lands, calibration surfaces.
+    t2 = await client.post(
+        "/api/retrieval/turn", headers=user["headers"],
+        json={"challenge_id": cid, "message": "because of probability"},
+    )
+    assert t2.status_code == 200, t2.text
+    b2 = t2.json()
+    assert b2["closed"] is True
+    assert b2["close_reason"] == "dug_enough"
+    assert b2["outcome"]["grade"] == "good"
+    assert b2["state"]["reps"] == 1  # exactly one graded attempt over the whole bout
+    # Predicted 0.5, scored 0.75 → underconfident by 0.25.
+    assert b2["calibration"]["delta"] == pytest.approx(0.25)
+    assert b2["calibration"]["label"] == "underconfident"
+
+    # The bout is consumed — replaying the challenge is gone.
+    again = await client.post(
+        "/api/retrieval/turn", headers=user["headers"], json={"challenge_id": cid, "message": "x"},
+    )
+    assert again.status_code == 410
+
+
+async def test_turn_end_closes_immediately(client, register_user, seeded, convo_mode):
+    user = await register_user()
+    _, concept = await seeded(user["id"])
+    cid = (await client.post(
+        "/api/retrieval/next", headers=user["headers"],
+        json={"mode": "stubconvo", "concept_id": str(concept.id)},
+    )).json()["challenge_id"]
+    t = await client.post(
+        "/api/retrieval/turn", headers=user["headers"],
+        json={"challenge_id": cid, "message": "a bit", "end": True},
+    )
+    assert t.status_code == 200, t.text
+    assert t.json()["closed"] is True
+    assert t.json()["close_reason"] == "user_ended"
+
+
+async def test_turn_cap_closes_the_bout(client, register_user, seeded, convo_mode):
+    # A mode that never volunteers to close still stops at MAX_CONVO_TURNS (7).
+    convo_mode.close_after = 99
+    user = await register_user()
+    _, concept = await seeded(user["id"])
+    cid = (await client.post(
+        "/api/retrieval/next", headers=user["headers"],
+        json={"mode": "stubconvo", "concept_id": str(concept.id)},
+    )).json()["challenge_id"]
+
+    last = None
+    for i in range(7):
+        last = await client.post(
+            "/api/retrieval/turn", headers=user["headers"],
+            json={"challenge_id": cid, "message": f"point {i}"},
+        )
+        assert last.status_code == 200, last.text
+    body = last.json()
+    assert body["closed"] is True
+    assert body["close_reason"] == "turn_cap"
+    assert body["turn_count"] == 7
+
+
+async def test_turn_rejects_a_one_shot_challenge(client, register_user, seeded, stub_mode):
+    user = await register_user()
+    _, concept = await seeded(user["id"])
+    cid = (await client.post(
+        "/api/retrieval/next", headers=user["headers"],
+        json={"mode": "stubapi", "concept_id": str(concept.id)},
+    )).json()["challenge_id"]
+    resp = await client.post(
+        "/api/retrieval/turn", headers=user["headers"], json={"challenge_id": cid, "message": "A"},
+    )
+    assert resp.status_code == 400
+
+
+async def test_turn_not_your_conversation_is_403(client, register_user, seeded, convo_mode):
+    owner = await register_user()
+    intruder = await register_user()
+    _, concept = await seeded(owner["id"])
+    cid = (await client.post(
+        "/api/retrieval/next", headers=owner["headers"],
+        json={"mode": "stubconvo", "concept_id": str(concept.id)},
+    )).json()["challenge_id"]
+    resp = await client.post(
+        "/api/retrieval/turn", headers=intruder["headers"], json={"challenge_id": cid, "message": "x"},
+    )
+    assert resp.status_code == 403
+
+
+# ── Probe voice-out (server TTS) ─────────────────────────────────────────────
+
+async def test_tts_streams_a_probe(client, register_user, monkeypatch):
+    from app.services.audio_generator import audio_generator
+
+    async def fake_stream(text, voice="nova"):
+        for part in (b"ID3", b"fake", b"-mp3"):
+            yield part
+
+    monkeypatch.setattr(audio_generator, "stream_speech", fake_stream)
+    user = await register_user()
+    resp = await client.get(
+        "/api/retrieval/tts", params={"text": "why does that happen?"}, headers=user["headers"]
+    )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "audio/mpeg"
+    assert resp.content == b"ID3fake-mp3"
+
+
+async def test_tts_rejects_blank_text(client, register_user):
+    user = await register_user()
+    resp = await client.get("/api/retrieval/tts", params={"text": "   "}, headers=user["headers"])
+    assert resp.status_code == 400
+
+
+async def test_tts_requires_auth(client):
+    resp = await client.get("/api/retrieval/tts", params={"text": "hi"})
+    assert resp.status_code == 401

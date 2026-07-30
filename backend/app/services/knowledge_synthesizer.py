@@ -91,6 +91,11 @@ _FAMILY_LEAN: dict[SubjectFamily, str] = {
         "This topic is likely reading/argument-heavy — expect mostly prose and structured explanation. "
         "Use worked examples or math only where the material actually contains them."
     ),
+    SubjectFamily.SOCIAL_SCIENCE: (
+        "This topic is likely social science — expect named theories, studies, and frameworks applied to "
+        "evidence. Prose and labelled entries (theory · claim · evidence) lead; use tables for real "
+        "multi-axis comparison and math only where the material genuinely has statistics."
+    ),
     SubjectFamily.GENERAL: "",
 }
 
@@ -284,10 +289,11 @@ class KnowledgeSynthesizer:
     def _classify_prompt(self, sample: str) -> str:
         return f"""Classify the subject family of this study material. Reply with EXACTLY ONE word.
 
-- STEM        — math, science, engineering: worked problems, formulas, derivations.
-- LANGUAGE    — learning a language: vocabulary, grammar, producing/speaking output.
-- HUMANITIES  — reading/argument-heavy: history, philosophy, literature, essays.
-- GENERAL     — none of the above fits cleanly.
+- STEM            — math, science, engineering: worked problems, formulas, derivations.
+- LANGUAGE        — learning a language: vocabulary, grammar, producing/speaking output.
+- HUMANITIES      — reading/argument-heavy: history, philosophy, literature, essays.
+- SOCIAL_SCIENCE  — psychology, sociology, economics, political science: theories, studies, frameworks, evidence.
+- GENERAL         — none of the above fits cleanly.
 
 MATERIAL:
 {sample}

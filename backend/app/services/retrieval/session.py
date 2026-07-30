@@ -40,27 +40,36 @@ class Session:
     modes: dict[str, int]       # mode → attempt count within the session
 
 
-def split_sessions(attempts: list[Any]) -> list[Session]:
-    """Group time-ordered attempts into sessions, cutting on a ≥ gap of idleness.
+def split_attempt_buckets(attempts: list[Any]) -> list[list[Any]]:
+    """Cut time-ordered attempts into buckets on a ≥ gap of idleness, keeping raw rows.
 
-    ``attempts`` must be ordered **ascending** by ``created_at``. Pure — the query
-    layer feeds it; tests exercise it directly. Returns sessions oldest-first.
+    ``attempts`` must be ordered **ascending** by ``created_at``. The warm-close summary
+    needs the attempts themselves (scores, predictions), not just the folded ``Session``.
     """
-    sessions: list[Session] = []
+    buckets: list[list[Any]] = []
     bucket: list[Any] = []
     prev_at: Optional[datetime] = None
 
     for attempt in attempts:
         at = attempt.created_at
         if prev_at is not None and (at - prev_at) >= SESSION_IDLE_GAP:
-            sessions.append(_close(bucket))
+            buckets.append(bucket)
             bucket = []
         bucket.append(attempt)
         prev_at = at
 
     if bucket:
-        sessions.append(_close(bucket))
-    return sessions
+        buckets.append(bucket)
+    return buckets
+
+
+def split_sessions(attempts: list[Any]) -> list[Session]:
+    """Group time-ordered attempts into sessions, cutting on a ≥ gap of idleness.
+
+    ``attempts`` must be ordered **ascending** by ``created_at``. Pure — the query
+    layer feeds it; tests exercise it directly. Returns sessions oldest-first.
+    """
+    return [_close(bucket) for bucket in split_attempt_buckets(attempts)]
 
 
 def _close(bucket: list[Any]) -> Session:
@@ -111,6 +120,19 @@ async def last_session(
     """The most recent derived session in scope, or ``None`` if there are no attempts."""
     sessions = await get_sessions(db, user_id, course_id=course_id, topic_id=topic_id)
     return sessions[0] if sessions else None
+
+
+async def last_session_attempts(
+    db: AsyncSession,
+    user_id,
+    *,
+    course_id=None,
+    topic_id=None,
+) -> list[Any]:
+    """The raw attempts of the most recent session in scope ([] if there are none)."""
+    attempts = await _recent_attempts(db, user_id, course_id=course_id, topic_id=topic_id)
+    buckets = split_attempt_buckets(attempts)
+    return buckets[-1] if buckets else []
 
 
 async def _recent_attempts(db, user_id, *, course_id, topic_id) -> list[Any]:

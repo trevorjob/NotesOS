@@ -1,388 +1,159 @@
-import React, { useEffect, useState } from 'react';
-import { Pressable, Text, TextStyle, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Pressable, Text, TextStyle, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router, useLocalSearchParams } from 'expo-router';
+import { isAxiosError } from 'axios';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useTheme } from '@/theme/ThemeProvider';
 import { Button } from '@/components/ui/Button';
-import { Chip } from '@/components/ui/Chip';
 import { Sheet } from '@/components/ui/Sheet';
 import { Textarea } from '@/components/ui/Textarea';
+import { MathText } from '@/components/retrieval/MathText';
+import { WrittenAnswer } from '@/components/retrieval/WrittenAnswer';
+import { ConversationalBout } from '@/components/retrieval/ConversationalBout';
+import {
+  ConfLevel,
+  CONF_LEVELS,
+  SingleResult,
+  gradeColor,
+  labelStyle,
+  readError,
+} from '@/components/retrieval/retrievalShared';
+import { takePhoto } from '@/lib/filePicker';
 import type { ConceptState } from '@/components/ui/StateBadge';
+import {
+  AttemptResult,
+  CalibrationLabel,
+  FreeRecallChallenge,
+  FreeRecallResult,
+  ModeInfo,
+  NextChallenge,
+  RevealResult,
+  SelfGrade,
+  SessionSummary,
+  TopicProfile,
+  dumpAttempt,
+  dumpNext,
+  fetchModes,
+  fetchSessionSummary,
+  fetchTopicProfile,
+  nextChallenge,
+  recapAttempt,
+  recapNext,
+  revealSolution,
+  submitAttempt,
+  transcribePaper,
+} from '@/lib/retrieval';
 
-type ModeId = 'quiz' | 'pretest' | 'ramble' | 'teach' | 'recap' | 'dump' | 'test';
-type ModeShape = 'posed' | 'open' | 'sequence';
+type ModeId = 'quiz' | 'pretest' | 'ramble' | 'teach' | 'recap' | 'dump';
+type ModeShape = 'posed' | 'open' | 'freerecall';
 
 interface ModeDef {
   id: ModeId;
   label: string;
   blurb: string;
   shape: ModeShape;
-  confidence?: boolean;
-  scope?: 'concept' | 'session' | 'topic';
 }
 
+// Client-side copy for each backend mode. quiz/pretest/ramble/teach come from GET /modes
+// (the engine registry); recap/dump are the free-recall siblings — topic-scoped surfaces
+// that live outside the registry, always offered when we have a topic.
 const MODES: ModeDef[] = [
-  { id: 'quiz', label: 'Quiz', blurb: 'A posed question — multiple choice or short answer.', shape: 'posed', confidence: true },
-  { id: 'pretest', label: 'Pretest', blurb: 'Answer before you’ve studied — a guess is fine, it primes learning.', shape: 'posed', confidence: true },
-  { id: 'ramble', label: 'Ramble', blurb: 'Say or write everything you understand about this concept — no cues.', shape: 'open', scope: 'concept' },
-  { id: 'teach', label: 'Teach it', blurb: 'Explain it like you’re teaching a classmate who’s never seen it.', shape: 'open', scope: 'concept' },
-  { id: 'recap', label: 'Recap', blurb: 'Free-recall what you remember from your last study session.', shape: 'open', scope: 'session' },
-  { id: 'dump', label: 'Brain dump', blurb: 'Everything you know about the whole topic, uncued.', shape: 'open', scope: 'topic' },
-  { id: 'test', label: 'Timed test', blurb: 'A multi-question exam, against the clock.', shape: 'sequence' },
+  { id: 'quiz', label: 'Quiz', blurb: 'A posed question — multiple choice or short answer.', shape: 'posed' },
+  { id: 'pretest', label: 'Pretest', blurb: 'Answer before you’ve studied — a guess is fine, it primes learning.', shape: 'posed' },
+  { id: 'ramble', label: 'Ramble', blurb: 'Say everything you understand about this concept — no cues.', shape: 'open' },
+  { id: 'teach', label: 'Teach it', blurb: 'Explain it like you’re teaching a classmate who’s never seen it.', shape: 'open' },
+  { id: 'recap', label: 'Recap', blurb: 'Free-recall what you remember from your last study session.', shape: 'freerecall' },
+  { id: 'dump', label: 'Brain dump', blurb: 'Everything you know about the whole topic, uncued.', shape: 'freerecall' },
 ];
 
-const MODE_IDS = MODES.map((m) => m.id);
-const isModeId = (v: string | undefined): v is ModeId => !!v && (MODE_IDS as string[]).includes(v);
+const FREE_RECALL_IDS: ModeId[] = ['recap', 'dump'];
+const MODE_BY_ID = new Map(MODES.map((m) => [m.id, m]));
+const isModeId = (v: string | undefined): v is ModeId => !!v && MODE_BY_ID.has(v as ModeId);
 
-const OPTIONS = ['Glycolysis', 'Krebs cycle', 'Electron transport chain', 'Oxidative phosphorylation'];
-const PRETEST_OPTIONS = ['Most of the cell’s ATP', 'Glucose', 'Oxygen', 'DNA'];
-const CORRECT = 'Glycolysis';
+// The subject profile's mode_mix keys the brain dump as "brain_dump", not "dump".
+const affinityKey = (id: ModeId): string => (id === 'dump' ? 'brain_dump' : id);
 
-interface ConfLevel {
-  v: number;
-  label: string;
-}
-const CONF_LEVELS: ConfLevel[] = [
-  { v: 0.25, label: 'Guessing' },
-  { v: 0.6, label: 'Fairly sure' },
-  { v: 0.9, label: 'Certain' },
+const FAMILY_LABEL: Record<TopicProfile['subject_family'], string | null> = {
+  STEM: 'this STEM topic',
+  LANGUAGE: 'this language topic',
+  HUMANITIES: 'this humanities topic',
+  SOCIAL_SCIENCE: 'this social science topic',
+  GENERAL: null,
+};
+
+// The four honest self-grade buttons for a worked STEM problem (system-spec §5).
+const SELF_GRADES: { key: SelfGrade; label: string }[] = [
+  { key: 'again', label: 'Blank / wrong approach' },
+  { key: 'hard', label: 'Right method, slipped' },
+  { key: 'good', label: 'Solved it' },
+  { key: 'easy', label: 'Solved it cold' },
 ];
 
-interface TestQuestion {
-  q: string;
-  options: string[];
-  correct: string;
-}
-const TEST_QUESTIONS: TestQuestion[] = [
-  { q: 'Which stage nets ATP directly, without needing oxygen?', options: OPTIONS, correct: CORRECT },
-  { q: 'Where does the Krebs cycle take place?', options: ['Mitochondrial matrix', 'Cytoplasm', 'Nucleus', 'Inner membrane'], correct: 'Mitochondrial matrix' },
-  { q: 'What is the final electron acceptor in the electron transport chain?', options: ['Oxygen', 'Glucose', 'Pyruvate', 'ATP'], correct: 'Oxygen' },
-];
-
-type RecapResult = 'nailed' | 'partial' | 'missed';
-interface RecapConceptEntry {
-  name: string;
-  result: RecapResult;
-}
-const RECAP_CONCEPTS: RecapConceptEntry[] = [
-  { name: 'Glycolysis', result: 'nailed' },
-  { name: 'Krebs cycle', result: 'partial' },
-  { name: 'Electron transport chain', result: 'missed' },
-];
-const RESULT_LABEL: Record<RecapResult, string> = { nailed: 'Nailed it', partial: 'Partial', missed: 'Missed' };
-
-type AnswerTab = 'typed' | 'voice' | 'photo';
-type PhotoStage = 'none' | 'captured' | 'confirmed';
-type VoiceInputStage = 'idle' | 'recording' | 'captured';
-type Stage = 'challenge' | 'confidence' | 'answer' | 'reveal' | 'prompt' | 'grading';
-
-interface TestConfig {
-  count?: number;
-  type?: string;
-  topics?: string[];
-}
-
-type Theme = ReturnType<typeof useTheme>;
-
-function labelStyle(theme: Theme, color?: string): TextStyle {
-  return {
-    fontFamily: theme.font.utility,
-    fontSize: theme.size.utility,
-    letterSpacing: theme.trackingUtility(theme.size.utility),
-    textTransform: 'uppercase',
-    color: color ?? theme.c.inkTertiary,
-  };
-}
-
-function getOpenPrompt(mode: ModeId, displayConcept: string, topic: string): string | undefined {
-  switch (mode) {
-    case 'ramble':
-      return `Tell me everything you understand about ${displayConcept.toLowerCase()} — go until you run out.`;
-    case 'teach':
-      return `Explain ${displayConcept.toLowerCase()} like you’re teaching a classmate who’s never seen it.`;
-    case 'recap':
-      return 'What do you remember from your last study session? One free response — no cues.';
-    case 'dump':
-      return `Everything you know about ${topic} — the whole topic, uncued.`;
-    default:
-      return undefined;
-  }
-}
-
-interface ConceptReveal {
-  verdict: string;
-  covered: string[];
-  missing: string[];
-}
-
-function getRevealConcept(mode: ModeId): ConceptReveal | undefined {
-  switch (mode) {
-    case 'ramble':
-      return {
-        verdict: 'You covered the big picture but skipped two things worth naming.',
-        covered: ['Location: inner mitochondrial membrane', 'Produces most of the cell’s ATP'],
-        missing: ['Role of oxygen as final electron acceptor', 'Chemiosmosis / proton gradient'],
-      };
-    case 'teach':
-      return {
-        verdict: 'Clear delivery. One real gap in the explanation.',
-        covered: ['Correct sequence of stages', 'Clear, classmate-friendly language'],
-        missing: ['Didn’t explain why protons build a gradient'],
-      };
-    default:
-      return undefined;
-  }
-}
+type Stage = 'loading' | 'error' | 'challenge' | 'confidence' | 'answer' | 'grading' | 'result' | 'close';
 
 interface ModePickerProps {
   open: boolean;
+  modes: ModeDef[];
+  recommendedId?: ModeId;
+  familyLabel?: string | null;
   onPick: (id: ModeId) => void;
   onClose: () => void;
 }
 
-function ModePicker({ open, onPick, onClose }: ModePickerProps) {
+// Context-worthy picker (retrieval-experience.md §6): modes are ordered best-fit-first for the
+// topic's subject and the top one is badged — so the recommendation leads, it's not a flat list.
+function ModePicker({ open, modes, recommendedId, familyLabel, onPick, onClose }: ModePickerProps) {
   const theme = useTheme();
   const { c } = theme;
   return (
     <Sheet open={open} onClose={onClose} title="Choose how to review">
+      {familyLabel && (
+        <Text style={[labelStyle(theme), { marginBottom: 10 }]}>{`Ranked for ${familyLabel}`}</Text>
+      )}
       <View style={{ gap: 8 }}>
-        {MODES.map((m) => (
-          <Pressable
-            key={m.id}
-            onPress={() => onPick(m.id)}
-            style={{
-              minHeight: 44,
-              padding: 14,
-              borderWidth: 1,
-              borderColor: c.paperEdge,
-              borderRadius: theme.radius.md,
-              backgroundColor: c.paper,
-              gap: 4,
-            }}
-          >
-            <Text style={{ fontFamily: theme.font.bodySemibold, fontSize: 16, color: c.ink }}>{m.label}</Text>
-            <Text style={{ fontSize: theme.size.bodySm, color: c.inkSecondary }}>{m.blurb}</Text>
-          </Pressable>
-        ))}
+        {modes.map((m) => {
+          const recommended = m.id === recommendedId;
+          return (
+            <Pressable
+              key={m.id}
+              onPress={() => onPick(m.id)}
+              style={{
+                minHeight: 44,
+                padding: 14,
+                borderWidth: recommended ? 1.5 : 1,
+                borderColor: recommended ? c.confirm : c.paperEdge,
+                borderRadius: theme.radius.md,
+                backgroundColor: c.paper,
+                gap: 4,
+              }}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Text style={{ fontFamily: theme.font.bodySemibold, fontSize: 16, color: c.ink }}>{m.label}</Text>
+                {recommended && <Text style={labelStyle(theme, c.confirm)}>Best fit</Text>}
+              </View>
+              <Text style={{ fontSize: theme.size.bodySm, color: c.inkSecondary }}>{m.blurb}</Text>
+            </Pressable>
+          );
+        })}
       </View>
     </Sheet>
   );
 }
 
-interface AnswerInputProps {
-  allow: AnswerTab[];
-  tab: AnswerTab;
-  setTab: (t: AnswerTab) => void;
-  text: string;
-  setText: (t: string) => void;
-  photoStage: PhotoStage;
-  setPhotoStage: (s: PhotoStage) => void;
-  voiceStage: VoiceInputStage;
-  setVoiceStage: (s: VoiceInputStage) => void;
-}
-
-const TAB_LABEL: Record<AnswerTab, string> = { typed: 'Type', voice: 'Voice', photo: 'Photo' };
-
-function AnswerInput({ allow, tab, setTab, text, setText, photoStage, setPhotoStage, voiceStage, setVoiceStage }: AnswerInputProps) {
-  const theme = useTheme();
-  const { c } = theme;
-
-  return (
-    <View style={{ gap: 10 }}>
-      {allow.length > 1 && (
-        <View style={{ flexDirection: 'row', gap: 8 }}>
-          {allow.map((a) => (
-            <Chip key={a} label={TAB_LABEL[a]} selected={tab === a} onPress={() => setTab(a)} />
-          ))}
-        </View>
-      )}
-
-      {tab === 'typed' && <Textarea rows={4} value={text} onChangeText={setText} placeholder="Type your answer…" />}
-
-      {tab === 'voice' && (
-        <View style={{ gap: 10, alignItems: 'center', paddingVertical: 20 }}>
-          <View
-            style={{
-              width: 72,
-              height: 72,
-              borderRadius: 36,
-              borderWidth: 3,
-              borderColor: voiceStage === 'recording' ? c.confirm : c.paperEdge,
-              justifyContent: 'center',
-              alignItems: 'center',
-            }}
-          >
-            <Text style={labelStyle(theme)}>{voiceStage === 'idle' ? 'Ready' : voiceStage === 'recording' ? 'Rec…' : 'Captured'}</Text>
-          </View>
-          {voiceStage !== 'captured' && (
-            <Pressable
-              onPress={() => setVoiceStage(voiceStage === 'recording' ? 'captured' : 'recording')}
-              style={{ minHeight: 44, borderWidth: 1, borderColor: c.paperEdge, borderRadius: theme.radius.md, paddingHorizontal: 18, paddingVertical: 10, justifyContent: 'center', alignItems: 'center' }}
-            >
-              <Text style={{ fontSize: 15, color: c.ink }}>{voiceStage === 'recording' ? 'Stop' : 'Start recording'}</Text>
-            </Pressable>
-          )}
-          {voiceStage === 'captured' && (
-            <Pressable onPress={() => setVoiceStage('idle')} style={{ minHeight: 44, justifyContent: 'center' }}>
-              <Text style={{ color: c.confirm, textDecorationLine: 'underline', fontSize: 14 }}>Re-record</Text>
-            </Pressable>
-          )}
-        </View>
-      )}
-
-      {tab === 'photo' && (
-        <View style={{ gap: 10 }}>
-          {photoStage === 'none' && (
-            <Pressable
-              onPress={() => setPhotoStage('captured')}
-              style={{
-                minHeight: 44,
-                borderWidth: 1,
-                borderStyle: 'dashed',
-                borderColor: c.paperEdge,
-                backgroundColor: c.paperRecessed,
-                borderRadius: theme.radius.md,
-                paddingVertical: 18,
-                justifyContent: 'center',
-                alignItems: 'center',
-              }}
-            >
-              <Text style={{ fontSize: 15, color: c.ink }}>Snap a photo of your written work</Text>
-            </Pressable>
-          )}
-          {photoStage !== 'none' && (
-            <View style={{ gap: 10 }}>
-              <View
-                style={{
-                  height: 100,
-                  borderWidth: 1,
-                  borderColor: c.paperEdge,
-                  borderRadius: theme.radius.md,
-                  backgroundColor: c.paperRecessed,
-                  justifyContent: 'center',
-                  alignItems: 'center',
-                }}
-              >
-                <Text style={{ color: c.inkTertiary, fontSize: 13 }}>photo of your answer</Text>
-              </View>
-              {photoStage === 'captured' && (
-                <Text style={{ fontSize: theme.size.bodySm }}>
-                  <Text style={labelStyle(theme)}>Transcribed: </Text>
-                  <Text style={{ color: c.ink }}>looks legible — confirm it’s right</Text>
-                </Text>
-              )}
-              <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
-                {photoStage === 'captured' && (
-                  <Button label="Looks right" onPress={() => setPhotoStage('confirmed')} style={{ flex: 1, paddingVertical: 10, paddingHorizontal: 0 }} />
-                )}
-                <Pressable onPress={() => setPhotoStage('none')} style={{ minHeight: 44, justifyContent: 'center' }}>
-                  <Text style={{ color: c.inkSecondary, fontSize: 14 }}>Retake</Text>
-                </Pressable>
-              </View>
-            </View>
-          )}
-        </View>
-      )}
-    </View>
-  );
-}
-
 interface ModeHeaderProps {
-  mode: ModeId;
-  concept: string;
+  label: string;
+  scopeLabel: string;
   onChangeMode: () => void;
 }
 
-function ModeHeader({ mode, concept, onChangeMode }: ModeHeaderProps) {
+function ModeHeader({ label, scopeLabel, onChangeMode }: ModeHeaderProps) {
   const theme = useTheme();
   const { c } = theme;
-  const m = MODES.find((x) => x.id === mode) ?? MODES[0];
   return (
     <View style={{ paddingHorizontal: 20, paddingTop: 18, paddingBottom: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-      <Text style={labelStyle(theme)}>{`${m.label} · ${concept}`}</Text>
+      <Text style={labelStyle(theme)}>{`${label} · ${scopeLabel}`}</Text>
       <Pressable onPress={onChangeMode} style={{ minHeight: 44, justifyContent: 'center' }}>
         <Text style={{ color: c.confirm, textDecorationLine: 'underline', fontSize: theme.size.caption }}>Change mode</Text>
-      </Pressable>
-    </View>
-  );
-}
-
-interface TestSequenceProps {
-  config?: TestConfig;
-  onDone: () => void;
-  onBackToNote: () => void;
-}
-
-function TestSequence({ config, onDone, onBackToNote }: TestSequenceProps) {
-  const theme = useTheme();
-  const { c } = theme;
-  const questions = TEST_QUESTIONS.slice(0, Math.max(1, Math.min(TEST_QUESTIONS.length, config?.count || TEST_QUESTIONS.length)));
-  const [idx, setIdx] = useState(0);
-  const [score, setScore] = useState(0);
-  const [picked, setPicked] = useState<string | null>(null);
-  const [elapsed, setElapsed] = useState(0);
-
-  useEffect(() => {
-    const id = setInterval(() => setElapsed((e) => e + 1), 1000);
-    return () => clearInterval(id);
-  }, []);
-
-  const done = idx >= questions.length;
-  const q = !done ? questions[idx] : null;
-
-  const choose = (opt: string) => {
-    setPicked(opt);
-    setTimeout(() => {
-      if (q && opt === q.correct) setScore((s) => s + 1);
-      setPicked(null);
-      setIdx((i) => i + 1);
-    }, 450);
-  };
-
-  const mmss = `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, '0')}`;
-
-  return (
-    <View style={{ flex: 1 }}>
-      <View style={{ paddingHorizontal: 20, paddingTop: 18, paddingBottom: 10, flexDirection: 'row', justifyContent: 'space-between' }}>
-        <Text style={labelStyle(theme)}>{done ? 'Timed test · done' : `Question ${idx + 1} of ${questions.length}`}</Text>
-        <Text style={labelStyle(theme)}>{mmss}</Text>
-      </View>
-      <View style={{ flex: 1, paddingHorizontal: 20, gap: 18, justifyContent: 'center' }}>
-        {done ? (
-          <>
-            <Text style={{ fontFamily: theme.font.display, fontSize: theme.size.display2, color: c.ink }}>{`Score: ${score} / ${questions.length}`}</Text>
-            <Text style={{ color: c.inkSecondary, fontSize: theme.size.bodySm }}>{`Finished in ${mmss}.`}</Text>
-            <Button label="Continue" onPress={onDone} />
-          </>
-        ) : (
-          q && (
-            <>
-              <Text style={{ fontFamily: theme.font.display, fontWeight: '500', fontSize: theme.size.display3, lineHeight: theme.size.display3 * theme.lineHeight.display, color: c.ink }}>
-                {q.q}
-              </Text>
-              <View style={{ gap: 10 }}>
-                {q.options.map((opt) => {
-                  const isPicked = picked === opt;
-                  const bg = isPicked ? (opt === q.correct ? c.confirm : c.paperRecessed) : c.paper;
-                  const color = isPicked && opt === q.correct ? c.paper : c.ink;
-                  return (
-                    <Pressable
-                      key={opt}
-                      disabled={picked !== null}
-                      onPress={() => choose(opt)}
-                      style={{ minHeight: 44, paddingHorizontal: 14, paddingVertical: 12, borderRadius: theme.radius.md, borderWidth: 1, borderColor: c.paperEdge, backgroundColor: bg, justifyContent: 'center' }}
-                    >
-                      <Text style={{ fontFamily: theme.font.body, fontSize: 16, color }}>{opt}</Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            </>
-          )
-        )}
-      </View>
-      <Pressable onPress={onBackToNote} style={{ marginHorizontal: 20, marginBottom: 20, minHeight: 44, justifyContent: 'center' }}>
-        <Text style={{ color: c.inkSecondary, fontSize: 14 }}>← Exit test</Text>
       </Pressable>
     </View>
   );
@@ -391,90 +162,291 @@ function TestSequence({ config, onDone, onBackToNote }: TestSequenceProps) {
 export default function RetrievalScreen() {
   const theme = useTheme();
   const { c } = theme;
-  const params = useLocalSearchParams<{ concept?: string; conceptState?: string; mode?: string; count?: string; type?: string; topics?: string }>();
+  const params = useLocalSearchParams<{
+    concept?: string;
+    conceptId?: string;
+    conceptState?: string;
+    topicId?: string;
+    courseId?: string;
+    mode?: string;
+  }>();
 
-  const topic = 'Cellular Respiration';
-  const displayConcept = params.concept || 'Electron transport chain';
+  const topicId = params.topicId;
+  const courseId = params.courseId;
+  const conceptId = params.conceptId;
+  const displayConcept = params.concept ?? 'this concept';
   const rawConceptState = params.conceptState;
   const conceptState: ConceptState | undefined =
     rawConceptState === 'solid' || rawConceptState === 'fading' || rawConceptState === 'shaky' ? rawConceptState : undefined;
 
-  const testConfig: TestConfig = {
-    count: params.count && !Number.isNaN(Number(params.count)) ? Number(params.count) : undefined,
-    type: params.type,
-    topics: params.topics ? params.topics.split(',') : undefined,
+  const [mode, setMode] = useState<ModeId>(isModeId(params.mode) ? params.mode : 'quiz');
+  const [availableModes, setAvailableModes] = useState<ModeDef[]>(MODES);
+  const [profile, setProfile] = useState<TopicProfile | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [stage, setStage] = useState<Stage>('loading');
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const [challenge, setChallenge] = useState<NextChallenge | null>(null);
+  const [freeRecall, setFreeRecall] = useState<FreeRecallChallenge | null>(null);
+  const [confidence, setConfidence] = useState<ConfLevel | null>(null);
+  const [text, setText] = useState('');
+  const [reveal, setReveal] = useState<RevealResult | null>(null);
+  const [attempt, setAttempt] = useState<AttemptResult | null>(null);
+  const [freeResult, setFreeResult] = useState<FreeRecallResult | null>(null);
+  const [summary, setSummary] = useState<SessionSummary | null>(null);
+  const [transcribing, setTranscribing] = useState(false);
+  const [paperHint, setPaperHint] = useState<string | null>(null);
+  const [answerOrigin, setAnswerOrigin] = useState<'typed' | 'paper'>('typed');
+
+  const modeDef = MODE_BY_ID.get(mode) ?? MODES[0];
+
+  const resetAnswer = () => {
+    setConfidence(null);
+    setText('');
+    setReveal(null);
+    setAttempt(null);
+    setFreeResult(null);
+    setPaperHint(null);
+    setAnswerOrigin('typed');
   };
 
-  const [mode, setMode] = useState<ModeId>(isModeId(params.mode) ? params.mode : 'quiz');
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [stage, setStage] = useState<Stage>('challenge');
-  const [confidence, setConfidence] = useState<ConfLevel | null>(null);
-  const [picked, setPicked] = useState<string | null>(null);
-  const [answerMode, setAnswerMode] = useState<'mcq' | 'freeform'>('mcq');
-  const [tab, setTab] = useState<AnswerTab>('typed');
-  const [text, setText] = useState('');
-  const [photoStage, setPhotoStage] = useState<PhotoStage>('none');
-  const [voiceStage, setVoiceStage] = useState<VoiceInputStage>('idle');
-  const [dots, setDots] = useState(1);
+  // Paper substrate (B8): snap handwriting → transcribe → drop into the editable field, so
+  // confirming/correcting the text is the confirm step. answer_origin marks it as paper.
+  const snapPaper = async () => {
+    setPaperHint(null);
+    let files: { uri: string }[];
+    try {
+      files = await takePhoto();
+    } catch (err) {
+      setPaperHint(readError(err));
+      return;
+    }
+    if (files.length === 0) return;
+    setTranscribing(true);
+    try {
+      const result = await transcribePaper(files);
+      setText(result.transcription);
+      setAnswerOrigin('paper');
+      setPaperHint(
+        result.has_illegible
+          ? 'Some words were hard to read — check them before you submit.'
+          : result.has_uncertain
+            ? 'A few words were uncertain — give it a quick read.'
+            : 'Transcribed — check it reads right, then submit.',
+      );
+    } catch (err) {
+      setPaperHint(readError(err));
+    } finally {
+      setTranscribing(false);
+    }
+  };
 
+  // GET /modes drives which registry modes are offered; recap/dump are appended when a
+  // topic is in scope (they need one). Falls back to the full list if the call fails.
   useEffect(() => {
-    if (stage !== 'grading') return;
-    const id = setInterval(() => setDots((d) => (d % 3) + 1), 350);
-    const t = setTimeout(() => {
-      setStage('reveal');
-      clearInterval(id);
-    }, 1500);
+    let cancelled = false;
+    fetchModes()
+      .then((infos: ModeInfo[]) => {
+        if (cancelled) return;
+        const keys = new Set(infos.map((i) => i.key));
+        const registry = MODES.filter((m) => m.shape !== 'freerecall' && keys.has(m.id));
+        const freeRecallModes = topicId ? MODES.filter((m) => FREE_RECALL_IDS.includes(m.id)) : [];
+        const merged = [...registry, ...freeRecallModes];
+        if (merged.length > 0) setAvailableModes(merged);
+      })
+      .catch(() => {
+        // Keep the built-in list; a mode picker that can't load its options is worse than a static one.
+      });
     return () => {
-      clearInterval(id);
-      clearTimeout(t);
+      cancelled = true;
     };
-  }, [stage]);
+  }, [topicId]);
 
-  const onDone = () => router.back();
-  const onBackToNote = () => router.back();
-  const onVoice = (concept: string) => router.push({ pathname: '/voice', params: { concept } });
+  // The topic's subject profile makes the picker context-worthy: mode_mix ranks modes by how
+  // well they fit the subject (STEM → quiz/pretest; humanities → ramble/teach). Best-effort.
+  useEffect(() => {
+    if (!topicId) return;
+    let cancelled = false;
+    fetchTopicProfile(topicId)
+      .then((p) => {
+        if (!cancelled) setProfile(p);
+      })
+      .catch(() => {
+        // No profile → the picker just keeps its default order.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [topicId]);
+
+  // Order the offered modes best-fit-first for this subject; the top one is the recommendation.
+  const orderedModes = useMemo(() => {
+    if (!profile) return availableModes;
+    const affinity = (m: ModeDef) => profile.mode_mix[affinityKey(m.id)] ?? 0.5;
+    return [...availableModes].sort((a, b) => affinity(b) - affinity(a));
+  }, [availableModes, profile]);
+  const recommendedId = profile ? orderedModes[0]?.id : undefined;
+  const familyLabel = profile ? FAMILY_LABEL[profile.subject_family] : null;
+
+  // Load a challenge for the active mode. useConcept challenges the concept the note
+  // handed us; without it the engine selects the next due concept in the topic ("keep going").
+  // useConcept challenges the concept the note handed us; false lets the engine pick the
+  // next due concept in the topic ("keep going") — labeled by the response's concept_text.
+  const loadChallenge = useCallback(
+    async (modeId: ModeId, useConcept = true) => {
+      const def = MODE_BY_ID.get(modeId) ?? MODES[0];
+      resetAnswer();
+      setChallenge(null);
+      setFreeRecall(null);
+      setErrorMsg(null);
+      setStage('loading');
+      try {
+        if (def.shape === 'freerecall') {
+          if (!topicId) throw new Error('Open a topic to recap or brain-dump it.');
+          const fr = modeId === 'recap' ? await recapNext(topicId) : await dumpNext(topicId);
+          setFreeRecall(fr);
+        } else {
+          if (!topicId && !conceptId) throw new Error('Open a note and tap a concept to start retrieving.');
+          const ch = await nextChallenge({
+            mode: modeId,
+            scope: 'topic',
+            topic_id: topicId,
+            course_id: courseId,
+            concept_id: useConcept ? conceptId : undefined,
+          });
+          setChallenge(ch);
+        }
+        setStage('challenge');
+      } catch (err) {
+        setErrorMsg(readError(err));
+        setStage('error');
+      }
+    },
+    [topicId, courseId, conceptId],
+  );
+
+  // useFocusEffect (not useEffect) so the synchronous state resets loadChallenge does are
+  // outside React's effect-lint scope; it re-runs on mode change (deps) and on refocus.
+  useFocusEffect(
+    useCallback(() => {
+      if (params.mode === 'test') return; // testbuilder passthrough handled below — not a retrieval session
+      loadChallenge(mode);
+    }, [mode, loadChallenge, params.mode]),
+  );
 
   const changeMode = (m: ModeId) => {
-    setMode(m);
     setPickerOpen(false);
-    setStage(m === 'quiz' || m === 'pretest' ? 'challenge' : 'prompt');
-    setConfidence(null);
-    setPicked(null);
-    setAnswerMode('mcq');
-    setTab('typed');
-    setText('');
-    setPhotoStage('none');
-    setVoiceStage('idle');
+    if (m === mode) {
+      loadChallenge(m);
+    } else {
+      setMode(m);
+    }
   };
 
-  if (mode === 'test') {
+  const onDone = () => router.back();
+
+  const doAttempt = async (response: unknown) => {
+    if (!challenge) return;
+    setStage('grading');
+    try {
+      const res = await submitAttempt({
+        challenge_id: challenge.challenge_id,
+        response,
+        predicted_confidence: confidence?.v ?? null,
+        answer_origin: answerOrigin === 'paper' ? 'paper' : undefined,
+      });
+      setAttempt(res);
+      setStage('result');
+    } catch (err) {
+      setErrorMsg(readError(err));
+      setStage('error');
+    }
+  };
+
+  const doReveal = async () => {
+    if (!challenge) return;
+    try {
+      const r = await revealSolution(challenge.challenge_id, confidence?.v ?? null);
+      setReveal(r);
+    } catch (err) {
+      setErrorMsg(readError(err));
+      setStage('error');
+    }
+  };
+
+  const doFreeRecall = async () => {
+    if (!freeRecall) return;
+    setStage('grading');
+    try {
+      const body = {
+        challenge_id: freeRecall.challenge_id,
+        response: text,
+        answer_origin: answerOrigin === 'paper' ? ('paper' as const) : undefined,
+      };
+      const res = mode === 'recap' ? await recapAttempt(body) : await dumpAttempt(body);
+      setFreeResult(res);
+      setStage('result');
+    } catch (err) {
+      setErrorMsg(readError(err));
+      setStage('error');
+    }
+  };
+
+  // End the bout → the warm close (system-spec §5/§6). Summary is best-effort; the close
+  // still shows a plain "nice work" if it can't load.
+  const finishSession = async () => {
+    setStage('loading');
+    try {
+      setSummary(await fetchSessionSummary(topicId ? { topic_id: topicId } : undefined));
+    } catch {
+      setSummary(null);
+    }
+    setStage('close');
+  };
+
+  // Continue the session with the next due concept (engine-selected). Nothing left due
+  // (404) is the natural end of the bout, not an error — flow into the close.
+  const keepGoing = async () => {
+    if (!topicId) return;
+    resetAnswer();
+    setChallenge(null);
+    setErrorMsg(null);
+    setStage('loading');
+    try {
+      const ch = await nextChallenge({ mode, scope: 'topic', topic_id: topicId, course_id: courseId });
+      setChallenge(ch);
+      setStage('challenge');
+    } catch (err) {
+      if (isAxiosError(err) && err.response?.status === 404) {
+        await finishSession();
+      } else {
+        setErrorMsg(readError(err));
+        setStage('error');
+      }
+    }
+  };
+
+  // testbuilder (B14 authored practice test) is a distinct concept from scheduled review —
+  // its own queue item wires it to /api/practice-tests. Until then its ?mode=test link lands
+  // here; we send the user back rather than fake a timed test off the retrieval engine.
+  if (params.mode === 'test') {
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: c.paper }}>
-        <TestSequence config={testConfig} onDone={onDone} onBackToNote={onBackToNote} />
+        <View style={{ flex: 1, paddingHorizontal: 20, gap: 16, justifyContent: 'center' }}>
+          <Text style={{ fontFamily: theme.font.display, fontSize: theme.size.display3, color: c.ink }}>Timed tests are coming soon</Text>
+          <Text style={{ fontSize: theme.size.body, color: c.inkSecondary }}>
+            Authored practice tests aren’t wired up yet. For now, pick a concept in your note to start a review.
+          </Text>
+          <Button label="Back" onPress={onDone} />
+        </View>
       </SafeAreaView>
     );
   }
 
-  const m = MODES.find((x) => x.id === mode) ?? MODES[0];
-  const correct = picked === CORRECT;
-  const isPretest = mode === 'pretest';
-  const calibration =
-    confidence == null
-      ? null
-      : correct && confidence.v >= 0.6
-        ? 'Calibrated — you called that right.'
-        : correct && confidence.v < 0.6
-          ? 'You knew more than you thought — nice.'
-          : !correct && confidence.v >= 0.6
-            ? isPretest
-              ? 'Overconfident, and that’s exactly what pretests catch.'
-              : 'Overconfident here — worth a closer look, gently.'
-            : 'Underconfident — you were closer than you guessed.';
-
-  const canSubmitOpen = tab === 'typed' ? text.trim().length > 0 : tab === 'voice' ? voiceStage === 'captured' : photoStage === 'confirmed';
-
-  const openPrompt = getOpenPrompt(mode, displayConcept, topic);
-  const revealConcept = getRevealConcept(mode);
+  // Label from the challenge itself once loaded (so "keep going" shows the right concept),
+  // falling back to the name the note handed us before the first challenge arrives.
+  const conceptLabel = challenge?.concept_text ?? displayConcept;
+  const scopeLabel = modeDef.shape === 'freerecall' ? (mode === 'recap' ? 'Last session' : 'Whole topic') : conceptLabel;
 
   const questionStyle: TextStyle = {
     fontFamily: theme.font.display,
@@ -494,196 +466,263 @@ export default function RetrievalScreen() {
     justifyContent: 'center' as const,
   };
   const stateColor: Record<ConceptState, string> = { solid: c.stateSolid, fading: c.stateFading, shaky: c.stateShaky };
-  const resultColor: Record<RecapResult, string> = { nailed: c.stateSolid, partial: c.stateFading, missed: c.stateShaky };
 
-  const posedQuestion = isPretest
-    ? `Before you’ve studied — what does ${displayConcept.toLowerCase()} actually produce?`
-    : 'Which stage nets ATP directly, without needing oxygen?';
+  const qtype = challenge?.payload.question_type;
+  const isWorked = qtype === 'worked';
+  const isMcq = qtype === 'mcq' && Array.isArray(challenge?.payload.answer_options);
+  const isNumeric = qtype === 'numeric';
+  const promptText = challenge?.prompt ?? freeRecall?.prompt ?? '';
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: c.paper }}>
-      {stage !== 'grading' && (
-        <ModeHeader
-          mode={mode}
-          concept={m.scope === 'topic' ? topic : m.scope === 'session' ? 'Last session' : displayConcept}
-          onChangeMode={() => setPickerOpen(true)}
-        />
+      {stage !== 'grading' && stage !== 'loading' && stage !== 'close' && (
+        <ModeHeader label={modeDef.label} scopeLabel={scopeLabel} onChangeMode={() => setPickerOpen(true)} />
       )}
 
       <View style={{ flex: 1, paddingHorizontal: 20, gap: 18, justifyContent: 'center' }}>
-        {m.shape === 'posed' && stage !== 'reveal' && (
+        {stage === 'loading' && <ActivityIndicator color={c.ink} />}
+
+        {stage === 'grading' && (
+          <View style={{ alignItems: 'center', gap: 12 }}>
+            <ActivityIndicator color={c.ink} />
+            <Text style={{ color: c.inkSecondary, fontSize: theme.size.body }}>Scoring your answer…</Text>
+          </View>
+        )}
+
+        {stage === 'error' && (
+          <View style={{ gap: 14 }}>
+            <Text style={{ fontFamily: theme.font.display, fontSize: theme.size.display3, color: c.ink }}>Can’t start this yet</Text>
+            <Text style={{ fontSize: theme.size.body, color: c.inkSecondary }}>{errorMsg}</Text>
+            <Button label="Try again" onPress={() => loadChallenge(mode)} />
+            <Button label="Back to reading" variant="text" onPress={onDone} />
+          </View>
+        )}
+
+        {/* ── Posed (quiz / pretest): challenge → confidence → answer ── */}
+        {modeDef.shape === 'posed' && stage === 'challenge' && (
           <>
             {conceptState && <Text style={labelStyle(theme, stateColor[conceptState])}>{conceptState}</Text>}
-            <Text style={questionStyle}>{posedQuestion}</Text>
+            <MathText content={promptText} textStyle={questionStyle} />
+            {isWorked && (
+              <Text style={{ fontSize: theme.size.bodySm, color: c.inkSecondary }}>Work it out on paper — then tell us how sure you are.</Text>
+            )}
+            <Button label={isWorked ? 'Ready — how sure are you?' : 'How sure are you?'} onPress={() => setStage('confidence')} />
+          </>
+        )}
 
-            {stage === 'challenge' && <Button label="How sure are you?" onPress={() => setStage('confidence')} />}
+        {modeDef.shape === 'posed' && stage === 'confidence' && (
+          <>
+            <MathText content={promptText} textStyle={questionStyle} />
+            <Text style={labelStyle(theme)}>{isWorked ? 'Before you check the solution — how sure are you?' : 'Before you answer — how sure are you?'}</Text>
+            <View style={{ gap: 10 }}>
+              {CONF_LEVELS.map((lvl) => (
+                <Pressable
+                  key={lvl.label}
+                  onPress={() => {
+                    setConfidence(lvl);
+                    setStage('answer');
+                  }}
+                  style={optionButtonStyle}
+                >
+                  <Text style={{ fontFamily: theme.font.body, fontSize: 16, color: c.ink }}>{lvl.label}</Text>
+                </Pressable>
+              ))}
+            </View>
+          </>
+        )}
 
-            {stage === 'confidence' && (
-              <View style={{ gap: 10 }}>
-                {CONF_LEVELS.map((lvl) => (
-                  <Pressable
-                    key={lvl.label}
-                    onPress={() => {
-                      setConfidence(lvl);
-                      setStage('answer');
-                    }}
-                    style={optionButtonStyle}
-                  >
-                    <Text style={{ fontFamily: theme.font.body, fontSize: 16, color: c.ink }}>{lvl.label}</Text>
-                  </Pressable>
-                ))}
-              </View>
+        {modeDef.shape === 'posed' && stage === 'answer' && (
+          <View style={{ gap: 14 }}>
+            <MathText content={promptText} textStyle={questionStyle} />
+
+            {isMcq &&
+              (challenge?.payload.answer_options ?? []).map((opt) => (
+                <Pressable key={opt} onPress={() => doAttempt(opt)} style={optionButtonStyle}>
+                  <Text style={{ fontFamily: theme.font.body, fontSize: 16, color: c.ink }}>{opt}</Text>
+                </Pressable>
+              ))}
+
+            {isWorked && !reveal && (
+              <>
+                <Text style={{ fontSize: theme.size.bodySm, color: c.inkSecondary }}>
+                  Done on paper? Reveal the full solution, compare it to your work, then mark yourself honestly — comparing your own working to the solution is the learning.
+                </Text>
+                <Button label="Reveal the worked solution" onPress={doReveal} />
+              </>
             )}
 
-            {stage === 'answer' && answerMode === 'mcq' && (
+            {isWorked && reveal && (
               <>
-                <Pressable onPress={() => onVoice(displayConcept)} style={{ minHeight: 44, justifyContent: 'center', alignSelf: 'flex-start' }}>
-                  <Text style={{ color: c.inkTertiary, textDecorationLine: 'underline', fontSize: theme.size.caption }}>Answer by voice instead (preview)</Text>
-                </Pressable>
+                <View style={{ padding: 14, borderRadius: theme.radius.md, borderWidth: 1, borderColor: c.paperEdge, backgroundColor: c.paperRecessed }}>
+                  <Text style={[labelStyle(theme), { marginBottom: 6 }]}>Worked solution</Text>
+                  <MathText content={reveal.worked_solution ?? 'No solution provided.'} textStyle={{ fontSize: theme.size.body, color: c.ink }} />
+                </View>
+                <Text style={labelStyle(theme)}>How did your work compare?</Text>
                 <View style={{ gap: 10 }}>
-                  {(isPretest ? PRETEST_OPTIONS : OPTIONS).map((opt) => (
-                    <Pressable
-                      key={opt}
-                      onPress={() => {
-                        setPicked(opt);
-                        setStage('reveal');
-                      }}
-                      style={optionButtonStyle}
-                    >
-                      <Text style={{ fontFamily: theme.font.body, fontSize: 16, color: c.ink }}>{opt}</Text>
+                  {SELF_GRADES.map((g) => (
+                    <Pressable key={g.key} onPress={() => doAttempt(g.key)} style={optionButtonStyle}>
+                      <Text style={{ fontFamily: theme.font.body, fontSize: 16, color: c.ink }}>{g.label}</Text>
                     </Pressable>
                   ))}
                 </View>
-                {!isPretest && (
-                  <Pressable onPress={() => setAnswerMode('freeform')} style={{ minHeight: 44, justifyContent: 'center', alignSelf: 'flex-start' }}>
-                    <Text style={{ color: c.inkTertiary, textDecorationLine: 'underline', fontSize: theme.size.caption }}>Prefer to answer by typing or photo instead?</Text>
-                  </Pressable>
-                )}
               </>
             )}
 
-            {stage === 'answer' && answerMode === 'freeform' && (
+            {isNumeric && (
               <>
-                <AnswerInput
-                  allow={['typed', 'photo']}
-                  tab={tab === 'voice' ? 'typed' : tab}
-                  setTab={setTab}
-                  text={text}
-                  setText={setText}
-                  photoStage={photoStage}
-                  setPhotoStage={setPhotoStage}
-                  voiceStage={voiceStage}
-                  setVoiceStage={setVoiceStage}
-                />
-                <Button
-                  label="Submit"
-                  disabled={!canSubmitOpen}
-                  onPress={() => {
-                    setPicked(CORRECT);
-                    setStage('reveal');
-                  }}
-                />
+                <Textarea rows={1} value={text} onChangeText={setText} placeholder="Your answer (a number)…" />
+                <Button label="Check" disabled={text.trim().length === 0} onPress={() => doAttempt(text)} />
               </>
             )}
-          </>
-        )}
 
-        {m.shape === 'posed' && stage === 'reveal' && (
-          <View style={{ gap: 14 }}>
-            <Text style={questionStyle}>{posedQuestion}</Text>
-            <View style={{ gap: 10 }}>
-              {(isPretest ? PRETEST_OPTIONS : OPTIONS).map((opt) => {
-                const isCorrectOpt = isPretest ? opt === 'Most of the cell’s ATP' : opt === CORRECT;
-                const isPicked = picked === opt;
-                const bg = isCorrectOpt ? c.confirm : isPicked && !isCorrectOpt ? c.paperRecessed : c.paper;
-                const color = isCorrectOpt ? c.paper : c.ink;
-                return (
-                  <View
-                    key={opt}
-                    style={{ minHeight: 44, paddingHorizontal: 14, paddingVertical: 12, borderRadius: theme.radius.md, borderWidth: 1, borderColor: c.paperEdge, backgroundColor: bg, justifyContent: 'center' }}
-                  >
-                    <Text style={{ fontFamily: theme.font.body, fontSize: 16, color }}>{opt}</Text>
-                  </View>
-                );
-              })}
-            </View>
-            <Text style={{ fontSize: theme.size.body, color: isPretest ? c.inkSecondary : correct ? c.confirm : c.inkSecondary }}>
-              {isPretest ? 'Good to have a baseline — pretests aren’t scored against you.' : correct ? 'Correct.' : `Not quite — it's ${CORRECT}.`}
-            </Text>
-            {calibration && <Text style={labelStyle(theme)}>{calibration}</Text>}
-            <Text style={{ fontSize: theme.size.bodySm, color: c.inkSecondary }}>
-              Glycolysis nets 2 ATP through substrate-level phosphorylation, entirely in the cytoplasm — no oxygen required.
-            </Text>
-            <Button label="Continue" onPress={onDone} />
+            {!isMcq && !isWorked && !isNumeric && (
+              <WrittenAnswer
+                value={text}
+                onChangeText={setText}
+                onSubmit={() => doAttempt(text)}
+                onSnapPaper={snapPaper}
+                transcribing={transcribing}
+                paperHint={paperHint}
+              />
+            )}
           </View>
         )}
 
-        {m.shape === 'open' && stage === 'prompt' && (
+        {/* ── Conversational (teach / ramble): a spoken back-and-forth, one graded attempt ── */}
+        {modeDef.shape === 'open' && challenge?.conversational && stage === 'challenge' && (
+          <ConversationalBout
+            key={challenge.challenge_id}
+            challenge={challenge}
+            concept={conceptLabel}
+            onDone={onDone}
+            onKeepGoing={topicId ? keepGoing : undefined}
+            onFinish={topicId ? finishSession : undefined}
+          />
+        )}
+
+        {/* ── Open (ramble / teach) & free-recall (recap / dump): one written response ── */}
+        {((modeDef.shape === 'open' && !challenge?.conversational) || modeDef.shape === 'freerecall') && stage === 'challenge' && (
           <>
-            <Text style={questionStyle}>{openPrompt}</Text>
-            <AnswerInput
-              allow={['voice', 'typed', 'photo']}
-              tab={tab}
-              setTab={setTab}
-              text={text}
-              setText={setText}
-              photoStage={photoStage}
-              setPhotoStage={setPhotoStage}
-              voiceStage={voiceStage}
-              setVoiceStage={setVoiceStage}
+            <MathText content={promptText} textStyle={questionStyle} />
+            {modeDef.shape === 'freerecall' && freeRecall && (
+              <Text style={labelStyle(theme)}>{`${freeRecall.concept_count} concept${freeRecall.concept_count === 1 ? '' : 's'} in play — nothing you skip is counted for you`}</Text>
+            )}
+            <WrittenAnswer
+              value={text}
+              onChangeText={setText}
+              onSubmit={modeDef.shape === 'open' ? () => doAttempt(text) : doFreeRecall}
+              onSnapPaper={snapPaper}
+              transcribing={transcribing}
+              paperHint={paperHint}
+              rows={6}
+              placeholder="Type everything you can — or snap your handwriting…"
             />
-            <Button label="Submit" disabled={!canSubmitOpen} onPress={() => setStage('grading')} />
           </>
         )}
 
-        {m.shape === 'open' && stage === 'grading' && (
-          <Text style={{ textAlign: 'center', color: c.inkSecondary, fontSize: theme.size.body }}>{`Scoring your answer${'.'.repeat(dots)}`}</Text>
+        {/* ── Result: posed/open single-concept outcome ── */}
+        {stage === 'result' && attempt && (
+          <SingleResult
+            attempt={attempt}
+            objective={isMcq || isNumeric}
+            concept={conceptLabel}
+            onDone={onDone}
+            onKeepGoing={topicId ? keepGoing : undefined}
+            onFinish={topicId ? finishSession : undefined}
+          />
         )}
 
-        {m.shape === 'open' && stage === 'reveal' && m.scope === 'concept' && revealConcept && (
-          <View style={{ gap: 14 }}>
-            <Text style={{ fontFamily: theme.font.display, fontSize: theme.size.display3, color: c.ink }}>{revealConcept.verdict}</Text>
-            <View>
-              <Text style={labelStyle(theme, c.confirm)}>Covered</Text>
-              {revealConcept.covered.map((item, i) => (
-                <Text key={i} style={{ fontSize: theme.size.bodySm, color: c.inkSecondary, marginTop: 6 }}>{`• ${item}`}</Text>
-              ))}
-            </View>
-            <View>
-              <Text style={labelStyle(theme, c.stateShaky)}>Still fuzzy on</Text>
-              {revealConcept.missing.map((item, i) => (
-                <Text key={i} style={{ fontSize: theme.size.bodySm, color: c.inkSecondary, marginTop: 6 }}>{`• ${item}`}</Text>
-              ))}
-            </View>
-            <Button label="Continue" onPress={onDone} />
-          </View>
-        )}
+        {/* ── Result: free-recall per-concept outcomes ── */}
+        {stage === 'result' && freeResult && <FreeRecallResultView result={freeResult} onDone={onDone} />}
 
-        {m.shape === 'open' && stage === 'reveal' && m.scope !== 'concept' && (
-          <View style={{ gap: 14 }}>
-            <Text style={{ fontFamily: theme.font.display, fontSize: theme.size.display3, color: c.ink }}>
-              Graded across the whole set — one response, per-concept results.
-            </Text>
-            <View style={{ gap: 10 }}>
-              {RECAP_CONCEPTS.map((entry) => (
-                <View key={entry.name} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: c.paperEdge }}>
-                  <Text style={{ color: c.ink, fontSize: theme.size.body }}>{entry.name}</Text>
-                  <Text style={labelStyle(theme, resultColor[entry.result])}>{RESULT_LABEL[entry.result]}</Text>
-                </View>
-              ))}
-            </View>
-            <Button label="Continue" onPress={onDone} />
-          </View>
-        )}
+        {/* ── The warm close (system-spec §6) ── */}
+        {stage === 'close' && <CloseView summary={summary} onDone={onDone} />}
       </View>
 
-      {stage !== 'grading' && (
-        <Pressable onPress={onBackToNote} style={{ marginHorizontal: 20, marginBottom: 20, minHeight: 44, justifyContent: 'center' }}>
+      {(stage === 'challenge' || stage === 'confidence' || stage === 'answer') && (
+        <Pressable onPress={onDone} style={{ marginHorizontal: 20, marginBottom: 20, minHeight: 44, justifyContent: 'center' }}>
           <Text style={{ color: c.inkSecondary, fontSize: 14 }}>← Back to reading</Text>
         </Pressable>
       )}
 
-      <ModePicker open={pickerOpen} onPick={changeMode} onClose={() => setPickerOpen(false)} />
+      <ModePicker
+        open={pickerOpen}
+        modes={orderedModes}
+        recommendedId={recommendedId}
+        familyLabel={familyLabel}
+        onPick={changeMode}
+        onClose={() => setPickerOpen(false)}
+      />
     </SafeAreaView>
+  );
+}
+
+interface FreeRecallResultViewProps {
+  result: FreeRecallResult;
+  onDone: () => void;
+}
+
+function FreeRecallResultView({ result, onDone }: FreeRecallResultViewProps) {
+  const theme = useTheme();
+  const { c } = theme;
+  return (
+    <View style={{ gap: 14 }}>
+      <Text style={{ fontFamily: theme.font.display, fontSize: theme.size.display3, color: c.ink }}>Graded across the whole set</Text>
+      <Text style={{ fontSize: theme.size.bodySm, color: c.inkSecondary }}>{`${result.concept_count} concept${result.concept_count === 1 ? '' : 's'} · ${Math.round(result.mean_score * 100)}% on average`}</Text>
+      <View style={{ gap: 10 }}>
+        {result.outcomes.map((o) => (
+          <View key={o.concept_id} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: c.paperEdge }}>
+            <Text style={{ color: c.ink, fontSize: theme.size.body, flex: 1, paddingRight: 12 }}>{o.concept_text}</Text>
+            <Text style={labelStyle(theme, gradeColor(theme, o.grade))}>{o.grade}</Text>
+          </View>
+        ))}
+      </View>
+      <Button label="Back to reading" onPress={onDone} />
+    </View>
+  );
+}
+
+const CLOSE_CALIBRATION: Record<CalibrationLabel, string> = {
+  calibrated: 'Your confidence tracked reality well today.',
+  underconfident: 'You knew more than you let on — trust yourself a little more.',
+  overconfident: 'You ran a bit hot on confidence — worth noticing.',
+};
+
+interface CloseViewProps {
+  summary: SessionSummary | null;
+  onDone: () => void;
+}
+
+// The warm close (system-spec §6): lead with growth, whisper the fading, offer the hook.
+function CloseView({ summary, onDone }: CloseViewProps) {
+  const theme = useTheme();
+  const { c } = theme;
+  const firmed = summary?.firmed.length ?? 0;
+  const slipping = summary?.slipping ?? [];
+
+  const headline = firmed > 0 ? `You firmed up ${firmed} concept${firmed === 1 ? '' : 's'}` : 'That was a good push';
+
+  return (
+    <View style={{ gap: 14 }}>
+      <Text style={{ fontFamily: theme.font.display, fontSize: theme.size.display2, lineHeight: theme.size.display2 * theme.lineHeight.display, color: c.ink }}>
+        {headline}
+      </Text>
+
+      {slipping.length > 0 && (
+        <Text style={{ fontSize: theme.size.body, color: c.inkSecondary }}>
+          {`${slipping.length} still shaky — ${slipping.map((s) => s.concept_text).slice(0, 3).join(', ')}. Recalling them again tomorrow is what makes them stick.`}
+        </Text>
+      )}
+
+      {summary && summary.predicted_count > 0 && summary.calibration_label && (
+        <Text style={labelStyle(theme)}>{CLOSE_CALIBRATION[summary.calibration_label]}</Text>
+      )}
+
+      <Text style={{ fontSize: theme.size.bodySm, color: c.inkTertiary }}>
+        Come back tomorrow and recap — spacing is the part that lasts.
+      </Text>
+
+      <Button label="Back to reading" onPress={onDone} />
+    </View>
   );
 }

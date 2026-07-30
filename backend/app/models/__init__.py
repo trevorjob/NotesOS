@@ -27,7 +27,13 @@ from app.models.progress import (
     MessageRole,
 )
 from app.models.notification import Notification, NotificationType, NotificationPreference
-from app.models.knowledge import TopicKnowledge, AudioLesson, KnowledgeStatus
+from app.models.knowledge import (
+    TopicKnowledge,
+    AudioArtifact,
+    AudioScopeType,
+    AudioLens,
+    KnowledgeStatus,
+)
 from app.models.retrieval import Concept, ConceptState, RetrievalAttempt
 from app.models.consume import ConsumeEvent, ConsumeKind
 from app.models.practice_test import PracticeTest, PracticeTestQuestion
@@ -70,7 +76,9 @@ __all__ = [
     "NotificationPreference",
     # Knowledge
     "TopicKnowledge",
-    "AudioLesson",
+    "AudioArtifact",
+    "AudioScopeType",
+    "AudioLens",
     "KnowledgeStatus",
     # Retrieval substrate
     "Concept",

@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 import { useTheme } from '@/theme/ThemeProvider';
@@ -9,6 +9,7 @@ import { Divider } from '@/components/ui/Divider';
 import { IconButton } from '@/components/ui/IconButton';
 import { CoursePickerSheet } from '@/components/course/CoursePickerSheet';
 import { MyCourse, fetchMyCourses } from '@/lib/courses';
+import { NextAction, fetchNextAction } from '@/lib/retrieval';
 
 interface RecentNote {
   topicId: string;
@@ -31,12 +32,23 @@ function recentNotesFrom(courses: MyCourse[]): RecentNote[] {
     }));
 }
 
+const ACTION_LEAD: Record<NextAction['kind'], string> = {
+  review: 'Fading — worth firming up',
+  calibration: 'Sure but missed — recheck',
+  dump: 'Fresh read — dump it while warm',
+  new: 'New — a quick pretest primes it',
+  get_ahead: 'All caught up — get ahead',
+};
+
 export default function HomeScreen() {
   const { c, font, size, space, trackingUtility } = useTheme();
   const { openSwitcher } = useQuickSwitcher();
 
   const [courses, setCourses] = useState<MyCourse[]>([]);
+  const [action, setAction] = useState<NextAction | null>(null);
+  const [actionLoading, setActionLoading] = useState(true);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerPurpose, setPickerPurpose] = useState<'capture' | 'test'>('capture');
 
   useFocusEffect(
     useCallback(() => {
@@ -49,11 +61,36 @@ export default function HomeScreen() {
           if (alive) setCourses([]);
         }
       })();
+      (async () => {
+        try {
+          const next = await fetchNextAction();
+          if (alive) setAction(next);
+        } catch {
+          if (alive) setAction(null);
+        } finally {
+          if (alive) setActionLoading(false);
+        }
+      })();
       return () => {
         alive = false;
       };
     }, [])
   );
+
+  // The engine already chose the mode; hand retrieval the topic + first target concept so it
+  // opens straight into the right challenge (concept modes challenge it; dump/recap ignore it).
+  const startAction = () => {
+    if (!action) return;
+    router.push({
+      pathname: '/retrieval',
+      params: {
+        topicId: action.topic_id,
+        courseId: action.course_id,
+        mode: action.mode,
+        ...(action.concept_ids[0] ? { conceptId: action.concept_ids[0] } : {}),
+      },
+    });
+  };
 
   const recents = useMemo(() => recentNotesFrom(courses), [courses]);
 
@@ -88,19 +125,47 @@ export default function HomeScreen() {
             label="Add material"
             variant="secondary"
             icon={<Text style={{ color: c.ink, fontSize: 18, lineHeight: 18 }}>+</Text>}
-            onPress={() => setPickerOpen(true)}
+            onPress={() => {
+              setPickerPurpose('capture');
+              setPickerOpen(true);
+            }}
             style={{ flex: 1 }}
           />
         </View>
 
-        {/* Retrieval hero — still mock; wired in the retrieval pass (§2.7). */}
+        <Pressable
+          onPress={() => {
+            setPickerPurpose('test');
+            setPickerOpen(true);
+          }}
+          style={{ paddingHorizontal: space.gutterPage, paddingTop: 12, minHeight: 44, justifyContent: 'center' }}
+        >
+          <Text style={{ color: c.confirm, textDecorationLine: 'underline', fontSize: size.bodySm }}>✎ Build a practice test</Text>
+        </Pressable>
+
+        {/* Retrieval hero — the engine picks the single highest-value thing to study now. */}
         <View style={{ flex: 1, justifyContent: 'center', paddingHorizontal: space.gutterPage, gap: 14 }}>
-          <Text style={[utilityText, { color: c.stateFading }]}>3 concepts slipping in Cellular Respiration</Text>
-          <Text style={{ fontFamily: font.display, fontSize: size.display1, lineHeight: size.display1 * 1.15, color: c.ink }}>
-            Firm up the electron transport chain
-          </Text>
-          <Text style={{ fontSize: size.bodySm, color: c.inkSecondary }}>About 5 minutes · quiz + one worked recall</Text>
-          <Button label="Start review" onPress={() => router.push('/retrieval')} style={{ marginTop: 10 }} />
+          {actionLoading ? (
+            <ActivityIndicator color={c.ink} />
+          ) : action ? (
+            <>
+              <Text style={[utilityText, { color: c.stateFading }]}>{ACTION_LEAD[action.kind]}</Text>
+              <Text style={{ fontFamily: font.display, fontSize: size.display1, lineHeight: size.display1 * 1.15, color: c.ink }}>
+                {action.topic_title}
+              </Text>
+              <Text style={{ fontSize: size.bodySm, color: c.inkSecondary }}>{`${action.reason} · about ${action.est_minutes} min`}</Text>
+              <Button label="Start review" onPress={startAction} style={{ marginTop: 10 }} />
+            </>
+          ) : (
+            <>
+              <Text style={{ fontFamily: font.display, fontSize: size.display2, lineHeight: size.display2 * 1.15, color: c.ink }}>
+                Nothing due right now
+              </Text>
+              <Text style={{ fontSize: size.bodySm, color: c.inkSecondary }}>
+                Add material or open a note and tap a concept to start a review.
+              </Text>
+            </>
+          )}
         </View>
 
         <View style={{ paddingHorizontal: space.gutterPage, paddingBottom: 24 }}>
@@ -132,7 +197,8 @@ export default function HomeScreen() {
         onClose={() => setPickerOpen(false)}
         onSelect={(courseId) => {
           setPickerOpen(false);
-          router.push({ pathname: '/capture', params: { courseId } });
+          const pathname = pickerPurpose === 'test' ? '/testbuilder' : '/capture';
+          router.push({ pathname, params: { courseId } });
         }}
       />
     </SafeAreaView>

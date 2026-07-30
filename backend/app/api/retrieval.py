@@ -21,6 +21,7 @@ import uuid
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,10 +33,20 @@ from app.models.retrieval import Concept
 from app.models.subject import SubjectFamily
 from app.models.user import User
 from app.services import paper
+from app.services.audio_generator import audio_generator
 from app.services.redis_client import redis_client
 from app.services.retrieval import dump, engine, next_action, recap, recognition, registry, session
-from app.services.retrieval import subject_profiles, worked
-from app.services.retrieval.modes import Challenge, ModeContext
+from app.services.retrieval import session_summary, subject_profiles, worked
+from app.services.retrieval.modes import (
+    MAX_CONVO_TURNS,
+    ROLE_AI,
+    ROLE_USER,
+    Challenge,
+    ConversationTurn,
+    ModeContext,
+    is_conversational,
+    user_turns,
+)
 
 router = APIRouter(prefix="/api/retrieval", tags=["retrieval"])
 
@@ -60,9 +71,12 @@ class NextRequest(BaseModel):
 class NextResponse(BaseModel):
     challenge_id: str
     concept_id: str
+    concept_text: str   # the concept term, so a continuous session can label each challenge
     mode: str
     prompt: str
     payload: dict
+    # teach / ramble run a back-and-forth: the client drives /turn instead of /attempt.
+    conversational: bool = False
 
 
 class AttemptRequest(BaseModel):
@@ -88,6 +102,34 @@ class AttemptResponse(BaseModel):
     outcome: dict
     state: dict
     calibration: Calibration
+
+
+class TurnRequest(BaseModel):
+    challenge_id: str
+    message: str = ""   # the user's latest turn (may be blank — a stall is a close signal)
+    # Predicted confidence is captured at open, before talking — stamped on the first turn.
+    predicted_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    end: bool = False   # user tapped done; grade what we have
+
+
+class TurnResponse(BaseModel):
+    """One step of a conversational bout: either the AI's next probe, or the graded close.
+
+    While ``closed`` is false the client keeps the loop going (show ``reply``, capture the
+    next turn). On close the outcome / state / calibration land here — the single graded
+    attempt, exactly as ``/attempt`` returns for one-shot modes. No trailing call needed.
+    """
+
+    challenge_id: str
+    closed: bool
+    turn_count: int                      # user turns so far
+    reply: Optional[str] = None          # AI's next probe, when not closed
+    close_reason: Optional[str] = None
+    concept_id: Optional[str] = None
+    mode: Optional[str] = None
+    outcome: Optional[dict] = None
+    state: Optional[dict] = None
+    calibration: Optional[Calibration] = None
 
 
 class RevealRequest(BaseModel):
@@ -200,6 +242,28 @@ class NextActionResponse(BaseModel):
     est_minutes: int
 
 
+class SessionSummaryConcept(BaseModel):
+    concept_id: str
+    concept_text: str
+    state: str          # current mastery: solid / fading / shaky
+    attempts: int
+    mean_score: float
+
+
+class SessionSummaryResponse(BaseModel):
+    """The warm close (§6): what the last session changed. ``null`` when there's no session."""
+
+    started_at: str
+    ended_at: str
+    attempt_count: int
+    concept_count: int
+    firmed: list[SessionSummaryConcept]      # solid now — lead with these
+    slipping: list[SessionSummaryConcept]    # shaky / fading — whisper these
+    calibration_delta: Optional[float]
+    calibration_label: Optional[str]
+    predicted_count: int
+
+
 # ── Challenge store (server-side, opaque handoff between the two requests) ─────
 
 def _challenge_key(challenge_id: str) -> str:
@@ -268,8 +332,50 @@ async def _drop_free_recall(kind: str, challenge_id: str) -> None:
     await client.delete(_free_recall_key(kind, challenge_id))
 
 
+# A conversational bout (teach / ramble) holds a running transcript instead of a single
+# challenge. Same opaque-handoff pattern + key namespace as the one-shot store; the record
+# carries the history and the confidence stamped at the first turn.
+async def _store_conversation(user_id, concept: Concept, mode_key: str, challenge: Challenge) -> str:
+    challenge_id = uuid.uuid4().hex
+    record = {
+        "user_id": str(user_id),
+        "concept_id": str(concept.id),
+        "mode": mode_key,
+        "prompt": challenge.prompt,
+        "conversational": True,
+        "predicted_confidence": None,
+        "history": [{"role": ROLE_AI, "text": challenge.prompt}],
+    }
+    client = await redis_client.get_client()
+    await client.set(_challenge_key(challenge_id), json.dumps(record), ex=_CHALLENGE_TTL_SEC)
+    return challenge_id
+
+
+def _history_from_record(record: dict) -> list[ConversationTurn]:
+    return [ConversationTurn(role=t["role"], text=t["text"]) for t in record.get("history", [])]
+
+
+def _history_to_json(history: list[ConversationTurn]) -> list[dict]:
+    return [{"role": t.role, "text": t.text} for t in history]
+
+
 def _sanitize(payload: Optional[dict]) -> dict:
     return {k: v for k, v in (payload or {}).items() if k not in _SENSITIVE_PAYLOAD_KEYS}
+
+
+def _outcome_dict(outcome) -> dict:
+    return {"score": outcome.score, "grade": outcome.grade, "feedback": outcome.feedback, "detail": outcome.detail}
+
+
+def _state_dict(state) -> dict:
+    return {
+        "due": state.due.isoformat() if state.due else None,
+        "reps": state.reps,
+        "lapses": state.lapses,
+        "stability": state.stability,
+        "difficulty": state.difficulty,
+        "last_grade": state.last_grade,
+    }
 
 
 def _calibration(predicted: Optional[float], actual: float) -> Calibration:
@@ -324,14 +430,20 @@ async def next_challenge(
         extra={"subject_family": family.value, "grading": profile.grading},
     )
     challenge = await mode.generate(concept, ctx)
-    challenge_id = await _store_challenge(user.id, concept, mode.key, challenge)
+    conversational = is_conversational(mode)
+    if conversational:
+        challenge_id = await _store_conversation(user.id, concept, mode.key, challenge)
+    else:
+        challenge_id = await _store_challenge(user.id, concept, mode.key, challenge)
 
     return NextResponse(
         challenge_id=challenge_id,
         concept_id=str(concept.id),
+        concept_text=concept.text,
         mode=mode.key,
         prompt=challenge.prompt,
         payload=_sanitize(challenge.payload),
+        conversational=conversational,
     )
 
 
@@ -388,25 +500,92 @@ async def submit_attempt(
     await recognition.on_attempt(db, attempt=result.attempt, concept=concept, learner_id=user.id)
     await _drop_challenge(body.challenge_id)
 
-    state = result.state
     return AttemptResponse(
         concept_id=str(concept.id),
         mode=mode.key,
-        outcome={
-            "score": outcome.score,
-            "grade": outcome.grade,
-            "feedback": outcome.feedback,
-            "detail": outcome.detail,
-        },
-        state={
-            "due": state.due.isoformat() if state.due else None,
-            "reps": state.reps,
-            "lapses": state.lapses,
-            "stability": state.stability,
-            "difficulty": state.difficulty,
-            "last_grade": state.last_grade,
-        },
+        outcome=_outcome_dict(outcome),
+        state=_state_dict(result.state),
         calibration=_calibration(predicted_confidence, outcome.score),
+    )
+
+
+@router.post("/turn", response_model=TurnResponse)
+async def conversation_turn(
+    body: TurnRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Advance a conversational bout (teach / ramble): dig one more turn, or grade and close.
+
+    One graded attempt still lands, at close — the dialogue is scaffolding before that single
+    commit (design note §2). Close fires on the mode's call, the user tapping done, or the
+    ``MAX_CONVO_TURNS`` ceiling, whichever comes first.
+    """
+    record = await _load_challenge(body.challenge_id)
+    if record is None:
+        raise HTTPException(status.HTTP_410_GONE, "conversation expired or not found")
+    if record["user_id"] != str(user.id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "not your conversation")
+    if not record.get("conversational"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "not a conversational challenge — use /attempt")
+
+    concept = await db.get(Concept, uuid.UUID(record["concept_id"]))
+    if concept is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "concept no longer exists")
+    await verify_course_enrollment(db, user.id, concept.course_id)
+
+    mode = _get_mode_or_400(record["mode"])
+    ctx = ModeContext(db=db, user_id=user.id)
+
+    # Confidence is captured once, at the first turn — before the well is graded.
+    if body.predicted_confidence is not None and record.get("predicted_confidence") is None:
+        record["predicted_confidence"] = body.predicted_confidence
+
+    history = _history_from_record(record)
+    history.append(ConversationTurn(role=ROLE_USER, text=body.message))
+    turns_taken = len(user_turns(history))
+
+    if body.end:
+        closed, reason, reply = True, "user_ended", None
+    elif turns_taken >= MAX_CONVO_TURNS:
+        closed, reason, reply = True, "turn_cap", None
+    else:
+        decision = await mode.turn(concept, history, ctx)
+        closed, reason, reply = decision.closed, decision.close_reason, decision.reply
+
+    if not closed:
+        history.append(ConversationTurn(role=ROLE_AI, text=reply or ""))
+        record["history"] = _history_to_json(history)
+        await _update_challenge(body.challenge_id, record)
+        return TurnResponse(
+            challenge_id=body.challenge_id, closed=False, turn_count=turns_taken, reply=reply,
+        )
+
+    predicted = record.get("predicted_confidence")
+    outcome = await mode.close(concept, history, ctx)
+    result = await engine.record_attempt(
+        db,
+        user_id=user.id,
+        concept_id=concept.id,
+        mode=mode.key,
+        outcome=outcome,
+        predicted_confidence=predicted,
+        challenge={"prompt": record["prompt"], "conversational": True, "turns": turns_taken},
+        response={"transcript": _history_to_json(history)},
+    )
+    await recognition.on_attempt(db, attempt=result.attempt, concept=concept, learner_id=user.id)
+    await _drop_challenge(body.challenge_id)
+
+    return TurnResponse(
+        challenge_id=body.challenge_id,
+        closed=True,
+        turn_count=turns_taken,
+        close_reason=reason,
+        concept_id=str(concept.id),
+        mode=mode.key,
+        outcome=_outcome_dict(outcome),
+        state=_state_dict(result.state),
+        calibration=_calibration(predicted, outcome.score),
     )
 
 
@@ -564,6 +743,72 @@ async def get_next_action(
         mode=action.mode,
         reason=action.reason,
         est_minutes=action.est_minutes,
+    )
+
+
+_TTS_MAX_CHARS = 400
+_TTS_VOICE = "nova"
+
+
+@router.get("/tts")
+async def synthesize_probe(text: str, user: User = Depends(get_current_user)):
+    """Stream a short conversational probe aloud (teach / ramble voice-out).
+
+    Proxies the shared OpenAI-TTS provider as a live MP3 stream — playback starts before the
+    clip finishes, no server-side buffering. Bounded to a short probe, NOT the long-audio path
+    (that's the async audio_worker → Cloudinary). A courtesy layer: the loop reads fine
+    text-first if voice is unavailable.
+    """
+    clean = text.strip()
+    if not clean:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "text is required")
+    return StreamingResponse(
+        audio_generator.stream_speech(clean[:_TTS_MAX_CHARS], voice=_TTS_VOICE),
+        media_type="audio/mpeg",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get("/session-summary", response_model=Optional[SessionSummaryResponse])
+async def get_session_summary(
+    course_id: Optional[uuid.UUID] = None,
+    topic_id: Optional[uuid.UUID] = None,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The warm close for the user's most recent session — what it firmed / left slipping.
+
+    Derived from the attempt log (uncached, per-user). ``null`` when the user has no
+    session yet. Optionally scoped to a course/topic.
+    """
+    if course_id is not None:
+        await verify_course_enrollment(db, user.id, course_id)
+
+    summary = await session_summary.build_session_summary(
+        db, user_id=user.id, course_id=course_id, topic_id=topic_id
+    )
+    if summary is None:
+        return None
+    return SessionSummaryResponse(
+        started_at=summary.started_at.isoformat(),
+        ended_at=summary.ended_at.isoformat(),
+        attempt_count=summary.attempt_count,
+        concept_count=summary.concept_count,
+        firmed=[_summary_concept(c) for c in summary.firmed],
+        slipping=[_summary_concept(c) for c in summary.slipping],
+        calibration_delta=summary.calibration_delta,
+        calibration_label=summary.calibration_label,
+        predicted_count=summary.predicted_count,
+    )
+
+
+def _summary_concept(c: session_summary.ConceptChange) -> SessionSummaryConcept:
+    return SessionSummaryConcept(
+        concept_id=c.concept_id,
+        concept_text=c.concept_text,
+        state=c.state,
+        attempts=c.attempts,
+        mean_score=c.mean_score,
     )
 
 

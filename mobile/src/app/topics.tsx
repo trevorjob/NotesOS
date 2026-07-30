@@ -8,6 +8,7 @@ import { useQuickSwitcher } from '@/components/nav/QuickSwitcherContext';
 import { IconButton } from '@/components/ui/IconButton';
 import { Button } from '@/components/ui/Button';
 import { CourseDetail, CourseTopic, fetchCourseTopics } from '@/lib/topics';
+import { NextAction, fetchNextAction } from '@/lib/retrieval';
 
 function readError(err: unknown): string {
   if (isAxiosError(err) && typeof err.response?.data?.detail === 'string') {
@@ -25,12 +26,13 @@ function topicSubtitle(topic: CourseTopic): string {
 }
 
 export default function TopicsScreen() {
-  const { c, font, size, space, trackingUtility } = useTheme();
+  const { c, font, size, space, radius, trackingUtility } = useTheme();
   const { openSwitcher } = useQuickSwitcher();
   const { courseId } = useLocalSearchParams<{ courseId?: string }>();
 
   const [course, setCourse] = useState<CourseDetail | null>(null);
   const [topics, setTopics] = useState<CourseTopic[]>([]);
+  const [action, setAction] = useState<NextAction | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -56,11 +58,32 @@ export default function TopicsScreen() {
           if (alive) setLoading(false);
         }
       })();
+      // Course-scoped "study now" — the highest-value thing to do in *this* course. Non-fatal.
+      fetchNextAction({ course_id: courseId })
+        .then((a) => {
+          if (alive) setAction(a);
+        })
+        .catch(() => {
+          if (alive) setAction(null);
+        });
       return () => {
         alive = false;
       };
     }, [courseId])
   );
+
+  const startAction = () => {
+    if (!action) return;
+    router.push({
+      pathname: '/retrieval',
+      params: {
+        topicId: action.topic_id,
+        courseId: action.course_id,
+        mode: action.mode,
+        ...(action.concept_ids[0] ? { conceptId: action.concept_ids[0] } : {}),
+      },
+    });
+  };
 
   const sectionLabel = (label: string) => (
     <Text
@@ -123,6 +146,19 @@ export default function TopicsScreen() {
               </View>
             )}
 
+            {action && (
+              <Pressable
+                onPress={startAction}
+                style={{ marginTop: 16, padding: 16, borderRadius: radius.md, borderWidth: 1.5, borderColor: c.confirm, backgroundColor: c.paper, gap: 6 }}
+              >
+                <Text style={{ fontFamily: font.utility, fontSize: size.utility, letterSpacing: trackingUtility(size.utility), textTransform: 'uppercase', color: c.confirm }}>
+                  Study now
+                </Text>
+                <Text style={{ fontFamily: font.display, fontSize: size.display3, color: c.ink }}>{action.topic_title}</Text>
+                <Text style={{ fontSize: size.bodySm, color: c.inkSecondary }}>{`${action.reason} · about ${action.est_minutes} min`}</Text>
+              </Pressable>
+            )}
+
             {topics.length > 0 && sectionLabel('Topics')}
             {topics.map((topic) => (
               <Pressable
@@ -137,14 +173,23 @@ export default function TopicsScreen() {
           </ScrollView>
         )}
 
-        <View style={{ padding: space.gutterPage, borderTopWidth: 1, borderTopColor: c.paperEdge }}>
+        <View style={{ padding: space.gutterPage, borderTopWidth: 1, borderTopColor: c.paperEdge, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
           <Pressable
             onPress={() => router.push({ pathname: '/capture', params: { courseId } })}
             disabled={!courseId}
             style={{ minHeight: 44, justifyContent: 'center' }}
           >
             <Text style={{ color: c.confirm, textDecorationLine: 'underline', fontSize: size.bodySm }}>
-              Add material to this course
+              Add material
+            </Text>
+          </Pressable>
+          <Pressable
+            onPress={() => router.push({ pathname: '/testbuilder', params: { courseId } })}
+            disabled={!courseId}
+            style={{ minHeight: 44, justifyContent: 'center' }}
+          >
+            <Text style={{ color: c.confirm, textDecorationLine: 'underline', fontSize: size.bodySm }}>
+              Build a practice test
             </Text>
           </Pressable>
         </View>
