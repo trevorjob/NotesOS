@@ -113,6 +113,22 @@ async def test_empty_topic_yields_placeholder(db_session, llm):
     assert llm.meta_calls == 0  # never called the model
 
 
+async def test_synthesis_for_deleted_topic_is_a_noop(db_session, llm):
+    # A synthesis job can outlive its topic (capture reorg / delete). Synthesising a
+    # topic that no longer exists must NOT insert topic_knowledge (that trips the FK) —
+    # it bails cleanly with a non-persisted FAILED record.
+    ghost_topic_id = str(uuid.uuid4())
+
+    knowledge = await synth.synthesize(ghost_topic_id, db_session)
+
+    assert knowledge.status.value == "failed"
+    assert llm.meta_calls == 0
+    rows = await db_session.execute(
+        select(TopicKnowledge).where(TopicKnowledge.topic_id == uuid.UUID(ghost_topic_id))
+    )
+    assert rows.scalar_one_or_none() is None  # nothing written
+
+
 # ── incremental merge ───────────────────────────────────────────────────────
 
 

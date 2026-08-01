@@ -9,6 +9,7 @@ import { Switch } from '@/components/ui/Switch';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { clearTokens } from '@/lib/auth';
+import { unregisterPushToken } from '@/lib/push';
 import { Me, changePassword, deleteAccount, fetchMe, updatePersonality, updateProfile } from '@/lib/profile';
 import { fetchNotificationPreferences, updateNotificationPreferences } from '@/lib/notifications';
 
@@ -253,6 +254,7 @@ export default function SettingsScreen() {
   };
 
   const signOut = async () => {
+    await unregisterPushToken();
     await clearTokens();
     router.replace('/login');
   };
@@ -262,6 +264,9 @@ export default function SettingsScreen() {
     setDelError(null);
     setDelSaving(true);
     try {
+      // Unregister while the access token is still live — deleteAccount() revokes it
+      // immediately server-side (the is_active gate), so this must run first.
+      await unregisterPushToken();
       await deleteAccount(delPw);
       await clearTokens();
       router.replace('/login');

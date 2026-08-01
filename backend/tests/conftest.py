@@ -56,6 +56,43 @@ TEST_DATABASE_URL = os.environ.get(
     "postgresql+asyncpg://notesos:blessed@localhost:5432/notesos_test",
 )
 
+
+def _db_name(url: str) -> str:
+    return url.rsplit("/", 1)[-1].split("?", 1)[0]
+
+
+def _assert_safe_test_database() -> None:
+    """Hard stop before this session can touch TEST_DATABASE_URL at all.
+
+    This fixture runs drop_all + create_all against TEST_DATABASE_URL every
+    session. A misconfigured value that happens to point at the real dev/prod
+    database silently wipes it — this has actually happened. "test" in the name
+    is the one convention every real db in this repo violates, so it's a cheap,
+    reliable tripwire; DATABASE_URL is checked explicitly on top of it.
+    """
+    name = _db_name(TEST_DATABASE_URL)
+    dev_url = os.environ.get("DATABASE_URL", "")
+    dev_name = _db_name(dev_url) if dev_url else None
+
+    if name == dev_name:
+        raise RuntimeError(
+            f"REFUSING TO RUN: TEST_DATABASE_URL targets {name!r}, the same database "
+            f"as DATABASE_URL. The test suite runs drop_all + create_all on "
+            f"TEST_DATABASE_URL every session — this would wipe your dev database. "
+            f"Point TEST_DATABASE_URL at a dedicated test database instead."
+        )
+    if "test" not in name.lower():
+        raise RuntimeError(
+            f"REFUSING TO RUN: TEST_DATABASE_URL targets {name!r}, which doesn't look "
+            f"like a test database (expected 'test' in the name). The test suite runs "
+            f"drop_all + create_all on this database every session. If this really is "
+            f"a disposable test database, rename it to include 'test', or adjust this "
+            f"check in conftest.py deliberately."
+        )
+
+
+_assert_safe_test_database()
+
 # Importing app.models registers every model on Base.metadata.
 import app.models  # noqa: F401,E402
 from app.database import Base, get_db  # noqa: E402

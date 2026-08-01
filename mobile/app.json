@@ -64,7 +64,8 @@
         {
           "microphonePermission": "NotesOS uses your microphone so you can record a lecture straight into your notes."
         }
-      ]
+      ],
+      "expo-notifications"
     ],
     "experiments": {
       "typedRoutes": true,

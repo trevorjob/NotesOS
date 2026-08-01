@@ -8,8 +8,10 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavFab } from '@/components/nav/NavFab';
 import { QuickSwitcher } from '@/components/nav/QuickSwitcher';
 import { QuickSwitcherProvider } from '@/components/nav/QuickSwitcherContext';
+import { NotificationsProvider } from '@/components/notifications/NotificationsProvider';
 import { fontsToLoad } from '@/theme/fonts';
 import { ThemeProvider } from '@/theme/ThemeProvider';
+import { initNotificationTapHandling } from '@/lib/push';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -30,39 +32,43 @@ export default function RootLayout() {
     if (loaded) SplashScreen.hideAsync();
   }, [loaded]);
 
+  useEffect(() => initNotificationTapHandling(), []);
+
   if (!loaded) return null;
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <ThemeProvider>
-          <QuickSwitcherProvider>
-            <StatusBar style="auto" />
-            <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: 'transparent' } }}>
-              <Stack.Screen name="index" />
-              <Stack.Screen name="login" />
-              <Stack.Screen name="onboarding" />
-              <Stack.Screen name="contacts" />
-              <Stack.Screen name="home" />
-              <Stack.Screen name="note" />
-              <Stack.Screen name="retrieval" />
-              <Stack.Screen name="voice" />
-              <Stack.Screen name="capture" options={{ presentation: 'modal' }} />
-              <Stack.Screen name="testbuilder" options={{ presentation: 'modal' }} />
-              <Stack.Screen name="practice-test" />
-              <Stack.Screen name="courses" />
-              <Stack.Screen name="topics" />
-              <Stack.Screen name="coursecreate" options={{ presentation: 'modal' }} />
-              <Stack.Screen name="coursejoin" options={{ presentation: 'modal' }} />
-              <Stack.Screen name="discovery" />
-              <Stack.Screen name="settings" />
-              <Stack.Screen name="notifications" />
-              <Stack.Screen name="listen" />
-              <Stack.Screen name="source" />
-            </Stack>
-            <GlobalNav />
-            <QuickSwitcher />
-          </QuickSwitcherProvider>
+          <NotificationsProvider>
+            <QuickSwitcherProvider>
+              <StatusBar style="auto" />
+              <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: 'transparent' } }}>
+                <Stack.Screen name="index" />
+                <Stack.Screen name="login" />
+                <Stack.Screen name="onboarding" />
+                <Stack.Screen name="contacts" />
+                <Stack.Screen name="home" />
+                <Stack.Screen name="note" />
+                <Stack.Screen name="retrieval" />
+                <Stack.Screen name="voice" />
+                <Stack.Screen name="capture" options={{ presentation: 'modal' }} />
+                <Stack.Screen name="testbuilder" options={{ presentation: 'modal' }} />
+                <Stack.Screen name="practice-test" />
+                <Stack.Screen name="courses" />
+                <Stack.Screen name="topics" />
+                <Stack.Screen name="coursecreate" options={{ presentation: 'modal' }} />
+                <Stack.Screen name="coursejoin" options={{ presentation: 'modal' }} />
+                <Stack.Screen name="discovery" />
+                <Stack.Screen name="settings" />
+                <Stack.Screen name="notifications" />
+                <Stack.Screen name="listen" />
+                <Stack.Screen name="source" />
+              </Stack>
+              <GlobalNav />
+              <QuickSwitcher />
+            </QuickSwitcherProvider>
+          </NotificationsProvider>
         </ThemeProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>

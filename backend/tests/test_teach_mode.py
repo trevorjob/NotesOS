@@ -12,6 +12,7 @@ from sqlalchemy import select
 
 from app.models import Concept, ConceptState, Course, RetrievalAttempt, Topic, User
 from app.services.retrieval import engine
+from app.services.retrieval import teach_mode as teach_mode_module
 from app.services.retrieval.modes import ModeContext
 from app.services.retrieval.teach_mode import TeachMode
 from tests.conftest import unique_phone
@@ -91,3 +92,22 @@ def _concept():
     c = Concept(text="A concept", definition="def")
     c.id = uuid.uuid4()
     return c
+
+
+async def test_judge_grounds_prompt_in_source_context(monkeypatch):
+    async def fake_source_context(db, concept):
+        return "what the note actually said"
+    monkeypatch.setattr(teach_mode_module, "source_context", fake_source_context)
+
+    captured = {}
+    async def fake_call_llm(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return '{"correctness": 0.8, "completeness": 0.8, "clarity": 0.8, "confusions": [], "feedback": "ok"}'
+    monkeypatch.setattr(teach_mode_module, "call_llm", fake_call_llm)
+
+    mode = TeachMode()
+    ctx = ModeContext(db=object(), user_id=None, extra={})
+    await mode.evaluate(_concept(), None, "an explanation", ctx)
+
+    assert "SOURCE MATERIAL" in captured["prompt"]
+    assert "what the note actually said" in captured["prompt"]

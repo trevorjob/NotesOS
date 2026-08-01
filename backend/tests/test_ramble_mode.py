@@ -13,6 +13,7 @@ from sqlalchemy import select
 
 from app.models import Concept, ConceptState, Course, RetrievalAttempt, Topic, User
 from app.services.retrieval import engine
+from app.services.retrieval import ramble_mode as ramble_mode_module
 from app.services.retrieval.modes import ModeContext
 from app.services.retrieval.ramble_mode import RambleMode
 from tests.conftest import unique_phone
@@ -95,3 +96,22 @@ def _concept():
     c = Concept(text="A concept", definition="def")
     c.id = uuid.uuid4()
     return c
+
+
+async def test_analyze_grounds_prompt_in_source_context(monkeypatch):
+    async def fake_source_context(db, concept):
+        return "what the note actually said"
+    monkeypatch.setattr(ramble_mode_module, "source_context", fake_source_context)
+
+    captured = {}
+    async def fake_call_llm(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return '{"coverage": 0.8, "covered": [], "missed": [], "feedback": "ok"}'
+    monkeypatch.setattr(ramble_mode_module, "call_llm", fake_call_llm)
+
+    mode = RambleMode()
+    ctx = ModeContext(db=object(), user_id=None, extra={})
+    await mode.evaluate(_concept(), None, "a full explanation", ctx)
+
+    assert "SOURCE MATERIAL" in captured["prompt"]
+    assert "what the note actually said" in captured["prompt"]

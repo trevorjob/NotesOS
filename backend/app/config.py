@@ -85,6 +85,10 @@ class Settings(BaseSettings):
     # digest (aggregate passive / warm active) fired by the B2 notifications tick. Gates
     # delivery only; consume events are always recorded.
     ENABLE_RECOGNITION: bool = True
+    # OS-level push via Expo (notifications-plan.md Phase B). Gates only the outbound
+    # send in services/push.py — device registration and the in-app feed are unaffected,
+    # so tests/local dev can silence real network calls to Expo's push API.
+    ENABLE_PUSH: bool = True
 
     # Real-time voice lane (B5, premium). A separate streaming conversational surface —
     # NOT the batch voice workers, NOT retrieval /attempt (build-guide §82/§134). Off by

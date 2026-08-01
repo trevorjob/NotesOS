@@ -21,8 +21,7 @@ class Grader:
         question_type: str,
         topic_name: str,
         is_voice: bool = False,
-        
-        
+        source_context: str = "",
         personality: Optional[dict] = None,
     ) -> Dict[str, Any]:
         """
@@ -35,6 +34,9 @@ class Grader:
             is_voice: True if answer was transcribed from voice
             question_type: Type of question (mcq, short_answer, essay)
             topic_name: Topic name for encouragement context
+            source_context: The concept's original source passages (LLM-only —
+                never shown to the student), for verifying claims the compressed
+                expected_answer doesn't fully spell out. Optional; "" is a no-op.
             personality: User personality settings dict
 
         Returns:
@@ -47,7 +49,7 @@ class Grader:
         """
         # 1. Build grading prompt
         prompt = self._build_grading_prompt(
-            question, expected_answer, student_answer, question_type, is_voice
+            question, expected_answer, student_answer, question_type, is_voice, source_context
         )
 
         # 2. Get AI grading
@@ -113,10 +115,17 @@ class Grader:
 
     def _build_grading_prompt(
         self, question: str, expected: str, student: str,
-        question_type: str, is_voice: bool
+        question_type: str, is_voice: bool, source_context: str = ""
     ) -> str:
         if question_type == "essay":
-            return self._build_essay_grading_prompt(question, expected, student, is_voice)
+            return self._build_essay_grading_prompt(question, expected, student, is_voice, source_context)
+
+        source_block = (
+            f"\n    SOURCE MATERIAL (ground truth — use to verify claims the expected answer "
+            f"doesn't fully spell out; don't penalise the student for anything accurate that's "
+            f"in here but not in the expected answer):\n    {source_context}\n"
+            if source_context else ""
+        )
 
         voice_guidance = ""
         if is_voice:
@@ -143,7 +152,7 @@ class Grader:
 
     EXPECTED ANSWER (model answer — key points the student should cover):
     {expected}
-
+    {source_block}
     STUDENT'S ANSWER:
     {student}
     {voice_guidance}
@@ -212,7 +221,7 @@ class Grader:
     Return ONLY valid JSON. No preamble."""
 
     def _build_essay_grading_prompt(
-        self, question: str, rubric: str, student: str, is_voice: bool
+        self, question: str, rubric: str, student: str, is_voice: bool, source_context: str = ""
     ) -> str:
         voice_guidance = ""
         if is_voice:
@@ -220,6 +229,12 @@ class Grader:
     VOICE ANSWER: This was transcribed from speech. Ignore filler words, false
     starts, and informal grammar. Grade the ideas, not the articulation.
     """
+        source_block = (
+            f"\n    SOURCE MATERIAL (ground truth — use to verify claims the rubric doesn't "
+            f"fully spell out; don't penalise the student for anything accurate that's in here "
+            f"but not in the rubric):\n    {source_context}\n"
+            if source_context else ""
+        )
 
         return f"""You are grading a university-level essay answer. Grade as a
     knowledgeable, fair tutor — reward genuine understanding, penalise
@@ -230,7 +245,7 @@ class Grader:
 
     MARKING RUBRIC (from the question setter):
     {rubric}
-
+    {source_block}
     STUDENT'S ESSAY:
     {student}
     {voice_guidance}

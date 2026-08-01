@@ -16,6 +16,7 @@ from typing import Any
 from app.services.grader import grader
 from app.services.llm import call_llm
 from app.services.retrieval import worked
+from app.services.retrieval.concepts import source_context
 from app.services.retrieval.modes import Challenge, ModeContext, Outcome, score_to_grade
 from app.services.retrieval.subject_profiles import GRADE_SELF_CALIBRATION
 
@@ -127,8 +128,9 @@ class QuizMode:
     # --- LLM boundary (overridden in tests) --------------------------------------
 
     async def _generate_question(self, concept, ctx: ModeContext) -> dict:
+        source = await source_context(ctx.db, concept)
         raw = await call_llm(
-            self._build_prompt(concept, ctx.extra.get("question_type")),
+            self._build_prompt(concept, ctx.extra.get("question_type"), source),
             task="question_gen",
             temperature=0.6,
             max_tokens=600,
@@ -137,6 +139,9 @@ class QuizMode:
         return self._parse(raw)
 
     async def _generate_worked_problem(self, concept, ctx: ModeContext) -> dict:
+        # No source grounding here — a worked problem tests transferable method
+        # application, not recall of this material's specific phrasing (per product
+        # call: grounding helps fact/definition testing, not generic skill practice).
         raw = await call_llm(
             self._build_worked_prompt(concept),
             task="worked_problem_gen",
@@ -147,6 +152,7 @@ class QuizMode:
         return self._parse(raw)
 
     async def _grade(self, concept, challenge: Challenge, answer: str, ctx: ModeContext) -> dict:
+        source = await source_context(ctx.db, concept)
         return await grader.grade_answer(
             question=challenge.prompt,
             expected_answer=challenge.payload.get("correct_answer") or (concept.definition or ""),
@@ -154,12 +160,18 @@ class QuizMode:
             question_type=(challenge.payload or {}).get("question_type", "short_answer"),
             topic_name=concept.text,
             is_voice=bool((challenge.payload or {}).get("is_voice")),
+            source_context=source,
         )
 
     # --- helpers -----------------------------------------------------------------
 
-    def _build_prompt(self, concept, requested_type=None) -> str:
+    def _build_prompt(self, concept, requested_type=None, source: str = "") -> str:
         definition = f"\nDEFINITION: {concept.definition}" if concept.definition else ""
+        source_block = (
+            f"\n\nSOURCE MATERIAL (ground the question in this — ask about what it actually "
+            f"says, but write your own question, don't quote it verbatim):\n{source}"
+            if source else ""
+        )
         # Default (review-loop) behaviour: the model picks the fitting shape. B14's
         # authored test lets the *author* fix the shape — passed via ctx.extra so the
         # whole set is one type. Absent ⇒ byte-identical to the original prompt.
@@ -191,7 +203,7 @@ class QuizMode:
 Not a definition-recall question — a question that shows whether the student
 actually understands it and could apply it.
 
-CONCEPT: {concept.text}{definition}
+CONCEPT: {concept.text}{definition}{source_block}
 
 {shape}
 

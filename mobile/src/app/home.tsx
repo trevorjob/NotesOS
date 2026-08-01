@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 import { useTheme } from '@/theme/ThemeProvider';
 import { useQuickSwitcher } from '@/components/nav/QuickSwitcherContext';
+import { useNotifications } from '@/components/notifications/NotificationsProvider';
 import { Button } from '@/components/ui/Button';
 import { Divider } from '@/components/ui/Divider';
 import { IconButton } from '@/components/ui/IconButton';
@@ -43,6 +44,7 @@ const ACTION_LEAD: Record<NextAction['kind'], string> = {
 export default function HomeScreen() {
   const { c, font, size, space, trackingUtility } = useTheme();
   const { openSwitcher } = useQuickSwitcher();
+  const { unreadCount } = useNotifications();
 
   const [courses, setCourses] = useState<MyCourse[]>([]);
   const [action, setAction] = useState<NextAction | null>(null);
@@ -108,7 +110,33 @@ export default function HomeScreen() {
           <Text style={[utilityText, { color: c.inkTertiary }]}>Good evening</Text>
           <View style={{ flexDirection: 'row', gap: 8 }}>
             <IconButton icon={<Text style={{ color: c.ink, fontSize: 16 }}>⌕</Text>} label="Jump to a course, topic, or note" onPress={openSwitcher} />
-            <IconButton icon={<Text style={{ color: c.ink, fontSize: 16 }}>●</Text>} label="Notifications" onPress={() => router.push('/notifications')} />
+            <View>
+              <IconButton
+                icon={<Text style={{ color: c.ink, fontSize: 16 }}>●</Text>}
+                label={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'}
+                onPress={() => router.push('/notifications')}
+              />
+              {unreadCount > 0 && (
+                <View
+                  style={{
+                    position: 'absolute',
+                    top: 4,
+                    right: 4,
+                    minWidth: 16,
+                    height: 16,
+                    borderRadius: 8,
+                    paddingHorizontal: 3,
+                    backgroundColor: c.confirm,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Text style={{ color: c.paper, fontSize: 10, fontWeight: '700' }}>
+                    {unreadCount > 9 ? '9+' : unreadCount}
+                  </Text>
+                </View>
+              )}
+            </View>
             <IconButton icon={<Text style={{ color: c.ink, fontSize: 16 }}>⚙</Text>} label="Settings" onPress={() => router.push('/settings')} />
           </View>
         </View>

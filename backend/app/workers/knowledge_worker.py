@@ -76,6 +76,17 @@ async def process_knowledge_job(job_data: dict):
 
     async with AsyncSessionLocal() as db:
         try:
+            # The topic can be deleted between this job being enqueued and picked up
+            # (capture reorg, manual delete). Synthesis for a topic that no longer
+            # exists is a no-op — skip cleanly instead of tripping the topic_knowledge
+            # FK when _upsert inserts a row pointing at a missing topic.
+            topic_exists = await db.scalar(
+                select(Topic.id).where(Topic.id == uuid.UUID(str(topic_id)))
+            )
+            if topic_exists is None:
+                print(f"⏭️  Knowledge job skipped — topic {topic_id} no longer exists")
+                return
+
             # Broadcast: synthesis started
             if broadcast:
                 await broadcast(

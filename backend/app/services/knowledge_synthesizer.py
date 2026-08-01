@@ -17,10 +17,13 @@ Three synthesis modes, decided per run:
 
 The note **body is streamed** as markdown prose (`call_llm_stream`) so the client
 can watch it write itself over the course WebSocket; the structured metadata
-(`key_points`, `concepts`) is extracted from the finished body in a second, cheap,
-whole-parsed call. Prose streams, JSON arrives whole — never a half-parsed blob.
+(`key_points`, `concepts`) is extracted from the finished body in two cheap,
+whole-parsed calls. Prose streams, JSON arrives whole — never a half-parsed blob.
+Concepts are the grain the retrieval engine measures, so their extraction is
+comprehensive (its own budget + model), not a short highlight list like key_points.
 """
 
+import asyncio
 import json
 import uuid as _uuid
 from datetime import datetime
@@ -40,6 +43,7 @@ logger = get_logger(__name__)
 
 MAX_CONTEXT_CHARS = 80_000
 CLASSIFY_SAMPLE_CHARS = 4_000  # B10: family is only a *prior*, so classify cheaply off a sample
+CONCEPTS_MAX_TOKENS = 8_000    # a complete atomic concept list runs long; don't let it truncate
 _EMPTY_NOTE = "_No materials uploaded yet. Add notes or files to generate a consolidated summary._"
 
 # B10 — content picks form. Taught to EVERY synthesis prompt regardless of subject family:
@@ -159,6 +163,18 @@ class KnowledgeSynthesizer:
 
         Returns the ``TopicKnowledge`` with status completed or failed.
         """
+        # The topic can be deleted between a synthesis job being enqueued and run
+        # (capture reorg, manual delete). Inserting topic_knowledge for a missing
+        # topic trips its FK — bail with a detached FAILED record (never persisted),
+        # so callers see a non-completed status and nothing is written.
+        if not await self._topic_exists(db, topic_id):
+            logger.info("Synthesis skipped — topic gone", extra={"topic_id": str(topic_id)})
+            return TopicKnowledge(
+                topic_id=_uuid.UUID(str(topic_id)),
+                status=KnowledgeStatus.FAILED,
+                error_message="topic no longer exists",
+            )
+
         knowledge = await self._upsert(db, topic_id)
         knowledge.status = KnowledgeStatus.PROCESSING
         knowledge.error_message = None
@@ -243,6 +259,10 @@ class KnowledgeSynthesizer:
             knowledge = TopicKnowledge(topic_id=_uuid.UUID(str(topic_id)))
             db.add(knowledge)
         return knowledge
+
+    async def _topic_exists(self, db: AsyncSession, topic_id: str) -> bool:
+        found = await db.scalar(select(Topic.id).where(Topic.id == _uuid.UUID(str(topic_id))))
+        return found is not None
 
     async def _topic_name(self, db: AsyncSession, topic_id: str) -> str:
         topic = await db.scalar(select(Topic).where(Topic.id == _uuid.UUID(str(topic_id))))
@@ -479,11 +499,24 @@ Output ONLY the finished markdown document — the whole updated note. No preamb
     # ── metadata extraction (whole-parsed) ──────────────────────────────────
 
     async def _extract_metadata(self, note_body: str, topic_name: str) -> Dict[str, Any]:
-        """Pull key_points + concepts out of the finished note (structured, parsed whole)."""
+        """Extract key_points + the complete concept set from the finished note.
+
+        Two independent calls, run in parallel: key_points is a short highlight list;
+        concepts is the measured grain — comprehensive and atomic, so it gets its own
+        token budget (bundling them shares one envelope and silently truncates the
+        concept list on rich topics). Each degrades to [] on failure so a metadata
+        hiccup never fails an already-written note.
+        """
         if not note_body.strip():
             return {"key_points": [], "concepts": []}
+        key_points, concepts = await asyncio.gather(
+            self._extract_key_points(note_body, topic_name),
+            self._extract_concepts(note_body, topic_name),
+        )
+        return {"key_points": key_points, "concepts": concepts}
 
-        prompt = f"""From this consolidated study note, extract exam-ready metadata.
+    async def _extract_key_points(self, note_body: str, topic_name: str) -> List[Any]:
+        prompt = f"""From this consolidated study note, extract the exam-ready key points.
 
 TOPIC: {topic_name}
 
@@ -493,28 +526,52 @@ NOTE:
 KEY_POINTS: the facts a student must know cold to pass an exam.
 - 5–10 items (more if warranted); each one specific and self-contained; cover different aspects.
 
-CONCEPTS: terms that need defining.
-- 4–12 terms (more if warranted); only ones a student might not know; one plain-English sentence each.
-- For STEM material, a "concept" can be a **procedure or skill** ("differentiate a composite
-  function", "balance a redox equation"), not just a term↔definition — name the procedure as the
-  term and give a one-line method sketch as the definition. These become worked problems.
-
-Return JSON:
-{{
-  "key_points": ["specific exam-ready fact", "..."],
-  "concepts": [{{"term": "Term", "definition": "One clear sentence."}}]
-}}
-
+Return JSON: {{"key_points": ["specific exam-ready fact", "..."]}}
 Return ONLY valid JSON. No preamble, no text outside the JSON."""
-        content = await call_llm(
-            prompt,
-            task="knowledge_metadata",
-            temperature=0.2,
-            max_tokens=4000,
-            timeout=60.0,
-            response_format={"type": "json_object"},
-        )
-        return self._parse_json(content)
+        try:
+            content = await call_llm(
+                prompt, task="knowledge_metadata", temperature=0.2, max_tokens=2000,
+                timeout=60.0, response_format={"type": "json_object"},
+            )
+            return self._parse_json(content).get("key_points") or []
+        except Exception:
+            logger.warning("key_points extraction failed", exc_info=True)
+            return []
+
+    async def _extract_concepts(self, note_body: str, topic_name: str) -> List[Any]:
+        """The complete, atomic concept set — the grain the retrieval engine measures.
+
+        Coverage over count: an omitted concept is one the student is never scheduled,
+        tested, or measured on. No count cap — the material sets the number.
+        """
+        prompt = f"""From this consolidated study note, extract the COMPLETE set of concepts a student must master to understand {topic_name}.
+
+These are not highlights. Each concept becomes a unit the app schedules, tests, and tracks mastery against — so a concept you leave out is one the student is never measured on. Aim for total coverage: if a student mastered every concept you list, they would understand this topic completely, with no gaps.
+
+TOPIC: {topic_name}
+
+NOTE:
+{note_body[:MAX_CONTEXT_CHARS]}
+
+Rules:
+- ONE atomic recall unit per concept: a single thing a student can be asked about and graded on in isolation. Split bundles — "the three equations of motion" is three concepts, not one. Never merge distinct ideas to shorten the list.
+- Comprehensive on the MATERIAL, not on every noun. Include every definition, principle, relationship, distinction, formula, and procedure the note teaches. Exclude administrivia (course codes, names, bare dates) and anything a student isn't expected to know or do.
+- No count target. A rich topic may have 30+ concepts; a thin one may have 6. Let the material set the number — never pad, never cap.
+- For STEM, a concept can be a **procedure or skill** ("differentiate a composite function", "balance a redox equation"), not only a term↔definition. Name the procedure as the term and give a one-line method sketch as the definition — these become worked problems.
+- Definition: one plain-English sentence, precise enough to test a student's answer against.
+- No duplicates, no overlap — each concept covers ground no other one does. Order them the way the note builds them up.
+
+Return JSON: {{"concepts": [{{"term": "Term or procedure", "definition": "One precise sentence."}}]}}
+Return ONLY valid JSON. No preamble, no text outside the JSON."""
+        try:
+            content = await call_llm(
+                prompt, task="knowledge_concepts", temperature=0.2, max_tokens=CONCEPTS_MAX_TOKENS,
+                timeout=120.0, response_format={"type": "json_object"},
+            )
+            return self._parse_json(content).get("concepts") or []
+        except Exception:
+            logger.warning("concept extraction failed", exc_info=True)
+            return []
 
     def _parse_json(self, text: str) -> Dict[str, Any]:
         start = text.find("{")

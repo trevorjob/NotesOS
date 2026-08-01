@@ -85,3 +85,30 @@ class NotificationPreference(Base):
     __table_args__ = (
         UniqueConstraint("user_id", name="uq_notification_pref_user"),
     )
+
+
+class DeviceToken(Base):
+    """An Expo push token registered for OS-level push (notifications-plan.md Phase B).
+
+    One row per physical install: ``token`` is globally unique (Expo issues a fresh token
+    per install, not per user), so a reinstall or a different user signing in on the same
+    device just moves the row via upsert (``services/push.py`` doesn't need per-user
+    cleanup logic). Pruned when Expo reports ``DeviceNotRegistered`` on send.
+    """
+
+    __tablename__ = "device_tokens"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    token = Column(String(255), nullable=False)
+    platform = Column(String(16), nullable=False)  # 'ios' | 'android'
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_seen_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("token", name="uq_device_token"),
+    )

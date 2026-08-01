@@ -18,6 +18,7 @@ from typing import Any
 
 from app.services.llm import call_llm
 from app.services.retrieval import conversation
+from app.services.retrieval.concepts import source_context
 from app.services.retrieval.modes import (
     Challenge,
     ConversationTurn,
@@ -91,8 +92,9 @@ class TeachMode:
     # --- LLM boundary (overridden in tests) --------------------------------------
 
     async def _judge(self, concept, explanation: str, ctx: ModeContext) -> dict:
+        source = await source_context(ctx.db, concept)
         raw = await call_llm(
-            self._build_prompt(concept, explanation),
+            self._build_prompt(concept, explanation, source),
             task="teach_eval",
             temperature=0.3,
             max_tokens=700,
@@ -102,13 +104,19 @@ class TeachMode:
 
     # --- helpers -----------------------------------------------------------------
 
-    def _build_prompt(self, concept, explanation: str) -> str:
+    def _build_prompt(self, concept, explanation: str, source: str = "") -> str:
         definition = f"\nREFERENCE: {concept.definition}" if concept.definition else ""
+        source_block = (
+            f"\n\nSOURCE MATERIAL (for you, not the student — use it to verify correctness "
+            f"beyond the compressed reference above, and to catch a confidently wrong claim "
+            f"the reference alone wouldn't expose):\n{source}"
+            if source else ""
+        )
         return f"""A student explained a concept as if teaching it. Judge the explanation the
 way a confused classmate would: is it correct, complete, and actually clear? Reward a
 real mental model over fluent-sounding filler.
 
-CONCEPT: {concept.text}{definition}
+CONCEPT: {concept.text}{definition}{source_block}
 
 THE STUDENT'S EXPLANATION:
 {explanation}

@@ -1,1 +1,10 @@
-{}
+{
+  "dependencies": {
+    "expo": "^57.0.9",
+    "react": "19.2.3",
+    "react-native": "0.86.0"
+  },
+  "name": "NotesOS",
+  "version": "1.0.0",
+  "scripts": {}
+}

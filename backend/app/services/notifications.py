@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.notification import Notification, NotificationType
 from app.services.redis_client import redis_client
+from app.services.push import send_expo_push
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -65,5 +66,17 @@ async def create_and_push_notification(
                     exc_info=True,
                     extra={"notification_id": str(notification.id), "user_id": str(uid)},
                 )
+
+    try:
+        # `type` rides alongside meta_data so the mobile tap handler can route an OS push
+        # the same way it routes an in-app tap (routeForNotification switches on `type`).
+        push_data = {**(meta_data or {}), "type": notification.type.value}
+        await send_expo_push(db, user_id=uid, title=title, body=body, data=push_data)
+    except Exception:
+        logger.error(
+            "Failed to send Expo push",
+            exc_info=True,
+            extra={"notification_id": str(notification.id), "user_id": str(uid)},
+        )
 
     return notification

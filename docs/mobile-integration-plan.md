@@ -11,7 +11,7 @@
 > Work happens **step by step, one screen/flow at a time** — explicit user preference.
 > Don't batch multiple screens into one pass unless asked to.
 >
-> Last updated: 2026-07-29. Branch: `v2`.
+> Last updated: 2026-07-30. Branch: `v2`.
 
 ---
 
@@ -264,36 +264,111 @@ Auth is closed out for launch. Google sign-in on mobile is post-launch, tracked 
     (per-concept marker dot — hollow → fills with colour as it lights — + an always-on hint) so a
     fresh note reads as "not started," not broken.
 
-### 2.7 Retrieval / study loop 🟡
+### 2.7 Retrieval / study loop ✅ (wired 2026-07-29; experience redesign + conversational + testbuilder shipped 2026-07-30)
 
-> **Retrieval is getting an experience redesign** (engine-chooses doorway, ambient across the
-> app, session-as-flow) — scoped in [`retrieval-experience.md`](./retrieval-experience.md).
-> The §1 parked "mode-picker" complaint is now reopened *with the user's direction*. Wiring
-> below is the foundation the redesign builds on; the redesign itself is not started (see that
-> doc's §10 build order).
+> **The retrieval experience redesign is DONE** (engine-chooses doorway, ambient across the app,
+> session-as-flow) — scoped in [`retrieval-experience.md`](./retrieval-experience.md), build order
+> complete. The §1 parked "mode-picker" complaint was reopened with the user's direction and
+> shipped. Conversational modes (teach/ramble) are in [`conversational-modes.md`](./conversational-modes.md).
 
 - [x] `retrieval.tsx` — wired 2026-07-29 to `api/retrieval.py`. `lib/retrieval.ts` typed client
   (`fetchModes`/`nextChallenge`/`submitAttempt`/`revealSolution`/`recap*`/`dump*`). Full session:
   next → (confidence beat on posed modes) → attempt → real outcome + calibration + new FSRS
   schedule ("next review in N days"). Modes driven off `GET /modes` (quiz/pretest/ramble/teach)
-  with recap/dump appended (topic-scoped, outside the registry). Layout preserved per §1. **This is
-  what lights the note for real** — every completed `/attempt` writes ConceptState. See the log
-  entry for the mode→shape map, the worked-STEM reveal flow, and what was deferred (voice, paper
-  photo, keep-going, home hero).
-- [ ] `testbuilder.tsx` — wire to `api/practice_test.py` (B14 authored practice test). This is a **distinct concept** from `retrieval.tsx`'s scheduled review — see `[[authored-practice-test]]` memory. Don't merge them. **Note:** the old mock timed-test (`?mode=test` → a hardcoded-question quiz in `retrieval.tsx`) was removed as fabricated data — testbuilder's `?mode=test` link now lands on an honest "coming soon" placeholder until this item wires it to `/api/practice-tests`.
+  with recap/dump appended (topic-scoped, outside the registry). **This is what lights the note for
+  real** — every completed `/attempt` writes ConceptState.
+- [x] **Conversational modes (teach · ramble) — shipped 2026-07-30.** Both go multi-turn:
+  `open/turn/close` rails on the backend mode boundary + `POST /retrieval/turn` (ephemeral Redis
+  transcript, one graded attempt at close, `MAX_CONVO_TURNS=7` silent ceiling). Mobile
+  `components/retrieval/ConversationalBout.tsx` (confidence-at-open → live chat-transcript loop →
+  graded close) + `usePushToTalk.ts` (tap-to-toggle, live words, auto-advance send-on-stop) +
+  **server-streamed TTS voice-out** (`useSpeechOut.ts` → `GET /api/retrieval/tts` StreamingResponse
+  over OpenAI-TTS, mute toggle). See the 2026-07-30 log entries + `conversational-modes.md`.
+- [x] **Retrieval discoverability — shipped 2026-07-30.** Fixed "nothing leads me to retrieval" +
+  the "quiz references the wrong concept" bug. `components/note/NoteStudyPrompt.tsx` — a note-end
+  accept-card (`fetchNextAction({topic_id})` → engine's pick for THIS topic, one-tap Start) +
+  note-scoped mode chips + "Build a practice test". `NavFab` scopes its next-action to the current
+  route's `topicId` (was globally-scoped → launched a stray concept). See the log entry.
+- [x] `testbuilder.tsx` — wired 2026-07-30 to `api/practice_test.py` (B14). Real course-topic
+  select + count/mode/type → `POST /practice-tests` → **realtime generation via the course WS**
+  (the worker already broadcasts `practice_test_progress/complete/failed`; `lib/usePracticeTestSocket.ts`
+  subscribes — no polling) → new runner route `app/practice-test.tsx` (confidence → answer →
+  per-question feedback → derived result via `/answer` + `/result`). Entry points: NoteStudyPrompt,
+  course page footer, home (course-picker). **Distinct from scheduled review** — see
+  `[[authored-practice-test]]`. The old mock `?mode=test` placeholder is superseded.
 
-### 2.8 Voice / audio ⬜
+### 2.8 Voice / audio 🟡
 
-- [ ] `listen.tsx` / `voice.tsx` — wire to `api/voice.py` (WS `/ws/voice/{course_id}`). Confirm premium-lane gating before wiring (architecture docs flag this as a premium feature).
+- [x] **`listen.tsx` — wired 2026-07-30, all 4 phases, NOT via `api/voice.py`.** The backend
+  surface ended up being a new generalized `AudioArtifact` model (`api/knowledge.py`'s
+  `/audio/*` endpoints), not the WS voice-call surface this line originally pointed at —
+  `api/voice.py`'s `/ws/voice/{course_id}` is unrelated and untouched, still only serving
+  `voice.tsx` below. Full design in [`listen-audio-plan.md`](./listen-audio-plan.md):
+  Scope (course|topic|concept|concept_cluster) × Lens (default|user_instruction|remediation|
+  exam_focused|slower|worked_example) × Owner (global/free vs personal/credited). Phase 0 =
+  real `expo-audio` playback (replaced the static mock) + the model/migration. Phase 1 =
+  personal/lens requests (`POST /audio/request`) + a `can_generate()` credits seam (free/
+  allow today, zero call-site changes when billing lands) + "Explain this my way" from the
+  note's concept sheet. Phase 2 = remediation auto-suggest — `weakest_concepts()` reuses the
+  note's own mastery heat-map (`derive_mastery`), `WeakConceptSuggestion` surfaces on both
+  `note.tsx` and `listen.tsx`. Phase 3 = the calc-heavy modality gate — `audio_suitability`
+  on `SubjectProfile` withholds the generic explainer lenses for STEM (`worked_example` and
+  personal lenses stay available); `GET /audio/...` returns `audio_suitable` so the mobile
+  lens picker steers off a hidden lens before Generate ever 422s. Also added a decorative
+  hand-drawn waveform visualizer (`components/audio/WaveformVisualizer.tsx`, core RN
+  `Animated`, not amplitude-driven — `expo-audio` exposes no metering data) to the playback
+  view per user ask ("too plain"). Backend: 30+ new tests, full suite green. Mobile: `tsc`/
+  `eslint` clean, not run on-device.
+- [ ] `voice.tsx` — still unwired, still points at `api/voice.py` (WS `/ws/voice/{course_id}`,
+  a live voice-call surface, distinct from Listen's async TTS lessons). Confirm premium-lane
+  gating before wiring (architecture docs flag this as a premium feature).
+- [x] **Retrieval voice I/O landed 2026-07-30** (out of this screen's scope but related):
+  on-device STT for spoken answers (`useVoiceDictation`, 5-min chunk-restart cap) + push-to-talk
+  for conversational modes (`usePushToTalk`) + **server-streamed TTS voice-out** for the AI's
+  probes (`GET /api/retrieval/tts` StreamingResponse over the shared OpenAI-TTS provider, played via
+  `expo-audio`, mute toggle). Not premium-gated (short probes). Needs `expo-speech-recognition` +
+  `expo-audio` native modules → dev-client rebuild.
 
-### 2.9 Notifications ⬜
+### 2.9 Notifications ✅ (wired 2026-07-31, incl. OS push — see [`notifications-plan.md`](./notifications-plan.md))
 
-- [ ] `notifications.tsx` — wire to `api/notifications.py`. Check whether WebSocket push (`services/websocket.py`) or polling is the intended pattern for mobile (mobile can't rely on the same browser WS assumptions as the Next.js frontend — verify reconnect-on-background behavior).
-- **Foundation landed 2026-07-27:** `lib/courseSocket.ts` — a minimal course-room WS client
-  (`WS /ws/{course_id}?token=`, heartbeat, backoff reconnect, 1008=auth-stop), built for
-  capture's live progress. It's the seed for this section. Still TODO for full §2.9:
-  **reconnect-on-background** (AppState-aware — RN backgrounding drops the socket) and the
-  user-scoped `/ws/user/{user_id}` channel for personal notifications.
+- [x] **In-app live feed.** `notifications.tsx` wired to `api/notifications.py` — real
+  list/unread-count/mark-read/mark-all/delete, Today/Earlier grouping, tap → mark-read +
+  deep-link (`lib/notificationRouting.ts`, shared with the OS-push tap handler), long-press
+  → delete. Live-pushed items prepend instantly via a new user-scoped WS channel.
+- [x] **`lib/userSocket.ts`** — `/ws/user/{user_id}?token=` client (the backend endpoint
+  already existed, unused by mobile until now). `lib/wsClient.ts` extracted as the shared
+  reconnect/heartbeat base so `courseSocket.ts` and `userSocket.ts` don't duplicate it.
+- [x] **`NotificationsProvider`** (`components/notifications/`) — app-wide context mounted
+  at root: owns the one WS connection, **AppState-aware** (disconnects on background,
+  reconnects on foreground — RN drops sockets when backgrounded, closing the gap flagged
+  below), auth-transition-aware (connects/disconnects off route, since there's no global
+  auth-state store to hook). Exposes the unread count that lights up a **live badge on the
+  home bell** (`home.tsx`).
+- [x] **OS push (Expo), full Phase B+C** — backend `DeviceToken` model + migration,
+  `POST/DELETE /notifications/devices` (upsert-on-token, so a reinstall/different-account
+  just moves the row), `services/push.py` fan-out called from the existing
+  `create_and_push_notification` (zero changes to any of the 4 real emitters — course join,
+  resource upload, note synthesis, digest — they all get push for free). Mobile:
+  `expo-notifications` installed, permission + token registration on login + cold-start,
+  tap→deep-link (`lib/push.ts`), unregister-on-sign-out/delete-account. 14 new backend
+  tests (devices CRUD + ownership + handoff, push fan-out mocked via the `test_llm.py`
+  `_FakeClient` pattern, prune-on-`DeviceNotRegistered`, `ENABLE_PUSH` off-switch,
+  push-failure-never-breaks-notification-creation). `tsc` + `eslint` clean, including
+  `react-hooks/set-state-in-effect` on `NotificationsProvider`'s connect effect — initially
+  flagged (see the 2026-07-31 log entry for the actual fix: the initial unread-count
+  refresh moved from `connectSocket`'s own body into the socket's `onOpen` callback, a
+  genuine subscribe-then-setState-in-callback per React's own effect guidance).
+  - **⚠️ Owner action — EAS project id.** `getExpoPushTokenAsync` needs
+    `extra.eas.projectId` in `app.json`; not set (no fake id fabricated). Until `eas init`
+    runs, `registerForPushNotifications()` no-ops (checked, doesn't throw). Also needs
+    APNs/FCM credentials via `eas credentials` and a dev-client rebuild (native module).
+  - **Known gap (documented, not fixed):** while backgrounded, the WS lane is intentionally
+    torn down (RN drops sockets anyway); OS push is the only lane reaching the user then.
+    Foreground suppresses the OS banner (`shouldShowBanner: false`) so a live WS notification
+    and its own push don't double-surface — this is the accepted design in
+    `notifications-plan.md` §2, not an oversight.
+  - See [`notifications-plan.md`](./notifications-plan.md) for the full architecture,
+    phase breakdown, and the meta_data → route contract table.
 
 ### 2.10 Settings / profile ✅ (wired 2026-07-28)
 
@@ -1050,6 +1125,237 @@ attempts; the note was lit only by the disposable seed).
   don't trip `react-hooks/set-state-in-effect` (same pattern as the other screens). Not run
   on-device (owner runs the dev build). **Optional cleanup once real attempts exist:** drop the
   14 seed `concept_states` on topic `71778267-…` (see the 07-29 seed log entry).
+
+### 2026-07-30 — Conversational modes (teach · ramble): backend rails + mobile bout
+
+The modes where the *back-and-forth is the retrieval act*. Additive to the one-shot contract so
+`run_once`/tests/offline never broke. Full design in `conversational-modes.md`.
+
+- **Backend rails:** `modes.py` grew a conversational contract (`ConversationTurn`/`TurnResult`/
+  `is_conversational`/`MAX_CONVO_TURNS=7`); `conversation.py` owns the shared dig-vs-close turn LLM
+  (persona-parameterised, don't-badger-a-blank baked in); `teach_mode`/`ramble_mode` got
+  `open/turn/close` while keeping `generate/evaluate`. `POST /retrieval/turn` drives the loop over an
+  **ephemeral Redis transcript**; `/next` flags `conversational`; **one graded attempt at close** via
+  `engine.record_attempt`, calibration off the confidence stamped on turn 1. 177 retrieval tests green.
+- **Mobile:** `ConversationalBout.tsx` (confidence-at-open → live chat-transcript → graded close,
+  keyed by challenge_id) + `usePushToTalk.ts` (tap-to-toggle, live partial words, auto-advance
+  send-on-stop, chunk-restart across iOS's ~1-min cap). Branches in from `retrieval.tsx` when
+  `challenge.conversational`; one-shot path untouched. Shared result/confidence pieces extracted to
+  `retrievalShared.tsx` (pulled `retrieval.tsx` back under the 800-line max).
+
+### 2026-07-30 — Retrieval discoverability + the wrong-concept bug (user course-correct)
+
+User: *"nothing leads me to retrieval… I have to push a button… I should be shown something to do and
+I accept or not"*, and reading *oral history* → the quiz launched *telescoping*.
+
+- **Root cause:** the FAB + home hero called `fetchNextAction()` **unscoped** (global) → the
+  ambient action was a stray concept from another course; and the note had no topic-level study entry.
+- **Fix:** `components/note/NoteStudyPrompt.tsx` — a note-end **accept-card** (`fetchNextAction({topic_id})`
+  → engine's pick for THIS topic, one-tap Start) + note-scoped mode chips (all pinned to `topicId`) +
+  "Build a practice test". Wired into `note.tsx` after the source line (only when a note + action exist).
+  `NavFab` scopes its next-action to the current route's `topicId` (via `useGlobalSearchParams`); global
+  elsewhere. User-picked: accept-card at note **end** (not a persistent bar); FAB scopes to current note.
+
+### 2026-07-30 — Testbuilder wired (B14) + TTS + REALTIME course-correct (no polling)
+
+Two user asks: *"build the testbuilder"* and *"use the current [TTS] provider"*; then a sharper one:
+*"you do realise you can stream right — why do you agents always avoid realtime stuff even when it's
+there… so many places where we are polling."* Both folded in.
+
+- **Testbuilder (was a hardcoded mock):** `lib/practiceTest.ts` (full B14 client) + real
+  `testbuilder.tsx` (course topics, count/mode/type → `POST /practice-tests`) + runner route
+  `app/practice-test.tsx` (confidence → answer → per-question feedback → derived `/result`), registered
+  in `_layout` (FAB hidden on it). Entry points: NoteStudyPrompt, course-page footer, home course-picker.
+- **TTS voice-out — server provider, STREAMED.** Dropped the on-device `expo-speech` (user disliked the
+  voice) for the shared OpenAI-TTS provider. `GET /api/retrieval/tts` is a `StreamingResponse` proxying
+  new `audio_generator.stream_speech` (httpx `client.stream` → `aiter_bytes`) so playback starts before
+  the clip finishes; `useSpeechOut.ts` plays it via `expo-audio` `createAudioPlayer({uri, headers})` with
+  a mute toggle. Bounded ≤400 chars. 3 `/tts` tests.
+- **Generation is WS-driven, not polled.** The `practice_test_worker` **already broadcast**
+  `practice_test_progress/complete/failed {test_id}` over the course room (`/ws/{course_id}`, Redis
+  `course_updates`) — I'd polled instead. New `lib/usePracticeTestSocket.ts` subscribes via the existing
+  `CourseSocket`; testbuilder + runner dropped their `setInterval` loops (kept ONE reconcile read on
+  socket-open to close the settled-before-connect race — a single catch-up, not a loop). **Lesson logged:
+  check for existing realtime infra (WS pub/sub, streaming) before reaching for polling — this codebase
+  has a course WebSocket layer and the workers already publish to it.**
+- **Verify:** mobile `tsc`/`eslint` clean; backend retrieval + practice-test + conversational suites
+  green. Not run on-device — the WS handshake + `expo-audio`/`expo-speech-recognition` native modules
+  need the dev-client rebuild (owner).
+
+### 2026-07-30 — Listen (`§2.8`) rebuilt end-to-end: AudioArtifact, all 4 phases + waveform
+
+User's ask started as "what's left for audio" (STT already done) and grew into a bigger
+reframe once the existing per-topic `AudioLesson` was found — see the full design/build log
+in [`listen-audio-plan.md`](./listen-audio-plan.md); this entry is the mobile-integration-doc
+pointer, not a duplicate of that history.
+
+- **The reframe:** one `AudioArtifact` model over three axes — Scope (course/topic/concept/
+  concept_cluster) × Lens (default/user_instruction/remediation/exam_focused/slower/
+  worked_example) × Owner (global=free/shared vs personal=user-owned/credited), replacing the
+  single-shape `AudioLesson`. Backfill migration (16 dev-DB rows migrated, `DISTINCT ON` needed
+  — old data had multiple rows per topic from regenerations with no prior uniqueness).
+- **Phase 0 (foundation):** generalized generator/worker/endpoints; `listen.tsx` gets real
+  `expo-audio` playback (`useAudioPlayer`/`useAudioPlayerStatus`), replacing the static mock.
+- **Phase 1 (personal + lens requests):** `POST /audio/request` (always-fresh, personal
+  artifacts never deduped, unlike the global default); `audio_credits.py`'s `can_generate()`
+  seam (free/allow today, zero call-site changes when billing lands); lens directives on the
+  generation prompt, additive-only (verified byte-identical to the pre-Phase-1 default prompt);
+  "Explain this my way" on the note's concept sheet → free-text instruction → personal audio.
+  Fixed a latent bug in the same pass: Cloudinary `public_id` was keyed by `topic_id` alone,
+  which would've made concurrent personal artifacts for the same topic overwrite each other.
+- **Phase 2 (remediation auto-suggest):** `weakest_concepts()`/`recent_wrong_answers()` in
+  `services/retrieval/remediation.py` reuse the note's own mastery signal (`derive_mastery`,
+  the same one that lights the note) and the caller's actual missed `RetrievalAttempt` rows —
+  no new detection built. `GET /topics/{id}/weak-concepts` + `WeakConceptSuggestion.tsx` (asked
+  the user where to surface it — chose **both** `note.tsx` and `listen.tsx`, not the ambient/
+  home feed yet).
+- **Phase 3 (calc-heavy modality gate):** `audio_suitability` on `SubjectProfile` (STEM=0.3,
+  rest ≥0.9), `is_audio_suitable()` threshold check. Withholds only the generic explainer
+  lenses (default/exam_focused/slower — angles on the same narrated note); `worked_example`
+  and the personal user_instruction/remediation lenses are never gated, since remediation
+  matters most for exactly the STEM concepts students struggle with. Enforced at the
+  regenerate/request endpoints (422) **and** a worker-side backstop
+  (`audio_worker._create_global_default` silently skips auto-generating a global default for
+  an unsuitable topic — covers the automatic post-synthesis trigger, which has no API caller
+  to hand a 422 to). `GET /audio/...` now returns `audio_suitable` so `listen.tsx` steers off
+  a hidden lens before Generate ever fails.
+  - **Real bug fixed in the same pass** (pre-existing, surfaced while wiring the concept→topic
+    family lookup Phase 3 needed, not new scope-creep): `GET /audio/{scope_type}/{scope_ref}`
+    used to 400 on any `owner=me` and skipped enrollment/existence checks entirely for
+    `scope_type=concept` — meaning concept-mode Listen (Phase 1/2's personal + remediation
+    requests) could generate a personal artifact but never poll or display it, and concept
+    reads had no authorization check at all. Both fixed.
+- **Waveform visualizer (user: "the UI for listening is very boring... a visualizer or
+  something"):** new `components/audio/WaveformVisualizer.tsx` — 27 bars with a fixed,
+  irregular silhouette (deterministic per-index jitter, not random, so it's stable across
+  renders) and a slight per-bar tilt for hand-stroke texture; while playing, each bar loops a
+  staggered bounce (core RN `Animated`, native-driven `scaleY` + `Easing.sin`); pausing calls
+  `.stop()` so bars freeze mid-bounce instead of snapping to rest; bar colour follows play
+  state (`c.highlighter` amber while playing, `c.inkTertiary` while paused). Used core RN
+  `Animated`, not `react-native-reanimated` (installed but dead — unused anywhere else in the
+  app; `NavFab.tsx`'s drag handling is the one precedent, and it's core `Animated`). **Not
+  amplitude-driven** — `expo-audio` exposes no metering/waveform data, so this is decorative,
+  not a real audio visualization; flagged to the user before building.
+- **Verify:** 30+ new/updated backend tests, full suite green (pre-existing
+  `test_synthesis_debounce.py` flakiness aside, per the existing note in this doc). Mobile
+  `tsc --noEmit` + `eslint` clean on every touched file. **Not run on-device** — same as every
+  other mobile pass in this log, owner runs the dev build to eyeball the waveform bounce feel.
+
+### 2026-07-31 — Notifications (§2.9) wired end-to-end, incl. OS push (full scope, user's call)
+
+Scoped in a new doc, [`notifications-plan.md`](./notifications-plan.md) — findings,
+architecture, phase breakdown. User chose the full system (in-app feed + OS push) over a
+feed-only first pass, so this landed as one session across backend + mobile.
+
+**Findings first:** the backend in-app path was already fully built and wired to real
+emitters (course join, resource upload, note synthesis, the habit digest) — `Notification`/
+`NotificationPreference` models, full REST (`api/notifications.py`), `/ws/user/{user_id}`
+(already existed, `main.py:145`), and the Redis→WS bridge. The gap was **entirely mobile**
+(the feed screen was 100% mock) plus OS push, which didn't exist on either side.
+
+**Mobile — in-app feed:**
+
+- `lib/notifications.ts` — added the list/unread-count/mark-read/mark-all/delete client
+  (was preferences-only).
+- **`lib/wsClient.ts` (new)** — extracted the reconnect/heartbeat scaffold out of
+  `courseSocket.ts` so it and the new `lib/userSocket.ts` (`/ws/user/{id}`) don't duplicate
+  ~90 lines of connection-lifecycle logic. `CourseSocket`/`UserSocket` are now thin
+  subclasses supplying only their URL. `capture.tsx` needed no changes (same public API).
+- **`components/notifications/NotificationsProvider.tsx` (new)** — app-wide context
+  (mounted at root, alongside `ThemeProvider`/`QuickSwitcherProvider`) owning the one
+  `UserSocket` connection: **AppState-aware** (RN drops sockets when backgrounded — tears
+  down on background, reconnects on foreground) and auth-transition-aware (there's no
+  global auth-state store, so it infers login/logout from `pathname` landing on/off
+  `/login`). Exposes `unreadCount` (fed live by the socket) to a new badge on the home bell.
+- `notifications.tsx` — full rewrite: real Today/Earlier groups, tap → mark-read + deep-link,
+  long-press → delete, live-pushed items prepend instantly.
+- **`lib/notificationRouting.ts` (new)** — `routeForNotification()`, one meta_data→route
+  table shared by the in-app tap handler *and* the OS-push tap handler (§4 below), built
+  from the exact `meta_data` keys each real emitter actually stamps (traced per-emitter,
+  not guessed): `DECAY_NUDGE`/`AI_SUMMARY_READY`/`RESOURCE_UPLOADED` → `/note` (or `/topics`
+  if only `course_id`), `CLASSMATE_JOINED` → `/topics`, recognition (`GENERAL`, no
+  course/topic) → stays on the feed.
+
+**Backend — OS push infra (new, Phase B):**
+
+- `DeviceToken` model (`models/notification.py`) — one row per **install** (token unique,
+  not user-unique), so a reinstall/different-account-on-same-device is a plain upsert-and-
+  move, no per-user cleanup needed. Migration autogenerated (`alembic revision
+  --autogenerate`, per CLAUDE.md — never hand-written), applied clean (only the new table
+  detected).
+- `POST/DELETE /api/notifications/devices` — register (upsert-on-token) + unregister
+  (ownership-enforced delete).
+- **`services/push.py` (new)** — `send_expo_push()`, chunked ≤100 per Expo's limit, prunes
+  tokens Expo reports `DeviceNotRegistered`. Wired into the *existing*
+  `create_and_push_notification` (one call site) so **all four real emitters get push for
+  free with zero changes to any of them**. Gated by a new `ENABLE_PUSH` flag (mirrors
+  `ENABLE_RECOGNITION`'s pattern) so tests/local dev can silence outbound calls. Wrapped in
+  try/except at the call site — a dead Expo API must never break the DB write that already
+  landed.
+  - **Bug caught before it shipped:** the push `data` payload initially carried only
+    `meta_data`, no `type` — `routeForNotification` needs `type` to switch on, so the OS-tap
+    deep link would've silently gone nowhere. Fixed by stamping
+    `{**meta_data, "type": notification.type.value}` at the one call site.
+
+**Mobile — OS push (Phase C):**
+
+- `expo-notifications@~57.0.8` installed (`--ignore-scripts`, the documented `npx expo
+  install` `EALLOWSCRIPTS` trap) + bare plugin entry in `app.json` (no custom icon/sound
+  assets exist yet, so no plugin config beyond defaults).
+- **`lib/secureStorage.ts` (new)** — extracted `auth.ts`'s SecureStore/localStorage-web-
+  fallback branch (`getStoredItem`/`setStoredItem`/`deleteStoredItem`) so `lib/push.ts`'s
+  cached-push-token key can reuse it instead of re-implementing the web fallback.
+  `auth.ts`'s token functions now call through it — same behavior, less duplication.
+- `lib/push.ts` — `registerForPushNotifications()` (permission → token →
+  `POST /devices`, no-ops cleanly on a simulator or when `extra.eas.projectId` is unset —
+  never throws), `unregisterPushToken()`, `initNotificationTapHandling()` (tap → deep-link
+  via the shared routing table + cold-start launch via
+  `getLastNotificationResponseAsync`). `setNotificationHandler` suppresses the **foreground**
+  banner (`shouldShowBanner: false`) — the WS lane already surfaces a live notification
+  in-app, so this avoids a double-surface; backgrounded/killed still gets the OS banner
+  normally since this handler never runs then.
+- Wired into the actual lifecycle: `login.tsx` (fire-and-forget after `setTokens`, so a
+  slow/declined permission prompt never blocks getting into the app), `index.tsx`
+  (cold-start re-registration when a session already exists — cheap, self-healing),
+  `settings.tsx` sign-out + delete-account (`unregisterPushToken()`).
+  - **Ordering trap caught:** `deleteAccount()` revokes the access token **immediately**
+    server-side (the `is_active` gate on `get_current_user`, from the 2026-07-28 delete-
+    account work). Unregistering push *after* calling it would 401. Fixed by calling
+    `unregisterPushToken()` **before** `deleteAccount()`. Accepted tradeoff: if the delete
+    itself then fails (wrong password), the device was already unregistered — harmless and
+    self-healing (next cold-start-while-still-logged-in re-registers via `index.tsx`).
+- `_layout.tsx` — mounts `NotificationsProvider` (feed) and calls
+  `initNotificationTapHandling()` once (OS-push taps).
+
+**Owner action (not fabricated):** `getExpoPushTokenAsync` needs `extra.eas.projectId` in
+`app.json` — not set (no fake id written in; `registerForPushNotifications()` checks and
+no-ops rather than guessing). Needs `eas init` + APNs/FCM credentials via `eas credentials`,
+plus a dev-client rebuild (native module), before push can actually be tested on a device.
+
+**Verify:** 14 new backend tests (`tests/test_notifications.py` — device CRUD, cross-user
+handoff, ownership on unregister/mark-read, push fan-out with `httpx.AsyncClient` faked per
+`test_llm.py`'s `_FakeClient` convention, `DeviceNotRegistered` pruning, `ENABLE_PUSH` off-
+switch, push-failure-never-breaks-notification-creation), all green. Full suite otherwise
+green; `test_synthesis_debounce.py` fails **even in isolation** touching only Redis
+job-queue code this session never modified — confirmed pre-existing container flakiness
+(§4), not a regression. Mobile `tsc --noEmit` clean across every touched/new file.
+
+**Lint follow-up (post-review):** `NotificationsProvider`'s connect effect initially tripped
+`react-hooks/set-state-in-effect` on `void connectSocket()` — first pass left it as
+"matches an existing `onboarding.tsx` violation," which wasn't good enough. Root-caused
+instead: `connectSocket`'s own body directly awaited `refreshUnreadCount()` (a setState-
+touching call), and that call is reachable straight from the effect that invokes
+`connectSocket` — exactly what the rule flags. The `onMessage` handler right next to it,
+by contrast, was never flagged, because it's a closure only *registered* on the socket
+(invoked later, by the WebSocket, not by the effect's own call chain) — the "subscribe,
+then setState in the callback" shape React's effect docs call out as fine. Fix: moved the
+initial unread-count fetch out of `connectSocket`'s body and into the socket's `onOpen`
+callback, matching that same shape. `eslint` is now fully clean, zero suppressions,
+zero accepted-debt caveats — this pattern is worth reusing anywhere else a "connect, then
+fetch once open" effect shows up.
+
+Not run on-device (owner runs the dev build; push additionally needs the EAS action above
+before it can be exercised for real).
 
 ---
 

@@ -13,8 +13,10 @@ from sqlalchemy import select
 
 from app.models import Concept, ConceptState, Course, RetrievalAttempt, Topic, User
 from app.services.retrieval import engine
+from app.services.retrieval import quiz_mode as quiz_mode_module
 from app.services.retrieval.modes import Challenge, ModeContext
 from app.services.retrieval.quiz_mode import QuizMode, score_to_grade
+from app.services.retrieval.subject_profiles import GRADE_SELF_CALIBRATION
 from tests.conftest import unique_phone
 
 
@@ -114,3 +116,68 @@ def _concept():
     c = Concept(text="A concept", definition="def")
     c.id = uuid.uuid4()
     return c
+
+
+# ── source-context grounding: quiz generation + grading, but never worked problems ──
+
+async def test_generate_question_grounds_prompt_in_source_context(monkeypatch):
+    async def fake_source_context(db, concept):
+        return "the exact passage from the note"
+    monkeypatch.setattr(quiz_mode_module, "source_context", fake_source_context)
+
+    captured = {}
+    async def fake_call_llm(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return (
+            '{"question_text": "Q", "question_type": "mcq", '
+            '"answer_options": ["A", "B"], "correct_answer": "A", "explanation": "e"}'
+        )
+    monkeypatch.setattr(quiz_mode_module, "call_llm", fake_call_llm)
+
+    mode = QuizMode()
+    ctx = ModeContext(db=object(), user_id=None, extra={})
+    challenge = await mode.generate(_concept(), ctx)
+
+    assert "SOURCE MATERIAL" in captured["prompt"]
+    assert "the exact passage from the note" in captured["prompt"]
+    assert challenge.prompt == "Q"
+
+
+async def test_grade_passes_source_context_to_grader(monkeypatch):
+    async def fake_source_context(db, concept):
+        return "grounding text"
+    monkeypatch.setattr(quiz_mode_module, "source_context", fake_source_context)
+
+    captured = {}
+    async def fake_grade_answer(**kwargs):
+        captured.update(kwargs)
+        return {"score": 7, "feedback": "ok"}
+    monkeypatch.setattr(quiz_mode_module.grader, "grade_answer", fake_grade_answer)
+
+    mode = QuizMode()
+    concept = _concept()
+    challenge = Challenge(concept_id=str(concept.id), prompt="Q?", payload={"question_type": "short_answer"})
+    ctx = ModeContext(db=object(), user_id=None, extra={})
+    await mode.evaluate(concept, challenge, "my answer", ctx)
+
+    assert captured["source_context"] == "grounding text"
+
+
+async def test_worked_problem_never_fetches_source_context(monkeypatch):
+    """Worked problems test transferable method application, not recall of this
+    material's exact phrasing — grounding them would defeat that (product decision)."""
+    def boom(*args, **kwargs):
+        raise AssertionError("worked-problem generation must not call source_context")
+    monkeypatch.setattr(quiz_mode_module, "source_context", boom)
+
+    async def fake_call_llm(prompt, **kwargs):
+        assert "SOURCE MATERIAL" not in prompt
+        return (
+            '{"question_text": "P", "problem_type": "conceptual", '
+            '"correct_answer": "k", "explanation": "e"}'
+        )
+    monkeypatch.setattr(quiz_mode_module, "call_llm", fake_call_llm)
+
+    mode = QuizMode()
+    ctx = ModeContext(db=object(), user_id=None, extra={"grading": GRADE_SELF_CALIBRATION})
+    await mode.generate(_concept(), ctx)  # would raise via boom() if it ever called source_context

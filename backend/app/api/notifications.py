@@ -9,16 +9,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete, func
 
 from app.database import get_db
-from app.models.notification import Notification, NotificationPreference
+from app.models.notification import Notification, NotificationPreference, DeviceToken
 from app.models.user import User
 from app.api.auth import get_current_user
 
 router = APIRouter()
 
+VALID_PLATFORMS = {"ios", "android"}
+
 
 class PreferenceUpdate(BaseModel):
     digest_enabled: bool | None = None
     recognition_enabled: bool | None = None
+
+
+class DeviceRegistration(BaseModel):
+    token: str
+    platform: str
 
 
 def _pref_response(pref: NotificationPreference) -> dict:
@@ -66,6 +73,45 @@ async def update_preferences(
     await db.commit()
     await db.refresh(pref)
     return _pref_response(pref)
+
+
+@router.post("/devices", status_code=status.HTTP_200_OK)
+async def register_device(
+    body: DeviceRegistration,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Register (or move) an Expo push token for OS-level push.
+
+    Upsert on ``token``: Expo issues one token per install, not per user, so a reinstall
+    or a different user signing in on the same device just moves the existing row to the
+    caller instead of erroring on the unique constraint.
+    """
+    if body.platform not in VALID_PLATFORMS:
+        raise HTTPException(status_code=422, detail="platform must be 'ios' or 'android'.")
+
+    device = await db.scalar(select(DeviceToken).where(DeviceToken.token == body.token))
+    if device is None:
+        device = DeviceToken(user_id=current_user.id, token=body.token, platform=body.platform)
+        db.add(device)
+    else:
+        device.user_id = current_user.id
+        device.platform = body.platform
+    await db.commit()
+    return {"message": "Device registered."}
+
+
+@router.delete("/devices/{token}", status_code=status.HTTP_204_NO_CONTENT)
+async def unregister_device(
+    token: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Unregister a device (sign-out, account delete) — ownership enforced."""
+    await db.execute(
+        delete(DeviceToken).where(DeviceToken.token == token, DeviceToken.user_id == current_user.id)
+    )
+    await db.commit()
 
 
 @router.get("/unread-count")

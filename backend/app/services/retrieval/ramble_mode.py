@@ -20,6 +20,7 @@ from typing import Any
 
 from app.services.llm import call_llm
 from app.services.retrieval import conversation
+from app.services.retrieval.concepts import source_context
 from app.services.retrieval.modes import (
     Challenge,
     ConversationTurn,
@@ -87,8 +88,9 @@ class RambleMode:
     # --- LLM boundary (overridden in tests) --------------------------------------
 
     async def _analyze(self, concept, said: str, ctx: ModeContext) -> dict:
+        source = await source_context(ctx.db, concept)
         raw = await call_llm(
-            self._build_prompt(concept, said),
+            self._build_prompt(concept, said, source),
             task="ramble_eval",
             temperature=0.3,
             max_tokens=700,
@@ -98,13 +100,19 @@ class RambleMode:
 
     # --- helpers -----------------------------------------------------------------
 
-    def _build_prompt(self, concept, said: str) -> str:
+    def _build_prompt(self, concept, said: str, source: str = "") -> str:
         definition = f"\nREFERENCE: {concept.definition}" if concept.definition else ""
+        source_block = (
+            f"\n\nSOURCE MATERIAL (for you, not the student — use it to judge accurately, "
+            f"including crediting things they said that are correct but weren't in the "
+            f"compressed reference above):\n{source}"
+            if source else ""
+        )
         return f"""A student was asked to freely recall everything they know about a concept.
 Judge how much of the concept they actually surfaced — reward genuine understanding,
 not fluency or word count. Missing the core idea matters more than missing a detail.
 
-CONCEPT: {concept.text}{definition}
+CONCEPT: {concept.text}{definition}{source_block}
 
 WHAT THE STUDENT SAID:
 {said}

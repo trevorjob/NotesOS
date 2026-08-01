@@ -26,7 +26,12 @@ from app.models.progress import (
     SessionType,
     MessageRole,
 )
-from app.models.notification import Notification, NotificationType, NotificationPreference
+from app.models.notification import (
+    Notification,
+    NotificationType,
+    NotificationPreference,
+    DeviceToken,
+)
 from app.models.knowledge import (
     TopicKnowledge,
     AudioArtifact,
@@ -74,6 +79,7 @@ __all__ = [
     "Notification",
     "NotificationType",
     "NotificationPreference",
+    "DeviceToken",
     # Knowledge
     "TopicKnowledge",
     "AudioArtifact",

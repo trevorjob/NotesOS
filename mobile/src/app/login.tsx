@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/Input';
 import { PhoneInput } from '@/components/ui/PhoneInput';
 import { api } from '@/lib/api';
 import { setTokens } from '@/lib/auth';
+import { registerForPushNotifications } from '@/lib/push';
 import { composeE164, deviceRegion } from '@/lib/phone';
 import { Country, countryByCode } from '@/lib/countries';
 
@@ -45,6 +46,8 @@ export default function LoginScreen() {
           : { phone: phoneValue, password, full_name: name };
       const { data } = await api.post(path, payload);
       await setTokens({ accessToken: data.access_token, refreshToken: data.refresh_token });
+      // Fire-and-forget: a slow/declined permission prompt must never block getting into the app.
+      void registerForPushNotifications();
       setStage('success');
     } catch (err) {
       if (isAxiosError(err) && typeof err.response?.data?.detail === 'string') {
